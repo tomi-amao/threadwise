@@ -10,7 +10,14 @@ export default [
   js.configs.recommended,
   prettierConfig,
   {
-    ignores: ['node_modules/**', 'dist/**', 'build/**'],
+    ignores: [
+      'node_modules/**',
+      'dist/**',
+      'build/**',
+      'coverage/**',
+      'public/**',
+      '**/.react-router',
+    ],
   },
   {
     // Global settings
@@ -38,8 +45,14 @@ export default [
     plugins: {
       react: reactPlugin,
     },
+    settings: {
+      react: {
+        version: 'detect', // Automatically detect the React version
+      },
+    },
     rules: {
       ...reactPlugin.configs.recommended.rules,
+      'react/react-in-jsx-scope': 'off', // Not needed with new JSX transform
     },
   },
   // TypeScript specific settings
