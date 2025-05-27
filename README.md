@@ -1,63 +1,74 @@
 # 🧠 Threadwise
 
-**Smart Financial Insights & Forecasting for Modern Brands**
-
-`Threadwise` is an AI-powered dashboard and assistant designed to help clothing and lifestyle brands intelligently monitor cash flow, analyze inventory costs, and forecast financial trends. Built with a modern full-stack architecture, `threadwise` integrates your business data sources like **Revolut** and **Squarespace**, processes them through ETL pipelines, and brings you actionable insights through a powerful, conversational AI interface.
+**Threadwise** is an intelligent, context-aware AI Agent designed to act as your always-on business co-pilot for financial operations. Instead of static dashboards or fragmented tools, Threadwise offers a conversational interface that enables users to interact naturally with their business data — ask questions, generate insights, and take action, all through a unified AI assistant.
 
 ---
 
-## 🚀 Features
+## ✨ Project Vision
 
-- 📊 **Cash Flow & Inventory Cost Analysis**  
-  Aggregates real-time financial and product data from Revolut and Squarespace.
+Threadwise pivots away from traditional UI-heavy platforms and focuses on a fully Agent-centric experience:
 
-- 🧠 **AI Assistant**  
-  Powered by LLMs and a vector database for querying and navigating your financial landscape conversationally.
+- 💬 Talk to your business via a chat-based interface  
+- 📊 Generate real-time financial insights on demand  
+- 🔁 Perform tasks like cost breakdowns, trend forecasting, and more  
+- 🔌 Connect seamlessly to third-party services (e.g., Revolut, Squarespace)  
 
-- 📈 **Forecasting Engine**  
-  Uses Python-based statistical and ML models for predicting future trends like runway, cost spikes, or revenue flow.
-
-- 🧰 **Custom ETL Pipeline**  
-  Scheduled data syncing and transformation via ETL microservices and cloud cron jobs.
-
-- 📦 **Built on Open Tools**  
-  Powered by Remix, Supabase, Prisma, and FastAPI — easy to extend and self-host.
+The user’s primary interaction is through the **AI Agent**, not dashboards. The agent is powered by a persistent memory architecture that understands the business context and can act intelligently.
 
 ---
+
+## 💡 Core Features
+
+- **Conversational Agent UI** – Natural language chat interface  
+- **Unified Business Memory** – Powered by Model Context Protocol (MCP)  
+- **Integrated Data Sources** – Real-time sync with Revolut, Squarespace, etc.  
+- **Action Execution** – Trigger business tasks (e.g., reports, cost analysis)  
+- **Insight Cards** – On-demand visual summaries for key metrics  
+- **ETL Automation** – Scheduled data ingestion from external services  
+
+
+
 
 ## 🧱 Architecture
 
-![Threadwise Architecture](docs/threadwise-architecture.png)  
+![Threadwise Architecture](docs/threadwise-ai-agent-architecture.png)  
 *(View editable diagram: [Eraser.io Diagram](https://eraser.io))*
 
-Main components:
-
-- **Frontend**: React + Remix (API routes)
-- **Database**: Supabase (PostgreSQL) + Prisma
-- **ETL Jobs**: Node.js or Python microservices for Revolut and Squarespace
-- **AI Engine**: Python (FastAPI) service with embeddings + forecasting
-- **Scheduler**: Railway or GitHub Actions for background jobs
-- **Storage**: Supabase + optional Vector Store for AI
 
 ---
 
-## 🛠️ Tech Stack
+## 🧱 Tech Stack
 
-| Layer       | Technology                          |
-|------------|--------------------------------------|
-| Frontend   | Remix, React Router, Tailwind CSS    |
-| Backend    | Remix API Routes, Prisma ORM         |
-| Database   | Supabase (PostgreSQL)                |
-| AI Engine  | Python (FastAPI, Pandas, Prophet)    |
-| ETL Layer  | Node.js / Python Services            |
-| Scheduler  | Railway Cron / GitHub Actions        |
-| Embeddings | pgvector or external vector DB       |
+### Frontend
+- **Remix** – Fullstack React framework  
+- **Tailwind CSS** – Utility-first styling  
+- **shadcn/ui** + **Framer Motion** – UI components and animations  
+- **tRPC** (optional) – Type-safe backend communication  
+
+### AI & Agent
+- **LangChain** or **OpenAgents** – Agent framework  
+- **OpenAI / Claude / Mistral** – LLM providers  
+- **Model Context Protocol (MCP)** – Persistent structured context  
+- **Custom Tools** – Business-specific actions (`generateReport`, `getCashflow`)  
+
+### Data & Infrastructure
+- **Node.js / Python** – ETL scripts for Revolut and Squarespace  
+- **Supabase** – Postgres DB + auth + file storage  
+- **Prisma ORM** – Type-safe data access layer  
+- **Railway / GitHub Actions** – Scheduling and deployment  
 
 ---
 
-## 🧪 Local Development
+## 📦 Monorepo Structure
 
-1. **Install dependencies**
-   ```bash
-   pnpm install
-   cd etl && pip install -r requirements.txt
+```bash
+apps/
+  remix/           → Remix frontend and API handlers
+  agent/           → LangChain or OpenAgents logic
+
+packages/
+  prisma/          → Shared schema and type definitions
+  etl/             → Data ingestion scripts (Revolut, Squarespace)
+  supabase/        → Supabase client and migrations
+```
+
