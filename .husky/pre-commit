@@ -1,1 +1,10 @@
+#!/usr/bin/env sh
+. "$(dirname -- "$0")/_/husky.sh"
+
+# Run lint-staged for JS/TS files
 npx lint-staged
+
+# Run pre-commit for Python files (if Python files are staged)
+if git diff --cached --name-only | grep -q "apps/ai-agent/.*\.py$"; then
+  pre-commit run --files $(git diff --cached --name-only | grep "apps/ai-agent/.*\.py$" | tr '\n' ' ')
+fi
