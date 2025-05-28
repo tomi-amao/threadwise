@@ -1,6 +1,3 @@
-#!/usr/bin/env sh
-. "$(dirname -- "$0")/_/husky.sh"
-
 # Add pipx bin directory to PATH for pre-commit
 export PATH="$HOME/.local/bin:$PATH"
 
