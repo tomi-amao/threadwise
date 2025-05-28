@@ -9,5 +9,5 @@ npx lint-staged
 
 # Run pre-commit for Python files (if Python files are staged)
 if git diff --cached --name-only | grep -q "apps/ai-agent/.*\.py$"; then
-  $HOME/.local/bin/pre-commit run --files $(git diff --cached --name-only | grep "apps/ai-agent/.*\.py$" | tr '\n' ' ')
+  pre-commit run --files $(git diff --cached --name-only | grep "apps/ai-agent/.*\.py$" | tr '\n' ' ')
 fi
