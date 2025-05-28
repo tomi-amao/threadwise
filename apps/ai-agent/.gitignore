@@ -262,7 +262,6 @@ docs/build/
 docs/dist/
 
 # Docker
-.dockerignore
 docker-compose.override.yml
 
 # Poetry virtual environments (if using in-project setting)
