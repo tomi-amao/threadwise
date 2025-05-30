@@ -25,8 +25,6 @@ services:
     environment:
       - ENVIRONMENT=development
       - PYTHONPATH=/app/src
-      - HOST=0.0.0.0
-      - PORT=8100
     networks:
       - threadwise-network
 

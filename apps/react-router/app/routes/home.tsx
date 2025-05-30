@@ -1,13 +1,13 @@
 // import type { Route } from './+types/home';
-import { Welcome } from '../welcome/welcome';
+import LandingPage from '../components/LandingPage';
 
 export function meta() {
   return [
-    { title: 'New React Router App' },
-    { name: 'description', content: 'Welcome to React Router!' },
+    { title: 'ThreadWise - AI Conversation Platform' },
+    { name: 'description', content: 'Start meaningful conversations with our AI agent' },
   ];
 }
 
 export default function Home() {
-  return <Welcome />;
+  return <LandingPage />;
 }
