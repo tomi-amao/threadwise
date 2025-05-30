@@ -45,7 +45,11 @@ message_counter = 0
 @app.get("/")
 def read_root():
     """Welcome endpoint."""
-    return {"message": "Welcome to AI Agent API", "version": "0.1.0", "docs": "/docs"}
+    return {
+        "message": "Welcome to AI Agent API for ThreadWise",
+        "version": "0.1.0",
+        "docs": "/docs",
+    }
 
 
 @app.get("/health")

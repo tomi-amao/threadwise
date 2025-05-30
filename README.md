@@ -4,6 +4,65 @@
 
 ---
 
+## 🚀 Quick Start
+
+### Prerequisites
+
+- Node.js 18+ and pnpm
+- Python 3.13+ and Poetry
+- Docker & Docker Compose (optional)
+
+### Development Setup
+
+```bash
+# Clone and setup
+git clone <your-repo-url>
+cd threadwise
+make setup  # or: pnpm setup
+
+# Start all apps in development mode
+make dev    # or: pnpm dev
+
+# Start individual apps
+make dev-web    # React Router app (port 5173)
+make dev-api    # AI Agent API (port 8000)
+```
+
+### Alternative Commands
+
+| Command | NPM Script              | Makefile         | VS Code                            |
+| ------- | ----------------------- | ---------------- | ---------------------------------- |
+| Setup   | `pnpm setup`            | `make setup`     | Run Task: Setup                    |
+| Dev All | `pnpm dev`              | `make dev`       | Run Task: 🚀 Start All Apps        |
+| Dev Web | `pnpm dev:react-router` | `make dev-web`   | Run Task: 🌐 Start React Router    |
+| Dev API | `pnpm dev:ai-agent`     | `make dev-api`   | Run Task: 🤖 Start AI Agent        |
+| Build   | `pnpm build`            | `make build`     | Run Task: 🏗️ Build All             |
+| Test    | `pnpm test`             | `make test`      | Run Task: 🧪 Run All Tests         |
+| Docker  | `pnpm docker:up`        | `make docker-up` | Run Task: 🐳 Docker: Build & Start |
+
+### Using VS Code (Recommended)
+
+1. Open Command Palette (`Cmd/Ctrl + Shift + P`)
+2. Type "Tasks: Run Task"
+3. Select from available tasks (e.g., "🚀 Start All Apps (Dev)")
+
+### Using Docker 🐳
+
+```bash
+# Development with hot reload
+make docker-dev
+
+# Production containers
+make docker-up
+
+# View logs
+make docker-logs
+```
+
+📖 **See [Docker Guide](docs/DOCKER.md) for detailed Docker usage**
+
+---
+
 ## ✨ Project Vision
 
 Threadwise pivots away from traditional UI-heavy platforms and focuses on a fully Agent-centric experience:

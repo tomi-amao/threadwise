@@ -55,14 +55,14 @@ USER appuser
 
 # Set environment variables for container deployment
 ENV HOST=0.0.0.0
-ENV PORT=8000
+ENV PORT=8100
 
 # Expose port
-EXPOSE 8000
+EXPOSE 8100
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
-    CMD python -c "import requests; requests.get('http://localhost:8000/health')" || exit 1
+    CMD python -c "import requests; requests.get('http://localhost:8100/health')" || exit 1
 
 # Run the application
-CMD ["poetry", "run", "python", "src/ai_agent/main.py"]
+CMD ["python", "src/ai_agent/main.py"]

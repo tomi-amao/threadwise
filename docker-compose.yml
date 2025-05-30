@@ -1,0 +1,40 @@
+services:
+  react-router:
+    build:
+      context: .
+      dockerfile: ./apps/react-router/Dockerfile
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./apps/react-router:/app/apps/react-router
+      - /app/node_modules
+      - /app/apps/react-router/node_modules
+    environment:
+      - NODE_ENV=development
+    networks:
+      - threadwise-network
+
+  ai-agent:
+    build:
+      context: ./apps/ai-agent
+      dockerfile: Dockerfile
+    ports:
+      - "8100:8100"
+    volumes:
+      - ./apps/ai-agent/src:/app/src
+    environment:
+      - ENVIRONMENT=development
+      - PYTHONPATH=/app/src
+      - HOST=0.0.0.0
+      - PORT=8100
+    networks:
+      - threadwise-network
+
+
+volumes:
+  postgres_data:
+  redis_data:
+
+networks:
+  threadwise-network:
+    driver: bridge

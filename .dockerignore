@@ -1,7 +1,4 @@
-.react-router
-build
 node_modules
-README.md
 .git
 .gitignore
 .env*
@@ -15,3 +12,8 @@ coverage
 .nyc_output
 .DS_Store
 Thumbs.db
+docs/
+README.md
+Makefile
+scripts/
+!scripts/init-db.sql
