@@ -1,21 +1,23 @@
 [project]
-name = "ai-agent"
+name = "threadwise-ai-agent"
 version = "0.1.0"
 description = ""
 authors = [
     {name = "Ignorant View",email = "theignorant.views@gmail.com"}
 ]
 readme = "README.md"
-requires-python = ">=3.13,<4.0"
+requires-python = "<3.14,>=3.9"
 dependencies = [
     "fastapi (>=0.115.12,<0.116.0)",
     "uvicorn (>=0.34.2,<0.35.0)",
-    "openai (>=1.82.0,<2.0.0)",
-    "langchain (>=0.3.25,<0.4.0)",
-    "supabase (>=2.15.2,<3.0.0)",
     "pydantic (>=2.11.5,<3.0.0)",
     "httpx (>=0.28.1,<0.29.0)",
-    "mypy (>=1.15.0,<2.0.0)"
+    "mypy (>=1.15.0,<2.0.0)",
+    "langgraph (>=0.6.6,<0.7.0)",
+    "langchain-openai (>=0.3.32,<0.4.0)",
+    "dotenv (>=0.9.9,<0.10.0)",
+    "langgraph-cli[inmem] (>=0.3.8,<0.4.0)",
+
 ]
 
 [tool.poetry]

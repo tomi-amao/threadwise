@@ -274,3 +274,6 @@ docker-compose.override.yml
 *.pid
 *.sock
 celerybeat-schedule.*
+
+.langgraph_api
+**/DS_Store

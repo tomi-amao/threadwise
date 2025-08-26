@@ -1,68 +1,27 @@
-# Multi-stage build for Python AI Agent
-FROM python:3.13-alpine AS builder
+FROM langchain/langgraph-api:3.11-wolfi
 
-# Set environment variables
-ENV PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1 \
-    PIP_NO_CACHE_DIR=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1
 
-# Install system dependencies
-RUN apk add --no-cache \
-    build-base \
-    curl
 
-# Install Poetry
-RUN pip install poetry
+# -- Adding local package . --
+ADD . /deps/ai-agent
+# -- End of local package . --
 
-# Configure Poetry
-ENV POETRY_NO_INTERACTION=1 \
-    POETRY_VIRTUALENVS_IN_PROJECT=1 \
-    POETRY_CACHE_DIR=/tmp/poetry_cache
+# -- Installing all local dependencies --
+RUN PYTHONDONTWRITEBYTECODE=1 uv pip install --system --no-cache-dir -c /api/constraints.txt -e /deps/*
+# -- End of local dependencies install --
+ENV LANGGRAPH_HTTP='{"app": "/deps/ai-agent/src/ai_agent/main.py:app", "cors": {"allow_origins": ["*"], "allow_methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"], "allow_headers": ["*"]}}'
+ENV LANGSERVE_GRAPHS='{"threadwise-financial-agent": "/deps/ai-agent/agent.py:graph"}'
 
-# Set work directory
-WORKDIR /app
 
-# Copy Poetry files
-COPY pyproject.toml poetry.lock* ./
 
-# Install dependencies
-RUN poetry install --only=main --no-root && rm -rf $POETRY_CACHE_DIR
+# -- Ensure user deps didn't inadvertently overwrite langgraph-api
+RUN mkdir -p /api/langgraph_api /api/langgraph_runtime /api/langgraph_license && touch /api/langgraph_api/__init__.py /api/langgraph_runtime/__init__.py /api/langgraph_license/__init__.py
+RUN PYTHONDONTWRITEBYTECODE=1 uv pip install --system --no-cache-dir --no-deps -e /api
+# -- End of ensuring user deps didn't inadvertently overwrite langgraph-api --
+# -- Removing build deps from the final image ~<:===~~~ --
+RUN pip uninstall -y pip setuptools wheel
+RUN rm -rf /usr/local/lib/python*/site-packages/pip* /usr/local/lib/python*/site-packages/setuptools* /usr/local/lib/python*/site-packages/wheel* && find /usr/local/bin -name "pip*" -delete || true
+RUN rm -rf /usr/lib/python*/site-packages/pip* /usr/lib/python*/site-packages/setuptools* /usr/lib/python*/site-packages/wheel* && find /usr/bin -name "pip*" -delete || true
+RUN uv pip uninstall --system pip setuptools wheel && rm /usr/bin/uv /usr/bin/uvx
 
-# Production stage
-FROM python:3.13-alpine AS production
-
-# Set environment variables
-ENV PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1 \
-    PATH="/app/.venv/bin:$PATH"
-
-# Create non-root user
-RUN addgroup -g 1001 -S appuser && \
-    adduser -S -D -H -u 1001 -s /sbin/nologin -G appuser appuser
-
-# Set work directory
-WORKDIR /app
-
-# Copy virtual environment from builder stage
-COPY --from=builder --chown=appuser:appuser /app/.venv /app/.venv
-
-# Copy application code
-COPY --chown=appuser:appuser src/ ./src/
-
-# Switch to non-root user
-USER appuser
-
-# Set environment variables for container deployment
-ENV HOST=0.0.0.0
-ENV PORT=8100
-
-# Expose port
-EXPOSE 8100
-
-# Health check
-HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
-    CMD python -c "import requests; requests.get('http://localhost:8100/health')" || exit 1
-
-# Run the application
-CMD ["python", "src/ai_agent/main.py"]
+WORKDIR /deps/ai-agent

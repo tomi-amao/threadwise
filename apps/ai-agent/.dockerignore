@@ -1,71 +1,42 @@
-# Python
-__pycache__/
-*.py[cod]
-*$py.class
-*.so
-.Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
+# Ignore node_modules and other dependency directories
+node_modules
+bower_components
+vendor
 
-# Virtual environments
-.env
-.venv
-env/
-venv/
-ENV/
-env.bak/
-venv.bak/
-
-# IDEs
-.vscode/
-.idea/
+# Ignore logs and temporary files
+*.log
+*.tmp
 *.swp
-*.swo
-*~
 
-# OS
-.DS_Store
-.DS_Store?
-._*
-.Spotlight-V100
-.Trashes
-ehthumbs.db
-Thumbs.db
+# Ignore .env files and other environment files
+.env
+.env.*
+*.local
 
-# Git
+# Ignore git-related files
 .git
 .gitignore
 
-# Docker
-Dockerfile*
-docker-compose*
+# Ignore Docker-related files and configs
 .dockerignore
+docker-compose.yml
 
-# Documentation
-README.md
-*.md
+# Ignore build and cache directories
+dist
+build
+.cache
+__pycache__
 
-# Logs
-logs/
-*.log
+# Ignore IDE and editor configurations
+.vscode
+.idea
+*.sublime-project
+*.sublime-workspace
+.DS_Store  # macOS-specific
 
-# Testing
-.pytest_cache/
-.coverage
-htmlcov/
-
-# Poetry
-poetry.lock
+# Ignore test and coverage files
+coverage
+*.coverage
+*.test.js
+*.spec.js
+tests
