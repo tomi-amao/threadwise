@@ -1,7 +1,7 @@
 {
-  "dependencies": ["."],
+  "dependencies": [".", "agent", "utils"],
   "graphs": {
-    "threadwise-financial-agent": "./agent.py:graph"
+    "threadwise-financial-agent": "./agent.py:agent"
   },
   "env": ".env",
   "image_distro": "wolfi",
