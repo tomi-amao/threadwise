@@ -1,0 +1,25 @@
+
+# Development overrides for docker-compose.yml
+services:
+  react-router:
+    build:
+      target: development-dependencies-env
+    volumes:
+      - ./:/app
+      - /app/node_modules
+      - /app/apps/react-router/node_modules
+    # command: ["sh", "-c", "cd /app/apps/react-router && pnpm dev --host 0.0.0.0 --port 3000"]
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=development
+      - VITE_API_URL=http://localhost:8000
+
+  ai-agent:
+    volumes:
+      - ./apps/ai-agent/src:/app/src
+    environment:
+      - ENVIRONMENT=development
+      - PYTHONPATH=/app/src
+      - RELOAD=true
+    command: ["python", "src/ai_agent/main.py"]
