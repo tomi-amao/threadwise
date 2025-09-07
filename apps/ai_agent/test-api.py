@@ -1,21 +1,35 @@
-from pprint import pprint
-from langgraph_sdk import get_client
-import asyncio
+"""Test script for AI Agent using LangGraph SDK."""
 
-client = get_client(url="http://localhost:8123")
+import asyncio
+from pprint import pprint
+
+from langgraph_sdk import get_client
+
+client = get_client(
+    url="http://localhost:8123"
+)  # Adjust if your LangServe instance is running elsewhere
 
 
 async def main():
+    """Create an assistant and run a thread with it."""
     openai_assistant = await client.assistants.create(
         # "agent" is the name of a graph we deployed
-        "threadwise-financial-agent", context={"model_name": "openai"}, name="ThreadWise Assistant"
+        "threadwise-financial-agent",
+        context={"model_name": "openai"},
+        name="ThreadWise Assistant",
     )
     pprint(f"Assistant Info: {openai_assistant}")
 
-
     thread = await client.threads.create()
     pprint(f"Thread Info: {thread}")
-    input = {"question": "Make your answer short. Why is the sun yellow/orange?"}
+    input = {
+        "messages": [
+            {
+                "role": "human",
+                "content": "Make your answer short. Why is the sun yellow/orange?",
+            }
+        ]
+    }
     async for event in client.runs.stream(
         thread["thread_id"],
         # this is where we specify the assistant id to use
@@ -26,5 +40,6 @@ async def main():
         print(f"Receiving event of type: {event.event}")
         print(event.data)
         print("\n\n")
+
 
 asyncio.run(main())

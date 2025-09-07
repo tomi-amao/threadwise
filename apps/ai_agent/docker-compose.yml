@@ -54,4 +54,4 @@ services:
             - .env
         build:
             context: .
-            dockerfile: dockerfile
+            dockerfile: Dockerfile

@@ -1,4 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
+import MarkdownRenderer from './MarkdownRenderer';
+import { sendMessageToAgent, checkAgentHealth, resetConversation } from '../services/aiAgent';
 
 interface Message {
   id: string;
@@ -11,6 +13,7 @@ export default function LandingPage() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [inputValue, setInputValue] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [agentOnline, setAgentOnline] = useState<boolean | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -21,6 +24,15 @@ export default function LandingPage() {
   useEffect(() => {
     scrollToBottom();
   }, [messages]);
+
+  // Check agent health on component mount
+  useEffect(() => {
+    const checkHealth = async () => {
+      const isOnline = await checkAgentHealth();
+      setAgentOnline(isOnline);
+    };
+    checkHealth();
+  }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -37,18 +49,29 @@ export default function LandingPage() {
     setInputValue('');
     setIsLoading(true);
 
-    // Simulate AI response
-    setTimeout(() => {
+    try {
+      // Send message to AI agent
+      const response = await sendMessageToAgent(userMessage.content);
+
       const assistantMessage: Message = {
         id: (Date.now() + 1).toString(),
-        content:
-          "I'm a demo response! This is where your AI agent would respond to user messages. You can integrate this with your actual AI backend.",
+        content: response.error || response.content,
         role: 'assistant',
         timestamp: new Date(),
       };
+
       setMessages(prev => [...prev, assistantMessage]);
+    } catch (error) {
+      const errorMessage: Message = {
+        id: (Date.now() + 1).toString(),
+        content: `Sorry, I encountered an error: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        role: 'assistant',
+        timestamp: new Date(),
+      };
+      setMessages(prev => [...prev, errorMessage]);
+    } finally {
       setIsLoading(false);
-    }, 1000);
+    }
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -65,64 +88,145 @@ export default function LandingPage() {
     }
   };
 
+  const handleSamplePrompt = (prompt: string) => {
+    setInputValue(prompt);
+    textareaRef.current?.focus();
+  };
+
+  const handleResetConversation = async () => {
+    await resetConversation();
+    setMessages([]);
+  };
+
   useEffect(() => {
     adjustTextareaHeight();
   }, [inputValue]);
 
   return (
-    <div className="min-h-screen bg-white dark:bg-gray-950 flex flex-col">
+    <div className="min-h-screen bg-white dark:bg-gray-950 flex flex-col gradient-bg-primary">
       {/* Header */}
-      <header className="border-b border-gray-200 dark:border-gray-800 bg-white/80 dark:bg-gray-950/80 backdrop-blur-sm sticky top-0 z-10">
-        <div className="max-w-4xl mx-auto px-4 py-4">
+      <header className="border-b border-gray-200 dark:border-gray-800 glass-effect sticky top-0 z-10">
+        <div className="max-w-4xl mx-auto px-4 py-4 flex items-center justify-between">
           <h1 className="text-xl font-semibold text-gray-900 dark:text-white">ThreadWise</h1>
+
+          <div className="flex items-center gap-4">
+            {/* Reset Conversation Button */}
+            {messages.length > 0 && (
+              <button
+                onClick={handleResetConversation}
+                className="px-3 py-1 text-xs bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-400 rounded-full hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
+              >
+                New Chat
+              </button>
+            )}
+
+            {/* Agent Status Indicator */}
+            <div className="flex items-center gap-2">
+              <div
+                className={`w-2 h-2 rounded-full status-indicator ${
+                  agentOnline === null
+                    ? 'bg-gray-400'
+                    : agentOnline
+                      ? 'bg-green-500 online'
+                      : 'bg-red-500 offline'
+                }`}
+              ></div>
+              <span className="text-sm text-gray-600 dark:text-gray-400">
+                {agentOnline === null
+                  ? 'Checking...'
+                  : agentOnline
+                    ? 'LangGraph Online'
+                    : 'LangGraph Offline'}
+              </span>
+            </div>
+          </div>
         </div>
       </header>
 
       {/* Main Chat Container */}
       <main className="flex-1 flex flex-col max-w-4xl mx-auto w-full">
         {/* Messages Area */}
-        <div className="flex-1 overflow-y-auto px-4 py-6">
+        <div className="flex-1 overflow-y-auto px-4 py-6 custom-scrollbar">
           {messages.length === 0 ? (
             <div className="text-center py-12">
               <div className="max-w-2xl mx-auto">
                 <h2 className="text-2xl font-semibold text-gray-900 dark:text-white mb-4">
                   Welcome to ThreadWise
                 </h2>
-                <p className="text-gray-600 dark:text-gray-400 mb-8">
-                  Start a conversation with our AI agent. Ask questions, get insights, or explore
-                  ideas together.
+                <p className="text-gray-600 dark:text-gray-400 mb-4">
+                  Your AI-powered financial assistant. Ask questions, get insights, or explore
+                  financial data with natural language.
                 </p>
+
+                {agentOnline === false && (
+                  <div className="mb-6 p-3 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg">
+                    <p className="text-sm text-amber-800 dark:text-amber-200">
+                      💡 <strong>LangGraph server not detected.</strong> Make sure to run{' '}
+                      <code className="bg-amber-100 dark:bg-amber-800 px-1 rounded">
+                        poetry run langgraph dev
+                      </code>{' '}
+                      from the ai-agent directory to start the agent on port 8123.
+                    </p>
+                  </div>
+                )}
+
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-left">
-                  <div className="p-4 border border-gray-200 dark:border-gray-700 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-800/50 cursor-pointer transition-colors">
-                    <h3 className="font-medium text-gray-900 dark:text-white mb-2">💡 Get Ideas</h3>
-                    <p className="text-sm text-gray-600 dark:text-gray-400">
-                      Brainstorm creative solutions for your projects
-                    </p>
-                  </div>
-                  <div className="p-4 border border-gray-200 dark:border-gray-700 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-800/50 cursor-pointer transition-colors">
+                  <button
+                    onClick={() =>
+                      handleSamplePrompt(
+                        'Explain the basics of financial portfolio diversification'
+                      )
+                    }
+                    className="p-4 border border-gray-200 dark:border-gray-700 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-800/50 cursor-pointer transition-colors text-left"
+                  >
                     <h3 className="font-medium text-gray-900 dark:text-white mb-2">
-                      🔍 Ask Questions
+                      💡 Portfolio Advice
                     </h3>
                     <p className="text-sm text-gray-600 dark:text-gray-400">
-                      Get detailed explanations and insights
+                      Learn about diversification strategies
                     </p>
-                  </div>
-                  <div className="p-4 border border-gray-200 dark:border-gray-700 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-800/50 cursor-pointer transition-colors">
+                  </button>
+                  <button
+                    onClick={() =>
+                      handleSamplePrompt('What are the current market trends in technology stocks?')
+                    }
+                    className="p-4 border border-gray-200 dark:border-gray-700 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-800/50 cursor-pointer transition-colors text-left"
+                  >
                     <h3 className="font-medium text-gray-900 dark:text-white mb-2">
-                      ⚡ Quick Help
+                      🔍 Market Analysis
                     </h3>
                     <p className="text-sm text-gray-600 dark:text-gray-400">
-                      Get assistance with specific tasks
+                      Get insights on market trends
                     </p>
-                  </div>
-                  <div className="p-4 border border-gray-200 dark:border-gray-700 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-800/50 cursor-pointer transition-colors">
+                  </button>
+                  <button
+                    onClick={() =>
+                      handleSamplePrompt('Help me calculate the ROI for a potential investment')
+                    }
+                    className="p-4 border border-gray-200 dark:border-gray-700 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-800/50 cursor-pointer transition-colors text-left"
+                  >
                     <h3 className="font-medium text-gray-900 dark:text-white mb-2">
-                      📚 Learn More
+                      ⚡ Quick Calculations
                     </h3>
                     <p className="text-sm text-gray-600 dark:text-gray-400">
-                      Explore topics in depth with guided conversation
+                      Calculate investment returns
                     </p>
-                  </div>
+                  </button>
+                  <button
+                    onClick={() =>
+                      handleSamplePrompt(
+                        'Explain the difference between stocks and bonds in simple terms'
+                      )
+                    }
+                    className="p-4 border border-gray-200 dark:border-gray-700 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-800/50 cursor-pointer transition-colors text-left"
+                  >
+                    <h3 className="font-medium text-gray-900 dark:text-white mb-2">
+                      📚 Learn Basics
+                    </h3>
+                    <p className="text-sm text-gray-600 dark:text-gray-400">
+                      Understand financial fundamentals
+                    </p>
+                  </button>
                 </div>
               </div>
             </div>
@@ -131,16 +235,16 @@ export default function LandingPage() {
               {messages.map(message => (
                 <div
                   key={message.id}
-                  className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
+                  className={`flex animate-fade-in-up ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
                 >
                   <div
-                    className={`flex max-w-[80%] ${message.role === 'user' ? 'flex-row-reverse' : 'flex-row'} gap-3`}
+                    className={`flex max-w-[80%] message-bubble ${message.role === 'user' ? 'flex-row-reverse' : 'flex-row'} gap-3`}
                   >
                     {/* Avatar */}
                     <div
                       className={`w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 ${
                         message.role === 'user'
-                          ? 'bg-blue-500 text-white'
+                          ? 'gradient-bg-message text-white'
                           : 'bg-gray-200 dark:bg-gray-700 text-gray-600 dark:text-gray-300'
                       }`}
                     >
@@ -151,11 +255,15 @@ export default function LandingPage() {
                     <div
                       className={`rounded-2xl px-4 py-3 ${
                         message.role === 'user'
-                          ? 'bg-blue-500 text-white'
+                          ? 'gradient-bg-message text-white'
                           : 'bg-gray-100 dark:bg-gray-800 text-gray-900 dark:text-white'
                       }`}
                     >
-                      <p className="whitespace-pre-wrap">{message.content}</p>
+                      {message.role === 'user' ? (
+                        <p className="whitespace-pre-wrap">{message.content}</p>
+                      ) : (
+                        <MarkdownRenderer content={message.content} />
+                      )}
                       <div
                         className={`text-xs mt-2 opacity-70 ${
                           message.role === 'user'
@@ -175,21 +283,21 @@ export default function LandingPage() {
 
               {/* Loading indicator */}
               {isLoading && (
-                <div className="flex justify-start">
-                  <div className="flex gap-3 max-w-[80%]">
+                <div className="flex justify-start animate-slide-in-right">
+                  <div className="flex gap-3 max-w-[80%] message-bubble">
                     <div className="w-8 h-8 rounded-full bg-gray-200 dark:bg-gray-700 flex items-center justify-center flex-shrink-0">
                       🤖
                     </div>
                     <div className="bg-gray-100 dark:bg-gray-800 rounded-2xl px-4 py-3">
                       <div className="flex space-x-1">
-                        <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce"></div>
+                        <div className="w-2 h-2 bg-gray-400 rounded-full animate-typing-dots"></div>
                         <div
-                          className="w-2 h-2 bg-gray-400 rounded-full animate-bounce"
-                          style={{ animationDelay: '0.1s' }}
+                          className="w-2 h-2 bg-gray-400 rounded-full animate-typing-dots"
+                          style={{ animationDelay: '0.2s' }}
                         ></div>
                         <div
-                          className="w-2 h-2 bg-gray-400 rounded-full animate-bounce"
-                          style={{ animationDelay: '0.2s' }}
+                          className="w-2 h-2 bg-gray-400 rounded-full animate-typing-dots"
+                          style={{ animationDelay: '0.4s' }}
                         ></div>
                       </div>
                     </div>
@@ -203,23 +311,23 @@ export default function LandingPage() {
         </div>
 
         {/* Input Area */}
-        <div className="border-t border-gray-200 dark:border-gray-800 bg-white/80 dark:bg-gray-950/80 backdrop-blur-sm">
+        <div className="border-t border-gray-200 dark:border-gray-800 glass-effect">
           <div className="max-w-4xl mx-auto px-4 py-4">
             <form onSubmit={handleSubmit} className="relative">
-              <div className="flex items-end gap-3 bg-gray-100 dark:bg-gray-800 rounded-2xl p-3 focus-within:ring-2 focus-within:ring-blue-500 focus-within:ring-offset-2 dark:focus-within:ring-offset-gray-950">
+              <div className="flex items-end gap-3 bg-gray-100 dark:bg-gray-800 rounded-2xl p-3 gradient-border focus-within:animate-pulse-glow transition-all duration-300">
                 <textarea
                   ref={textareaRef}
                   value={inputValue}
                   onChange={e => setInputValue(e.target.value)}
                   onKeyDown={handleKeyDown}
                   placeholder="Message ThreadWise..."
-                  className="flex-1 bg-transparent border-0 outline-none resize-none text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-gray-400 min-h-[24px] max-h-[200px]"
+                  className="flex-1 bg-transparent border-0 outline-none resize-none text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-gray-400 min-h-[24px] max-h-[200px] focus-ring"
                   rows={1}
                 />
                 <button
                   type="submit"
                   disabled={!inputValue.trim() || isLoading}
-                  className="w-8 h-8 bg-blue-500 hover:bg-blue-600 disabled:bg-gray-300 dark:disabled:bg-gray-600 text-white rounded-full flex items-center justify-center transition-colors flex-shrink-0"
+                  className="w-8 h-8 gradient-bg-message hover:scale-105 disabled:bg-gray-300 dark:disabled:bg-gray-600 text-white rounded-full flex items-center justify-center transition-all duration-300 flex-shrink-0 button-enhance focus-ring"
                 >
                   <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path

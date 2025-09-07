@@ -10,7 +10,7 @@ ADD . /deps/ai-agent
 RUN PYTHONDONTWRITEBYTECODE=1 uv pip install --system --no-cache-dir -c /api/constraints.txt -e /deps/*
 # -- End of local dependencies install --
 ENV LANGGRAPH_HTTP='{"app": "/deps/ai-agent/src/ai_agent/main.py:app", "cors": {"allow_origins": ["*"], "allow_methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"], "allow_headers": ["*"]}}'
-ENV LANGSERVE_GRAPHS='{"threadwise-financial-agent": "/deps/ai-agent/agent.py:graph"}'
+ENV LANGSERVE_GRAPHS='{"threadwise-financial-agent": "/deps/ai-agent/agent.py:agent"}'
 
 
 
@@ -25,3 +25,4 @@ RUN rm -rf /usr/lib/python*/site-packages/pip* /usr/lib/python*/site-packages/se
 RUN uv pip uninstall --system pip setuptools wheel && rm /usr/bin/uv /usr/bin/uvx
 
 WORKDIR /deps/ai-agent
+
