@@ -16,7 +16,7 @@ services:
 
   ai-agent:
     build:
-      context: ./apps/ai-agent
+      context: apps/ai_agent/src/ai_agent
       dockerfile: Dockerfile
     ports:
       - "8100:8100"

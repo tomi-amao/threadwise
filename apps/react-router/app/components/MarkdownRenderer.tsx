@@ -92,13 +92,13 @@ export default function MarkdownRenderer({ content, className = '' }: MarkdownRe
       dangerouslySetInnerHTML={{ __html: htmlContent }}
       style={
         {
-          // Custom CSS-in-JS for markdown elements
-          '--code-bg': 'rgb(243 244 246)',
-          '--code-bg-dark': 'rgb(55 65 81)',
-          '--code-text': 'rgb(31 41 55)',
-          '--code-text-dark': 'rgb(243 244 246)',
-          '--border-color': 'rgb(229 231 235)',
-          '--border-color-dark': 'rgb(75 85 99)',
+          // Custom CSS-in-JS for markdown elements optimized for dark theme
+          '--code-bg': 'rgb(31 41 55)', // gray-800
+          '--code-bg-dark': 'rgb(17 24 39)', // gray-900
+          '--code-text': 'rgb(229 231 235)', // gray-200
+          '--code-text-dark': 'rgb(243 244 246)', // gray-100
+          '--border-color': 'rgb(75 85 99)', // gray-600
+          '--border-color-dark': 'rgb(55 65 81)', // gray-700
         } as React.CSSProperties
       }
     />
@@ -150,41 +150,27 @@ const markdownStyles = `
   }
 
   .markdown-content blockquote {
-    border-left: 3px solid var(--border-color);
+    border-left: 3px solid var(--border-color-dark);
     margin: 1em 0;
     padding: 0.5em 1em;
-    background: rgba(0, 0, 0, 0.02);
+    background: rgba(255, 255, 255, 0.05);
     font-style: italic;
   }
 
-  .dark .markdown-content blockquote {
-    border-color: var(--border-color-dark);
-    background: rgba(255, 255, 255, 0.05);
-  }
-
   .markdown-content .inline-code {
-    background: var(--code-bg);
-    color: var(--code-text);
+    background: var(--code-bg-dark);
+    color: var(--code-text-dark);
     padding: 0.125em 0.25em;
     border-radius: 0.25em;
     font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
     font-size: 0.875em;
   }
 
-  .dark .markdown-content .inline-code {
-    background: var(--code-bg-dark);
-    color: var(--code-text-dark);
-  }
-
   .markdown-content .code-block-wrapper {
     margin: 1em 0;
     border-radius: 0.5em;
     overflow: hidden;
-    border: 1px solid var(--border-color);
-  }
-
-  .dark .markdown-content .code-block-wrapper {
-    border-color: var(--border-color-dark);
+    border: 1px solid var(--border-color-dark);
   }
 
   .markdown-content .code-block-header {
@@ -192,31 +178,22 @@ const markdownStyles = `
     justify-content: space-between;
     align-items: center;
     padding: 0.5em 1em;
-    background: var(--code-bg);
-    border-bottom: 1px solid var(--border-color);
+    background: var(--code-bg-dark);
+    border-bottom: 1px solid var(--border-color-dark);
     font-size: 0.75em;
     font-weight: 500;
   }
 
-  .dark .markdown-content .code-block-header {
-    background: var(--code-bg-dark);
-    border-color: var(--border-color-dark);
-  }
-
   .markdown-content .code-language {
-    color: var(--code-text);
+    color: var(--code-text-dark);
     text-transform: uppercase;
     letter-spacing: 0.05em;
-  }
-
-  .dark .markdown-content .code-language {
-    color: var(--code-text-dark);
   }
 
   .markdown-content .copy-button {
     background: none;
     border: none;
-    color: var(--code-text);
+    color: var(--code-text-dark);
     cursor: pointer;
     padding: 0.25em;
     border-radius: 0.25em;
@@ -224,64 +201,41 @@ const markdownStyles = `
   }
 
   .markdown-content .copy-button:hover {
-    background: rgba(0, 0, 0, 0.1);
-  }
-
-  .dark .markdown-content .copy-button {
-    color: var(--code-text-dark);
-  }
-
-  .dark .markdown-content .copy-button:hover {
     background: rgba(255, 255, 255, 0.1);
   }
 
   .markdown-content pre {
     margin: 0;
     padding: 1em;
-    background: var(--code-bg);
+    background: var(--code-bg-dark);
     overflow-x: auto;
     font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
     font-size: 0.875em;
     line-height: 1.4;
   }
 
-  .dark .markdown-content pre {
-    background: var(--code-bg-dark);
-  }
-
   .markdown-content pre code {
-    color: var(--code-text);
+    color: var(--code-text-dark);
     background: none;
     padding: 0;
     border-radius: 0;
   }
 
-  .dark .markdown-content pre code {
-    color: var(--code-text-dark);
-  }
-
   .markdown-content .markdown-link {
-    color: rgb(59 130 246);
+    color: rgb(129 140 248); /* indigo-400 to match our theme */
     text-decoration: underline;
-    text-decoration-color: rgba(59, 130, 246, 0.3);
+    text-decoration-color: rgba(129, 140, 248, 0.3);
     transition: text-decoration-color 0.2s;
   }
 
   .markdown-content .markdown-link:hover {
-    text-decoration-color: rgb(59 130 246);
-  }
-
-  .dark .markdown-content .markdown-link {
-    color: rgb(147 197 253);
+    text-decoration-color: rgb(129 140 248);
+    color: rgb(165 180 252); /* indigo-300 on hover */
   }
 
   .markdown-content .error {
-    color: rgb(239 68 68);
+    color: rgb(248 113 113); /* red-400 */
     font-style: italic;
-  }
-
-  .dark .markdown-content .error {
-    color: rgb(248 113 113);
   }
 `;
 
