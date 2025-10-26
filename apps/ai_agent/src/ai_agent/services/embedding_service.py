@@ -31,15 +31,10 @@ except ImportError:
     SentenceTransformer = None
     SentenceTransformerEmbeddings = None
 
-try:
-    from langchain_community.vectorstores import SupabaseVectorStore
-    from langchain_core.documents import Document as LangChainDocument
-    from langchain_community.document_loaders import PyPDFLoader
-    from langchain.text_splitter import RecursiveCharacterTextSplitter
-except ImportError:
-    SupabaseVectorStore = None
-    LangChainDocument = None
-
+from langchain_community.vectorstores import SupabaseVectorStore
+from langchain_core.documents import Document as LangChainDocument
+from langchain_community.document_loaders import PyPDFLoader
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 try:
     from supabase import create_client, Client
 except ImportError:
@@ -61,6 +56,9 @@ VECTOR_QUERY_NAME = "match_documents"
 _embedding_model = None
 _embeddings = None
 _supabase_client = None
+
+
+
 
 
 class EmbeddingService:
@@ -263,9 +261,27 @@ class EmbeddingService:
                 query_name=VECTOR_QUERY_NAME,
             )
 
-            # logger.info(f"Vector store initialized for search { await vector_store.asimilarity_search(query, k=limit)}")
-            # results = await vector_store.asimilarity_search(query, k=limit)
-            results = await vector_store.asimilarity_search(query, k=limit)
+
+            async def async_rpc(client, query_embedding, match_count=4):
+                return await asyncio.to_thread(
+                    lambda: client.rpc(VECTOR_QUERY_NAME, 
+    {
+                        "query_embedding": query_embedding,
+                        "match_count": match_count,
+                    }).execute()
+                )
+            query_embedding = vector_store.embeddings.embed_query(query)
+            similarity_search_response = await async_rpc(vector_store._client, query_embedding, 4)
+
+            results = [
+                LangChainDocument(
+                    page_content=row['content'],
+                    metadata=row['metadata']
+                )
+                for row in similarity_search_response.data
+            ]
+
+            # results = await vector_store.asearch(query=query, search_type="similarity")
             logger.info(f"Search returned {len(results)} results")
             logger.info(f"Search results: {results}")
             
