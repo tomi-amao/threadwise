@@ -13,7 +13,7 @@ load_dotenv(dotenv_path=".env")
 model = get_local_llm()
 
 # Get database URL from environment variable or use local development default
-database_url = os.getenv("DATABASE_URL")
+database_url = os.getenv("DATABASE_URL", "postgresql://postgres:your-super-secret-and-long-postgres-password@127.0.0.1:5435/postgres")
 
 # Use psycopg2 instead of asyncpg for synchronous operations
 db = SQLDatabase.from_uri(database_url)

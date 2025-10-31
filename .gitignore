@@ -5,3 +5,5 @@ node_modules
 infrastructure/supabase/volumes
 **.env
 **.zip
+apps/ai-agent
+apps/chat-ui/.react-router
