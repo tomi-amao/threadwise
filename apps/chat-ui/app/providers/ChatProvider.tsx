@@ -226,6 +226,7 @@ export function ChatProvider({ children }: ChatProviderProps) {
             ...prev,
             messages: [...(prev.messages ?? []), newHumanMessage],
           }),
+          context: {user_id: 'user_123'},
         }
       )
     } catch (error) {

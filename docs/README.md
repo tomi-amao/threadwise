@@ -46,3 +46,6 @@ Langgraph server now accepts additional custom api routes by setting the http se
 created a vector database in supabase
 
 will need to provide an authentication for langgraph server
+ Query enhancement: Modify the input question to improve retrieval quality. This can involve rewriting unclear queries, generating multiple variations, or expanding queries with additional context.
+Retrieval validation: Evaluate whether retrieved documents are relevant and sufficient. If not, the system may refine the query and retrieve again.
+Answer validation: Check the generated answer for accuracy, completeness, and alignment with source content. If needed, the system can regenerate or revise the answer.
