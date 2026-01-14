@@ -20,7 +20,8 @@ from langchain_community.tools import BraveSearch
 from .sub_agents import qualify_query
 
 load_dotenv(dotenv_path=".env")
-model = get_chat_model()
+# model = get_chat_model()
+model = get_local_llm("qwen/qwen3-vl-4b")
 
 # Get database URL from environment variable or use local development default
 # database_url = os.getenv("DATABASE_URL", "postgresql://postgres:your-super-secret-and-long-postgres-password@127.0.0.1:5435/postgres")

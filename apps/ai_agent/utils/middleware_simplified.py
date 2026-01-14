@@ -16,6 +16,7 @@ Design Pattern:
 - Single @wrap_model_call for routing and tool/prompt injection
 """
 
+import json
 import logging
 from langchain.agents.middleware import (
     ModelRequest, 
@@ -42,24 +43,14 @@ from .prompts import (
     sql_system_prompt, 
     generic_system_prompt,
     analytics_system_prompt,  # New prompt for database analytics
+    check_financial_prompt,
+    validate_financial_prompt_against_database,
 )
 
 # Configure logging
 logger = logging.getLogger(__name__)
 
 
-class QueryState(AgentState):  
-    """Custom state schema for the agent with query classification fields.
-    
-    Note: AgentState is a TypedDict, so we use annotation-only syntax without defaults.
-    Use state.get("field", default) to access with defaults.
-    """
-    query_type: Literal["financial_report", "database_analytics", "generic"] | None  # Type of query
-    is_query_quality_passed: bool | None  # Whether financial report query passed quality check
-    query_suggestions: list[str] | None  # Suggestions if quality failed
-    example_queries: list[str] | None  # Example queries for guidance
-    financial_confidence: float | None  # Confidence score for classification
-    database_context: str | None  # Cached database schema info for suggestions
 
 
 class QueryClassificationResult(BaseModel):
@@ -87,6 +78,70 @@ class QueryTypeClassification(BaseModel):
     confidence: float = Field(ge=0.0, le=1.0, description="Confidence score (0.0-1.0)")
     reasoning: str = Field(description="Brief explanation of the classification")
 
+class ValidateFinancialQuery(BaseModel):
+    """Structured output for financial query validation."""
+    
+    status: Literal["pass", "fail", "clarification_required"] = Field(
+        description="'pass' if query is detailed enough, 'fail' if needs clarification"
+    )
+    intent_clarity: Literal["pass", "fail"] = Field(
+        description="'pass' if intent is clear, 'fail' if vague"
+    )
+    temporal_scope: Literal["pass", "fail"] = Field(
+        description="'pass' if temporal scope is clear, 'fail' if ambiguous"
+    )
+    missing_information: list[str] = Field(default_factory=list, description="List of missing information if any")
+    clarification_questions: list[str] = Field(default_factory=list, description="Clarification questions to ask the user")
+    suggestions: list[str] = Field(default_factory=list, description="Suggested alternative queries based on available data")
+
+from pydantic import BaseModel, Field
+from typing import List, Literal
+
+
+class Suggestion(BaseModel):
+    description: str = Field(
+        ...,
+        description="Human-readable explanation of a suggested alternative query"
+    )
+    example_query: str = Field(
+        ...,
+        description="An example of a rewritten user query grounded in available data"
+    )
+
+class QueryState(AgentState):  
+    """Custom state schema for the agent with query classification fields.
+    
+    Note: AgentState is a TypedDict, so we use annotation-only syntax without defaults.
+    Use state.get("field", default) to access with defaults.
+    """
+    query_type: Literal["financial_report", "database_analytics", "generic"] | None  # Type of query
+    is_query_quality_passed: bool | None  # Whether financial report query passed quality check
+    query_suggestions: list[Suggestion] | list[str] |None  # Suggestions if quality failed
+    issues: list[str] | None  # Example queries for guidance
+
+
+class PreFlightValidationResult(BaseModel):
+    status: Literal["pass", "partial", "fail"] = Field(
+        ...,
+        description="Overall validation outcome"
+    )
+
+    temporal_coverage: Literal["full", "partial", "none"] = Field(
+        ...,
+        description="Coverage of the requested time range based on available data"
+    )
+
+    issues: List[str] = Field(
+        default_factory=list,
+        description="Concrete reasons why the query is partially valid or invalid"
+    )
+
+    suggestions: List[Suggestion] = Field(
+        default_factory=list,
+        description="Suggested alternative queries based on available data"
+    )
+
+
 
 # Initialize models for classification
 _classification_model = get_local_llm("qwen/qwen3-vl-4b")
@@ -94,8 +149,8 @@ _classification_model = get_local_llm("qwen/qwen3-vl-4b")
 _query_classifier = _classification_model.with_structured_output(QueryClassificationResult)
 _type_classifier = _classification_model.with_structured_output(QueryTypeClassification)
 # Validation agent has SQL tools to inspect database schema for grounding suggestions
-_validation_agent = create_agent(_classification_model, system_prompt=validation_prompt, tools=sql_tools)
-
+_validation_agent = create_agent(_classification_model, system_prompt=check_financial_prompt, response_format=ValidateFinancialQuery)
+_validation_agent_with_tools = create_agent(_classification_model, tools=sql_tools, system_prompt=validate_financial_prompt_against_database)
 
 def _get_last_human_message(messages: list) -> Optional[HumanMessage]:
     """Extract the last human message from the message list."""
@@ -125,7 +180,7 @@ def _extract_query_text(human_msg: HumanMessage) -> str:
 
 
 @before_model(state_schema=QueryState, can_jump_to=["end", "model"])
-async def classify_and_grade_query(state: QueryState, runtime: Runtime) -> dict[str, Any] | None:
+async def classify_query(state: QueryState, runtime: Runtime) -> dict[str, Any] | None:
     """Combined middleware: Classify query type AND grade quality (only for financial reports).
     
     This middleware classifies queries into three categories:
@@ -177,14 +232,13 @@ async def classify_and_grade_query(state: QueryState, runtime: Runtime) -> dict[
         # Step 2: Only validate quality for FINANCIAL REPORTS
         if query_type == "financial_report":
             logger.info("Financial report detected - running quality validation...")
-            quality_result = await _grade_query_quality(user_query)
+            quality_result = await _validate_financial_query(user_query)
+            print(f"Result from validate financial query: {quality_result}")
+            logger.info(f"Quality validation status result: {quality_result.get('status')}")
             return {
-                "query_type": query_type,
-                "financial_confidence": classification["confidence"],
-                "is_query_quality_passed": quality_result["passed"],
-                "query_suggestions": quality_result.get("suggestions"),
-                "example_queries": quality_result.get("example_queries"),
-                "database_context": quality_result.get("database_context"),
+                "query_type": "financial_report",
+                "is_query_quality_passed": quality_result["status"],
+                "query_suggestions": quality_result["query_suggestions"],
             }
         
         # Database analytics and generic queries skip validation
@@ -257,7 +311,7 @@ Return:
 - reasoning: Brief explanation of why you chose this category"""
 
     result = await _type_classifier.ainvoke([
-        {"role": "system", "content": "You classify business queries into financial reports, data analytics, or generic conversation. Be precise and consider the user's intent."},
+        {"role": "system", "content": "You classify queries into financial reports, data analytics, or generic conversation. Be precise and consider the user's intent."},
         {"role": "user", "content": classification_prompt},
     ])
     
@@ -275,99 +329,69 @@ Return:
     }
 
 
-async def _grade_query_quality(user_query: str) -> dict[str, Any]:
-    """Grade the quality of a financial query using the validation agent with SQL tools.
-    
-    The validation agent uses SQL tools to:
-    - Inspect available schemas, tables, and columns
-    - Check what financial entities, time periods and metrics exist
-    - Ground suggestions in actual database structure
-    
-    Returns:
-        dict with:
-        - 'passed': bool
-        - 'suggestions': list[str] (if failed)
-        - 'example_queries': list[str] (if failed)
-        - 'database_context': str (schema info for later use)
+async def _validate_financial_query(user_query: str) -> dict[str, Any]:
+    """Validate the quality of a financial report query.
     """
-    logger.info("Running validation agent with SQL tools to grade query quality...")
+    logger.info("Running validation agent")
     
-    # Use the validation agent which has SQL tools to inspect the database
-    validation_result = await _validation_agent.ainvoke({
+    # Use the validation agent to check query quality
+    query_validation = await _validation_agent.ainvoke({
         "messages": [{"role": "user", "content": user_query}]
     })
     
-    last_message = validation_result.get("messages", [])[-1] if validation_result.get("messages") else None
+    validation_result = query_validation["structured_response"]
+    logger.info(f"Validation agent completed: {validation_result}")
+
+    if validation_result.missing_information:
+        logging.info("Query validation failed - missing information detected")
+        return {
+            "query_suggestions": validation_result.clarification_questions,
+            "issues": validation_result.missing_information,
+            "status": "fail"
+        }    
+    print("Validation Status",validation_result.status)
+    print("Validation clarification",validation_result.clarification_questions)
+    last_message = query_validation.get("messages", [])[-1] if query_validation.get("messages") else None
     validation_text = getattr(last_message, 'text', str(last_message)) if last_message else ""
     
     logger.debug(f"Validation agent response: {validation_text[:300]}...")
     
-    # Parse the validation result into structured format
-    structured_result = await _query_classifier.ainvoke([
-        {"role": "system", "content": """Extract the query evaluation result as structured data.
-        
-Focus on the quality_result field:
-- 'pass': Query has enough detail (entity, time period, report type specified)
-- 'fail': Query is too vague or missing required context
-Make sure the confidence is a float between 0.0 and 1.0.
-         
+    # if validation_result.status == "clarification_required":
+    logger.info("Query requires clarification")
+    validation_result_with_tools = await _validation_agent_with_tools.ainvoke({
+        "messages": [{"role": "user", "content": 
+                        "Help me improve this query by addressing the problems with it:" + 
+                        "\n" + user_query + 
+                        "These are the issues found: " +
+                        "\n" + ", ".join(validation_result.missing_information) +
+                        "\nProvide suggestions based on actual data in the database by querying it."
+                        }]
+    })
+    print("Validation with tools",type(validation_result_with_tools))
+    last_message = validation_result_with_tools["messages"][-1].content
+    last_message_data = json.loads(last_message)
+    suggestions = []
+    print(json.loads(last_message))
+    try:
+        suggestions_data = json.loads(last_message)
+        for item in suggestions_data.get("suggestions", []):
+            suggestions.append({"description": item.get("description", ""), "example_query": item.get("example_query", "")})
+    except json.JSONDecodeError:
+        logger.error("Failed to parse suggestions from validation with tools response", exc_info=True)
+    print("Suggestions",suggestions)
+    print("Issues", last_message_data.get("issues", []))
+    print("Status after checking with database", last_message_data.get("status", []))
 
-If the validation found issues, extract the suggestions and example queries."""},
-        {"role": "user", "content": f"Validation agent response:\n{validation_text}\n\nOriginal query: {user_query}"},
-    ])
-    
-    logger.info(f"Structured quality result: {structured_result}")
-    
-    # Parse structured output
-    if isinstance(structured_result, dict):
-        quality_result = structured_result.get('quality_result', 'pass')
-        suggestions = structured_result.get('suggestions', [])
-        example_queries = structured_result.get('example_queries', [])
-    else:
-        quality_result = getattr(structured_result, 'quality_result', 'pass')
-        suggestions = getattr(structured_result, 'suggestions', [])
-        example_queries = getattr(structured_result, 'example_queries', [])
-    
-    passed = quality_result == "pass"
-    
     return {
-        "passed": passed,
-        "suggestions": suggestions if not passed else None,
-        "example_queries": example_queries if not passed else None,
-        "database_context": validation_text,  # Cache for later use in suggestions
+        "status": last_message_data.get("status", []),
+        "query_suggestions": suggestions,
+        "issues": last_message_data.get("issues", []),
+        "is_query_quality_passed": last_message_data.get("status", "fail")
     }
 
+    
 
-def _build_clarification_context(
-    suggestions: list[str] | None, 
-    example_queries: list[str] | None,
-    database_context: str | None = None
-) -> str:
-    """Build context message for the model when query quality failed.
-    
-    This provides the model with:
-    - The specific issues with the query
-    - Database-grounded suggestions for improvement
-    - Example queries that would work with the available schema
-    """
-    parts = ["⚠️ **Query Quality Check Failed**\n"]
-    
-    if suggestions:
-        parts.append("The user's query needs clarification:\n")
-        parts.extend(f"- {s}" for s in suggestions)
-        parts.append("")
-    
-    if example_queries:
-        parts.append("\nDatabase-grounded example queries:\n")
-        parts.extend(f"- {eq}" for eq in example_queries)
-        parts.append("")
-    
-    if database_context:
-        parts.append(f"\nDatabase context from validation:\n{database_context[:500]}...")
-    
-    parts.append("\nUse this context to help the user refine their query.")
-    
-    return "\n".join(parts)
+
 
 
 @wrap_model_call(state_schema=QueryState)
@@ -426,7 +450,7 @@ async def route_and_configure(
         ))
     
     # PATH 3: Financial reports that passed → Strict financial prompt
-    if query_type == "financial_report" and query_quality_passed:
+    if query_type == "financial_report" and query_quality_passed in ["pass", "partial"]:
         logger.info("→ Routing to FINANCIAL REPORT handler (quality passed)")
         return await handler(request.override(
             system_prompt=sql_system_prompt,  # Strict financial reporting prompt
@@ -438,20 +462,40 @@ async def route_and_configure(
     
     # Build clarification context from state
     suggestions = request.state.get("query_suggestions", [])
-    example_queries = request.state.get("example_queries", [])
-    database_context = request.state.get("database_context")
-    
-    # Inject clarification context into the message history
-    clarification = _build_clarification_context(suggestions, example_queries, database_context)
-    
+    issues = request.state.get("issues", [])
+    print("Issues in routing",issues)
+    print("Suggestions in routing",suggestions)
+    print("Messages in routing",request.state.get("messages", []))
+
+        
     # Create modified messages with context injected as a system message
     messages = list(request.state.get("messages", []))
-    messages.insert(0, SystemMessage(content=clarification))
     
+    # Format issues - ensure they're strings
+    formatted_issues = [str(issue) for issue in issues]
+    
+    # Format suggestions - extract description from dict if needed
+    formatted_suggestions = []
+    for sug in suggestions:
+        if isinstance(sug, dict):
+            formatted_suggestions.append(f"{sug.get('description', '')} Example: {sug.get('example_query', '')}")
+        else:
+            formatted_suggestions.append(str(sug))
+    
+    query_suggestion_prompt =f""" You Financial assistant. The user asked a financial/accounting question, but it needs more detail before we can generate an accurate report.
+    The following has been identified as issues with the query:
+    issues: {', '.join(formatted_issues)}
+    The following has been gathered to improve the query:
+    suggestions: {'; '.join(formatted_suggestions)}
+
+    Your job is to inform the user about these issues and advice them on refining their query accordingly, using the suggestions and reasoning provided.
+    """
+
     return await handler(request.override(
         system_prompt=query_suggestion_prompt,
-        tools=sql_tools,  # SQL tools so model can provide grounded suggestions
         messages=messages,
+        tools=[]
+        
     ))
 
 
@@ -483,7 +527,3 @@ async def route_and_configure(
 # - Flexible data exploration without validation overhead
 # - Data-grounded suggestions when validation fails
 #
-middleware_chain = [
-    classify_and_grade_query,  # Classify query type + validate financial reports
-    route_and_configure,       # Route to appropriate prompt/tools
-]
