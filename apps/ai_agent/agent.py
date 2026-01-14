@@ -5,20 +5,19 @@ Multi-node graph for financial data analysis and reporting.
 
 from langgraph.graph import StateGraph
 
-from utils.nodes import analyze_question, generate_response
-from utils.state import State, Context
-from utils.settings import CustomContext, CustomState, get_chat_model, get_local_llm
 from langchain.agents import create_agent, AgentState
-from utils.tools import tools, sql_tools
-from utils.prompts import dynamic_system_prompt, sql_system_prompt
 from langchain.agents.middleware import (
-    SummarizationMiddleware, 
-    LLMToolSelectorMiddleware,
     ModelCallLimitMiddleware,
+    SummarizationMiddleware,
     ToolCallLimitMiddleware,
 )
-from utils.workflow import middleware_chain, all_workflow_tools, WorkflowState
+
 from utils.middleware_simplified import classify_query, route_and_configure
+from utils.nodes import analyze_question, generate_response
+from utils.prompts import dynamic_system_prompt, sql_system_prompt
+from utils.settings import CustomContext, CustomState, get_chat_model, get_local_llm
+from utils.state import Context, State
+from utils.tools import sql_tools, tools
 
 
 # model = get_chat_model("gemini-2.5-flash")
@@ -52,17 +51,15 @@ tool_call_limit = ToolCallLimitMiddleware(
     exit_behavior='end',  # Gracefully end execution to prevent infinite loops
 )
 
-# Structured workflow middleware chain:
-# 1. apply_workflow_step: State machine that routes through:
-#    - query_classifier → classify query type
-#    - database_inspector → validate DB schema (financial reports only)
-#    - quality_gate → check query detail (financial reports only)
-#    - executor → execute with appropriate prompt/tools
-# 2. model_call_limit: Prevent infinite loops from repeated model calls
-# 3. tool_call_limit: Prevent excessive database queries
-# 4. summarize_middleware: Summarize conversation to manage context length
+# Middleware for managing the agent's behavior:
+# 1. classify_query: Classifies queries and validates financial reports
+# 2. route_and_configure: Routes to appropriate handler with correct prompt/tools
+# 3. model_call_limit: Prevents infinite loops from repeated model calls
+# 4. tool_call_limit: Prevents excessive database queries
+# 5. summarize_middleware: Summarizes conversation to manage context length
 middleware = [
-    *middleware_chain,      # Workflow state machine (single @wrap_model_call middleware)
+    classify_query,         # Classification and validation middleware
+    route_and_configure,    # Routing and configuration middleware
     model_call_limit,       # Limit model invocations to prevent loops
     tool_call_limit,        # Limit tool calls to prevent excessive queries
     summarize_middleware,   # Summarize conversation to manage context length
@@ -70,7 +67,7 @@ middleware = [
 
 middleware_simplified = [
     classify_query,
-    route_and_configure
+    route_and_configure,
 ]
 
 

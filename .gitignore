@@ -7,3 +7,5 @@ infrastructure/supabase/volumes
 **.zip
 apps/ai-agent
 apps/chat-ui/.react-router
+
+apps/ai_agent/utils/example_approaches
