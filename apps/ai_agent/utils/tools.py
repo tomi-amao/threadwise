@@ -66,6 +66,14 @@ sql_tools = toolkit.get_tools()
 
 # tools.append(qualify_query)
 
+# Import and add graph generation tools
+from .graph_tool import generate_graph, generate_metric_card
+
+
+tools.append(generate_graph)
+tools.append(generate_metric_card)
+sql_tools.append(generate_graph)
+sql_tools.append(generate_metric_card)
 
 # @tool
 # def get_user_info(

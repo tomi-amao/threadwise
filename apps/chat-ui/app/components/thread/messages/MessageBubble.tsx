@@ -28,7 +28,7 @@ import { ToolCalls, ToolResult } from "./ToolCalls";
  * ThreadWise Integration:
  * - Supports tool call metadata from AI Agent API
  * - Displays ThreadWise agent reasoning and external API calls
- * - Future: Will show artifacts, code execution, file attachments
+ * - Charts rendered from generate_graph tool results via ToolResult component
  */
 
 interface MessageBubbleProps {
@@ -39,8 +39,11 @@ export function MessageBubble({ message }: MessageBubbleProps) {
   const isUser = message.type === 'human';
   const isAI = message.type === 'ai';
   const isTool = message.type === 'tool';
+  console.log("Messages from langgraph", message);
+  
 
   // Tool messages get special rendering with clear type indicator
+  // Charts from generate_graph tool are rendered in ToolResult component
   if (isTool) {
     return (
       <div className="flex gap-2 md:gap-3">

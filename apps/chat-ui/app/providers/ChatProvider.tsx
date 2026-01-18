@@ -10,6 +10,9 @@ import { v4 as uuidv4 } from 'uuid'
  * Uses LangGraph SDK types directly - no conversion overhead
  * Single source of truth: useStream hook
  * Configuration is handled entirely through environment variables
+ * 
+ * Note: Charts are rendered from tool results (generate_graph tool),
+ * not from LangGraph's generative UI system.
  */
 
 // Configuration from environment variables - no runtime changes allowed

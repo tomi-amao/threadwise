@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import type { Message } from '@langchain/langgraph-sdk';
 import { CaretDown, CaretUp, Wrench, CheckCircle, XCircle } from 'phosphor-react';
 import { cn } from '~/lib/utils';
+import { BarChartViz, LineChartViz, PieChartViz, FinancialTableViz, MetricCardViz } from '~/components/visualizations';
 
 interface ToolCall {
   id?: string;
@@ -10,6 +11,24 @@ interface ToolCall {
   type?: string;
   status?: string;
   result?: any;
+}
+
+interface ChartData {
+  __chart__: true;
+  type: 'bar' | 'line' | 'pie' | 'table' | 'metric';
+  title: string;
+  format: 'currency' | 'number' | 'percentage';
+  data?: any[];
+  headers?: string[];
+  rows?: any[];
+  value?: number;
+  trend?: {
+    direction: 'up' | 'down' | 'neutral';
+    value: number;
+    period: string;
+  };
+  description?: string;
+  error?: string;
 }
 
 function isComplexValue(value: any): boolean {
@@ -98,14 +117,73 @@ export function ToolResult({ message }: { message: Message }) {
   };
 
   const contentString = getContentString();
+  
+  // Try to parse as chart data
+  let chartData: ChartData | null = null;
   let parsedContent: any;
   let isJsonContent = false;
 
   try {
     parsedContent = JSON.parse(contentString);
     isJsonContent = isComplexValue(parsedContent);
+    
+    // Check if this is chart data from generate_graph or generate_metric_card
+    if (parsedContent && parsedContent.__chart__ === true) {
+      chartData = parsedContent as ChartData;
+    }
   } catch {
     parsedContent = contentString;
+  }
+
+  // Extract tool name from LangGraph message
+  const toolName = 'name' in message && message.name ? message.name : 'Unknown Tool';
+
+  // If we have chart data, render the appropriate visualization
+  if (chartData && !chartData.error) {
+    return (
+      <div className="max-w-3xl">
+        {chartData.type === 'bar' && chartData.data && (
+          <BarChartViz
+            title={chartData.title}
+            data={chartData.data}
+            format={chartData.format}
+          />
+        )}
+        {chartData.type === 'line' && chartData.data && (
+          <LineChartViz
+            title={chartData.title}
+            data={chartData.data}
+            format={chartData.format}
+          />
+        )}
+        {chartData.type === 'pie' && chartData.data && (
+          <PieChartViz
+            title={chartData.title}
+            data={chartData.data}
+            format={chartData.format}
+          />
+        )}
+        {chartData.type === 'table' && chartData.rows && chartData.headers && (
+          <FinancialTableViz
+            title={chartData.title}
+            data={{
+              headers: chartData.headers,
+              rows: chartData.rows
+            }}
+            format={chartData.format}
+          />
+        )}
+        {chartData.type === 'metric' && chartData.value !== undefined && (
+          <MetricCardViz
+            title={chartData.title}
+            value={chartData.value}
+            format={chartData.format}
+            trend={chartData.trend}
+            description={chartData.description}
+          />
+        )}
+      </div>
+    );
   }
 
   const contentStr = isJsonContent
@@ -119,9 +197,6 @@ export function ToolResult({ message }: { message: Message }) {
         ? contentStr.slice(0, 500) + '...'
         : contentLines.slice(0, 4).join('\n') + '\n...'
       : contentStr;
-
-  // Extract tool name from LangGraph message
-  const toolName = 'name' in message && message.name ? message.name : 'Unknown Tool';
 
   return (
     <div className="max-w-3xl">

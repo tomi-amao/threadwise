@@ -3,7 +3,8 @@
 Multi-node graph for financial data analysis and reporting.
 """
 
-from langgraph.graph import StateGraph
+from typing import Annotated, Sequence
+from langgraph.graph.ui import AnyUIMessage, ui_message_reducer
 
 from langchain.agents import create_agent, AgentState
 from langchain.agents.middleware import (
@@ -18,6 +19,12 @@ from utils.prompts import dynamic_system_prompt, sql_system_prompt
 from utils.settings import CustomContext, CustomState, get_chat_model, get_local_llm
 from utils.state import Context, State
 from utils.tools import sql_tools, tools
+
+
+# Custom state schema with UI support for generative UI
+class FinancialAgentState(AgentState):
+    """State schema for the financial agent with UI message support."""
+    ui: Annotated[Sequence[AnyUIMessage], ui_message_reducer]
 
 
 # model = get_chat_model("gemini-2.5-flash")
@@ -75,9 +82,9 @@ agent = create_agent(
     model,
     # tools=all_workflow_tools,  # All tools needed for workflow (classification, inspection, quality, SQL)
     # system_prompt=sql_system_prompt,  # Default prompt (overridden by workflow at each step)
-    middleware=middleware_simplified,
+    # middleware=middleware_simplified,
     tools=sql_tools,
-    # state_schema=WorkflowState,  # Use WorkflowState for current_step tracking
+    state_schema=FinancialAgentState,  # Use custom state with UI support
     # context_schema=CustomContext,
 )
 
