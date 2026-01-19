@@ -49,7 +49,7 @@ class State(TypedDict):
 toolkit = SQLDatabaseToolkit(db=db, llm=model)
 # Get the tools
 tools = []
-tools = toolkit.get_tools()
+# tools = toolkit.get_tools()
 sql_tools = toolkit.get_tools()
 
 # @tool(response_format="content_and_artifact")
@@ -67,13 +67,10 @@ sql_tools = toolkit.get_tools()
 # tools.append(qualify_query)
 
 # Import and add graph generation tools
-from .graph_tool import generate_graph, generate_metric_card
 
 
-tools.append(generate_graph)
-tools.append(generate_metric_card)
-sql_tools.append(generate_graph)
-sql_tools.append(generate_metric_card)
+# sql_tools.append(generate_graph)
+# sql_tools.append(generate_metric_card)
 
 # @tool
 # def get_user_info(
@@ -159,39 +156,3 @@ class UserInfo(TypedDict):
 # tools.append(refine_query_subagent1)
 # tools.append(BraveSearch())
 
-class QueryEvaluation(BaseModel):
-    """Evaluate the quality of the query"""
-    rating: int | None = Field(description="The rating of the product", ge=1, le=5)
-    result: Literal["pass", "fail"] = Field(description="The result of whether the query is detailed or not.")
-    suggestions: list[str] = Field(description="Query suggestions based on available data.")
-
-@tool
-def qualify_query(query: str) -> QueryEvaluation:
-    """Validate whether a user query is specific enough for the agent.
-    Returns a QueryEvaluation model with fields:
-      - result: "pass" or "fail"
-      - rating: optional integer rating (None by default)
-      - suggestions: list of suggestions strings
-    """
-    q = (query or "").strip()
-    suggestions: list[str] = []
-
-    if not q:
-        return QueryEvaluation(result="fail", rating=None, suggestions=["Query is empty. Provide a question or request."])
-
-    words = q.split()
-
-    # Basic heuristics
-    if len(words) < 3:
-        suggestions.append("Make the query more specific (at least 3 words).")
-    if "?" not in q and not q.lower().startswith(
-        ("show", "list", "get", "how", "what", "who", "when", "where", "calculate", "count", "find")
-    ):
-        suggestions.append("Frame the query as a question or specify the intended action (e.g., 'Show total sales in 2024').")
-    if not any(t in q.lower() for t in ("date", "range", "last", "month", "year", "from", "to")):
-        suggestions.append("If relevant, include a date range or timeframe (e.g., 'last month').")
-
-    passed = len(suggestions) == 0
-    return QueryEvaluation(result="pass" if passed else "fail", rating=None, suggestions=[] if passed else suggestions)
-
-tools.append(qualify_query)

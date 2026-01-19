@@ -1,15 +1,139 @@
-import React from "react";
-import type { Message } from "@langchain/langgraph-sdk";
-import { User, Robot, Wrench } from "phosphor-react";
-import { cn } from "~/lib/utils";
-import { MarkdownText } from "./MarkdownText";
-import { ToolCalls, ToolResult } from "./ToolCalls";
+import React from 'react';
+import type { Message } from '@langchain/langgraph-sdk';
+import { type UIMessage } from '@langchain/langgraph-sdk/react-ui';
+import { User, Robot, Wrench } from 'phosphor-react';
+import { cn } from '~/lib/utils';
+import { MarkdownText } from './MarkdownText';
+import { ToolCalls, ToolResult } from './ToolCalls';
+import { useChat } from '~/providers/ChatProvider';
+import {
+  BarChartViz,
+  PieChartViz,
+  FinancialTableViz,
+  MetricCardViz,
+  type BarChartProps,
+  type PieChartProps,
+  type FinancialTableProps,
+  type MetricCardProps,
+} from '~/components/visualizations';
+
+/**
+ * Transform simple data format from agent to visualization component format
+ */
+function transformTableData(
+  data: Array<{ label: string; value: number }>,
+  title: string
+): FinancialTableProps['data'] {
+  return {
+    headers: ['Item', 'Value'],
+    rows: data.map(item => ({
+      label: item.label,
+      values: [item.value],
+      isTotal:
+        item.label.toLowerCase().includes('total') || item.label.toLowerCase().includes('net'),
+    })),
+  };
+}
+
+/**
+ * Transform simple data format to chart format (adds required id field)
+ */
+function transformChartData(
+  data: Array<{ label: string; value: number }>
+): Array<{ id: string; label: string; value: number }> {
+  return data.map((item, index) => ({
+    id: `item-${index}`,
+    label: item.label,
+    value: item.value,
+  }));
+}
+
+/**
+ * Local UI renderer for generative UI components
+ *
+ * Renders UI messages from the LangGraph agent using local visualization components.
+ */
+function LocalUIRenderer({ uiMessage }: { uiMessage: UIMessage }) {
+  const { name, props } = uiMessage;
+
+  switch (name) {
+    case 'bar-chart': {
+      const barProps = props as unknown as {
+        title: string;
+        data: Array<{ label: string; value: number }>;
+        format?: string;
+      };
+      const chartData = transformChartData(barProps.data);
+      return (
+        <BarChartViz
+          title={barProps.title}
+          data={chartData}
+          format={barProps.format as BarChartProps['format']}
+        />
+      );
+    }
+    case 'pie-chart': {
+      const pieProps = props as unknown as {
+        title: string;
+        data: Array<{ label: string; value: number }>;
+        format?: string;
+      };
+      const chartData = transformChartData(pieProps.data);
+      return (
+        <PieChartViz
+          title={pieProps.title}
+          data={chartData}
+          format={pieProps.format as PieChartProps['format']}
+        />
+      );
+    }
+    case 'financial-table': {
+      const tableProps = props as unknown as {
+        title: string;
+        data: Array<{ label: string; value: number }>;
+        format?: string;
+      };
+      // Transform simple array format to table format
+      const transformedData = transformTableData(tableProps.data, tableProps.title);
+      return (
+        <FinancialTableViz
+          title={tableProps.title}
+          data={transformedData}
+          format={tableProps.format as FinancialTableProps['format']}
+        />
+      );
+    }
+    case 'metric-card': {
+      const metricProps = props as unknown as {
+        title: string;
+        value: number;
+        format?: string;
+        trend?: { direction: string; value: number; period: string };
+      };
+      return (
+        <MetricCardViz
+          title={metricProps.title}
+          value={metricProps.value}
+          format={metricProps.format as MetricCardProps['format']}
+          trend={metricProps.trend as MetricCardProps['trend']}
+        />
+      );
+    }
+    default:
+      console.warn(`Unknown UI component: ${name}`);
+      return (
+        <div className="p-4 bg-yellow-500/10 border border-yellow-500/30 rounded-lg text-sm">
+          Unknown component: {name}
+        </div>
+      );
+  }
+}
 
 /**
  * MessageBubble Component - Individual message display in ThreadWise conversations
- * 
+ *
  * Renders individual chat messages with role-based styling and metadata
- * 
+ *
  * Features:
  * - Role-based visual styling (human, AI, tool)
  * - Clear message type indicators
@@ -18,18 +142,43 @@ import { ToolCalls, ToolResult } from "./ToolCalls";
  * - Rich content support (text, React components)
  * - Timestamp formatting with consistent display
  * - Word wrapping and overflow handling
- * 
+ *
  * Visual Design:
  * - Human messages: Blue background, right-aligned
  * - AI messages: Card background, left-aligned with border
  * - Tool messages: Amber accent, system-style presentation
  * - Responsive avatar sizes (14px mobile, 16px desktop)
- * 
+ *
  * ThreadWise Integration:
  * - Supports tool call metadata from AI Agent API
  * - Displays ThreadWise agent reasoning and external API calls
- * - Charts rendered from generate_graph tool results via ToolResult component
+ * - Colocated React components bundled by LangGraph CLI
  */
+
+/**
+ * CustomUIComponent - Renders UI messages associated with a message
+ *
+ * Uses local visualization components to render UI messages from the agent.
+ * This approach works without LangGraph CLI bundling ui.tsx.
+ */
+function CustomUIComponent({ messageId }: { messageId: string | undefined }) {
+  const { uiMessages } = useChat();
+
+  // Filter UI messages that belong to this specific message
+  const customComponents = uiMessages.filter(
+    (ui: UIMessage) => ui.metadata?.message_id === messageId
+  );
+
+  if (!customComponents?.length) return null;
+
+  return (
+    <div className="flex flex-col gap-2 mt-2">
+      {customComponents.map((customComponent: UIMessage) => (
+        <LocalUIRenderer key={customComponent.id} uiMessage={customComponent} />
+      ))}
+    </div>
+  );
+}
 
 interface MessageBubbleProps {
   message: Message;
@@ -39,8 +188,7 @@ export function MessageBubble({ message }: MessageBubbleProps) {
   const isUser = message.type === 'human';
   const isAI = message.type === 'ai';
   const isTool = message.type === 'tool';
-  console.log("Messages from langgraph", message);
-  
+  console.log('Messages from langgraph', message);
 
   // Tool messages get special rendering with clear type indicator
   // Charts from generate_graph tool are rendered in ToolResult component
@@ -75,8 +223,8 @@ export function MessageBubble({ message }: MessageBubbleProps) {
   };
 
   const getIconBg = () => {
-    if (isUser) return "bg-blue-500";
-    return "bg-primary";
+    if (isUser) return 'bg-blue-500';
+    return 'bg-primary';
   };
 
   const getMessageTypeLabel = () => {
@@ -118,43 +266,43 @@ export function MessageBubble({ message }: MessageBubbleProps) {
   const contentString = getContentString();
 
   return (
-    <div className={cn(
-      "flex gap-2 md:gap-3",
-      isUser ? "flex-row-reverse" : "flex-row"
-    )}>
-      <div className={cn(
-        "w-7 h-7 md:w-8 md:h-8 rounded-full flex items-center justify-center text-white shrink-0",
-        getIconBg()
-      )}>
+    <div className={cn('flex gap-2 md:gap-3', isUser ? 'flex-row-reverse' : 'flex-row')}>
+      <div
+        className={cn(
+          'w-7 h-7 md:w-8 md:h-8 rounded-full flex items-center justify-center text-white shrink-0',
+          getIconBg()
+        )}
+      >
         {getIcon()}
         {getDesktopIcon()}
       </div>
 
       <div className="flex flex-col gap-2 max-w-[280px] sm:max-w-xs lg:max-w-md">
         {/* Message Type Label */}
-        <div className={cn(
-          "flex",
-          isUser ? "justify-end" : "justify-start"
-        )}>
+        <div className={cn('flex', isUser ? 'justify-end' : 'justify-start')}>
           {getMessageTypeLabel()}
         </div>
 
-        <div className={cn(
-          "rounded-2xl p-3 md:p-4 space-y-2",
-          isUser 
-            ? "bg-blue-500 text-white ml-8 md:ml-12"
-            : "bg-card border border-border text-card-foreground mr-8 md:mr-12"
-        )}>
+        <div
+          className={cn(
+            'rounded-2xl p-3 md:p-4 space-y-2',
+            isUser
+              ? 'bg-blue-500 text-white ml-8 md:ml-12'
+              : 'bg-card border border-border text-card-foreground mr-8 md:mr-12'
+          )}
+        >
           {/* Render AI messages with markdown support */}
           {isAI ? (
             <div className="prose prose-sm dark:prose-invert max-w-none">
               <MarkdownText>{contentString}</MarkdownText>
             </div>
           ) : (
-            <div className={cn(
-              "text-sm leading-relaxed break-words",
-              isUser ? "text-white" : "text-foreground"
-            )}>
+            <div
+              className={cn(
+                'text-sm leading-relaxed break-words',
+                isUser ? 'text-white' : 'text-foreground'
+              )}
+            >
               {contentString}
             </div>
           )}
@@ -165,6 +313,9 @@ export function MessageBubble({ message }: MessageBubbleProps) {
               <ToolCalls toolCalls={message.tool_calls} />
             </div>
           )}
+
+          {/* Render generative UI components via LocalUIRenderer */}
+          {isAI && <CustomUIComponent messageId={message.id} />}
         </div>
       </div>
     </div>
