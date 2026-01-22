@@ -190,6 +190,14 @@ export function MessageBubble({ message }: MessageBubbleProps) {
   const isTool = message.type === 'tool';
   console.log('Messages from langgraph', message);
 
+  // Check if message contains visualizations
+  const hasToolCalls =
+    'tool_calls' in message && message.tool_calls && message.tool_calls.length > 0;
+  const { uiMessages } = useChat();
+  const hasUIComponents =
+    isAI && uiMessages.filter((ui: UIMessage) => ui.metadata?.message_id === message.id).length > 0;
+  const hasVisualizations = hasToolCalls || hasUIComponents;
+
   // Tool messages get special rendering with clear type indicator
   // Charts from generate_graph tool are rendered in ToolResult component
   if (isTool) {
@@ -277,7 +285,12 @@ export function MessageBubble({ message }: MessageBubbleProps) {
         {getDesktopIcon()}
       </div>
 
-      <div className="flex flex-col gap-2 max-w-[280px] sm:max-w-xs lg:max-w-md">
+      <div
+        className={cn(
+          'flex flex-col gap-2',
+          hasVisualizations && !isUser ? 'w-full' : 'max-w-[280px] sm:max-w-xs lg:max-w-md'
+        )}
+      >
         {/* Message Type Label */}
         <div className={cn('flex', isUser ? 'justify-end' : 'justify-start')}>
           {getMessageTypeLabel()}
@@ -288,7 +301,9 @@ export function MessageBubble({ message }: MessageBubbleProps) {
             'rounded-2xl p-3 md:p-4 space-y-2',
             isUser
               ? 'bg-blue-500 text-white ml-8 md:ml-12'
-              : 'bg-card border border-border text-card-foreground mr-8 md:mr-12'
+              : hasVisualizations
+                ? 'bg-card border border-border text-card-foreground'
+                : 'bg-card border border-border text-card-foreground mr-8 md:mr-12'
           )}
         >
           {/* Render AI messages with markdown support */}
@@ -299,7 +314,7 @@ export function MessageBubble({ message }: MessageBubbleProps) {
           ) : (
             <div
               className={cn(
-                'text-sm leading-relaxed break-words',
+                'text-sm leading-relaxed wrap-break-word',
                 isUser ? 'text-white' : 'text-foreground'
               )}
             >

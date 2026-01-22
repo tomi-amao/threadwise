@@ -37,6 +37,7 @@ from utils.prompts import (
     generic_system_prompt,
     sql_system_prompt,
     validate_financial_prompt_against_database,
+    report_type_prompts,
 )
 from utils.settings import get_local_llm, get_chat_model
 from utils.tools import sql_tools, toolkit
@@ -73,6 +74,7 @@ class AgentState(TypedDict):
     messages: Annotated[Sequence[BaseMessage], add_messages]
     ui: Annotated[Sequence[AnyUIMessage], ui_message_reducer]
     query_type: str | None
+    report_type: Literal["income_statement", "balance_sheet", "cash_flow_statement"] | None
     is_query_valid: bool | None
     validation_issues: list[str] | None
     validation_suggestions: list[dict] | None
@@ -108,6 +110,15 @@ class FinancialQueryValidation(BaseModel):
     )
 
 
+class FinancialReportTypeClassification(BaseModel):
+    """Structured output for identifying the specific type of financial report."""
+    report_type: Literal["income_statement", "balance_sheet", "cash_flow_statement"] = Field(
+        description="Type of financial report: income_statement (P&L), balance_sheet, or cash_flow_statement"
+    )
+    confidence: float = Field(ge=0.0, le=1.0, description="Confidence score")
+    reasoning: str = Field(description="Brief explanation of why this report type was identified")
+
+
 # =============================================================================
 # LLM INITIALIZATION
 # =============================================================================
@@ -119,6 +130,9 @@ chat_model = get_chat_model()
 
 # Classifier with structured output
 classifier = model.with_structured_output(QueryClassification)
+
+# Report type classifier with structured output
+report_type_classifier = model.with_structured_output(FinancialReportTypeClassification)
 
 # Validator with structured output
 validator_model = model.with_structured_output(FinancialQueryValidation)
@@ -232,11 +246,69 @@ Query: "{user_query}"
         
         logger.info(f"Query classified as: {query_type}")
         
-        return {"query_type": query_type}
+        # If it's a financial report, also determine the specific report type
+        report_type = None
+        if query_type == "financial_report":
+            report_type = await _classify_report_type(user_query)
+            logger.info(f"Report type classified as: {report_type}")
+        
+        return {"query_type": query_type, "report_type": report_type}
         
     except Exception as e:
         logger.error(f"Classification error: {e}")
-        return {"query_type": "database_analytics"}  # Safe fallback
+        return {"query_type": "database_analytics", "report_type": None}  # Safe fallback
+
+
+async def _classify_report_type(user_query: str) -> str:
+    """Classify the specific type of financial report being requested.
+    
+    Returns one of: income_statement, balance_sheet, cash_flow_statement
+    """
+    report_type_prompt = f"""Identify what type of financial report is being requested:
+
+Query: "{user_query}"
+
+**Report Types:**
+
+1. **income_statement**: Also known as:
+   - Profit and Loss (P&L)
+   - Profit & Loss Statement
+   - Income Statement
+   - Statement of Operations
+   - Revenue/Expense report
+   - "How much profit/loss did we make?"
+
+2. **balance_sheet**: Also known as:
+   - Balance Sheet
+   - Statement of Financial Position
+   - Assets/Liabilities/Equity report
+   - "What do we own and owe?"
+   - Net worth statement
+
+3. **cash_flow_statement**: Also known as:
+   - Cash Flow Statement
+   - Statement of Cash Flows
+   - Cash movement report
+   - "Where did the money go?"
+   - Sources and uses of cash
+
+Identify which report type best matches the user's request."""
+
+    try:
+        result = await report_type_classifier.ainvoke([
+            {"role": "system", "content": "Identify the specific financial report type."},
+            {"role": "user", "content": report_type_prompt},
+        ])
+        
+        # Handle both Pydantic model and dict responses
+        if isinstance(result, dict):
+            return result.get('report_type', 'income_statement')
+        else:
+            return getattr(result, 'report_type', 'income_statement')
+            
+    except Exception as e:
+        logger.error(f"Report type classification error: {e}")
+        return "income_statement"  # Default fallback
 
 
 async def validate_financial_query_node(state: AgentState) -> dict[str, Any]:
@@ -359,22 +431,40 @@ async def analytics_agent_node(state: AgentState) -> dict[str, Any]:
 async def execute_report_node(state: AgentState) -> dict[str, Any]:
     """Execute a validated financial report query.
     
-    Uses create_agent with SQL tools and the strict financial reporting prompt
-    to generate formal financial statements.
+    Uses create_agent with SQL tools and a report-type-specific prompt
+    to generate formal financial statements. The prompt is selected based
+    on the report_type in state (income_statement, balance_sheet, or cash_flow_statement).
     """
     logger.info("=== EXECUTE REPORT NODE ===")
     
-    # Create a sub-agent for financial reporting
+    # Get the report type from state and select the appropriate prompt
+    report_type = state.get("report_type")
+    
+    # Select the appropriate system prompt based on report type
+    if report_type and report_type in report_type_prompts:
+        system_prompt = report_type_prompts[report_type]
+        logger.info(f"Using {report_type} specific prompt")
+    else:
+        # Fallback to generic SQL prompt if report type not recognized
+        system_prompt = sql_system_prompt
+        logger.warning(f"Unknown report type '{report_type}', using generic SQL prompt")
+    
+    # Create a sub-agent for financial reporting with the appropriate prompt
     report_agent = create_agent(
         model,
         tools=sql_tools,
-        system_prompt=sql_system_prompt,
+        system_prompt=system_prompt,
     )
     
     messages = state.get("messages", [])
     last_msg = get_last_human_message(messages)
+    
+    if not last_msg:
+        logger.error("No human message found in execute_report_node")
+        return {"messages": [AIMessage(content="I couldn't find your request. Please try again.", id=str(uuid.uuid4()))]}
+    
     human_msg = last_msg.content
-    print("Messages in execute_report_node:", human_msg, type(last_msg))
+    logger.info(f"Executing {report_type or 'financial'} report for query: {str(human_msg)[:100]}...")
     
     # Run the report agent - cast to list for compatibility
     result = await report_agent.ainvoke({"messages": [{"role": "user", "content": human_msg}]})  # type: ignore

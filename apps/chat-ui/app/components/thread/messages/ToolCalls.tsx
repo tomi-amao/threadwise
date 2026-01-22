@@ -2,7 +2,13 @@ import React, { useState } from 'react';
 import type { Message } from '@langchain/langgraph-sdk';
 import { CaretDown, CaretUp, Wrench, CheckCircle, XCircle } from 'phosphor-react';
 import { cn } from '~/lib/utils';
-import { BarChartViz, LineChartViz, PieChartViz, FinancialTableViz, MetricCardViz } from '~/components/visualizations';
+import {
+  BarChartViz,
+  LineChartViz,
+  PieChartViz,
+  FinancialTableViz,
+  MetricCardViz,
+} from '~/components/visualizations';
 
 interface ToolCall {
   id?: string;
@@ -43,15 +49,16 @@ export function ToolCalls({ toolCalls }: { toolCalls: ToolCall[] }) {
       {toolCalls.map((tc, idx) => {
         const args = tc.args as Record<string, any>;
         const hasArgs = Object.keys(args).length > 0;
-        
+
         return (
-          <div key={idx} className="overflow-hidden rounded-lg border-2 border-amber-500/30 bg-amber-500/5">
+          <div
+            key={idx}
+            className="overflow-hidden rounded-lg border-2 border-amber-500/30 bg-amber-500/5"
+          >
             <div className="border-b border-amber-500/30 bg-amber-500/10 px-4 py-2.5">
               <div className="flex items-center gap-2">
                 <Wrench size={16} weight="duotone" className="text-amber-600 dark:text-amber-400" />
-                <h3 className="font-semibold text-amber-900 dark:text-amber-100">
-                  {tc.name}
-                </h3>
+                <h3 className="font-semibold text-amber-900 dark:text-amber-100">{tc.name}</h3>
                 {tc.id && (
                   <code className="ml-auto rounded bg-amber-500/20 px-2 py-0.5 text-xs font-mono text-amber-800 dark:text-amber-200">
                     {tc.id}
@@ -61,7 +68,9 @@ export function ToolCalls({ toolCalls }: { toolCalls: ToolCall[] }) {
             </div>
             {hasArgs ? (
               <div className="p-3">
-                <div className="text-xs font-semibold text-amber-800 dark:text-amber-300 mb-2">Arguments:</div>
+                <div className="text-xs font-semibold text-amber-800 dark:text-amber-300 mb-2">
+                  Arguments:
+                </div>
                 <table className="min-w-full divide-y divide-amber-500/20">
                   <tbody className="divide-y divide-amber-500/20">
                     {Object.entries(args).map(([key, value], argIdx) => (
@@ -117,7 +126,7 @@ export function ToolResult({ message }: { message: Message }) {
   };
 
   const contentString = getContentString();
-  
+
   // Try to parse as chart data
   let chartData: ChartData | null = null;
   let parsedContent: any;
@@ -126,7 +135,7 @@ export function ToolResult({ message }: { message: Message }) {
   try {
     parsedContent = JSON.parse(contentString);
     isJsonContent = isComplexValue(parsedContent);
-    
+
     // Check if this is chart data from generate_graph or generate_metric_card
     if (parsedContent && parsedContent.__chart__ === true) {
       chartData = parsedContent as ChartData;
@@ -141,34 +150,22 @@ export function ToolResult({ message }: { message: Message }) {
   // If we have chart data, render the appropriate visualization
   if (chartData && !chartData.error) {
     return (
-      <div className="max-w-3xl">
+      <div className="w-full">
         {chartData.type === 'bar' && chartData.data && (
-          <BarChartViz
-            title={chartData.title}
-            data={chartData.data}
-            format={chartData.format}
-          />
+          <BarChartViz title={chartData.title} data={chartData.data} format={chartData.format} />
         )}
         {chartData.type === 'line' && chartData.data && (
-          <LineChartViz
-            title={chartData.title}
-            data={chartData.data}
-            format={chartData.format}
-          />
+          <LineChartViz title={chartData.title} data={chartData.data} format={chartData.format} />
         )}
         {chartData.type === 'pie' && chartData.data && (
-          <PieChartViz
-            title={chartData.title}
-            data={chartData.data}
-            format={chartData.format}
-          />
+          <PieChartViz title={chartData.title} data={chartData.data} format={chartData.format} />
         )}
         {chartData.type === 'table' && chartData.rows && chartData.headers && (
           <FinancialTableViz
             title={chartData.title}
             data={{
               headers: chartData.headers,
-              rows: chartData.rows
+              rows: chartData.rows,
             }}
             format={chartData.format}
           />
@@ -186,9 +183,7 @@ export function ToolResult({ message }: { message: Message }) {
     );
   }
 
-  const contentStr = isJsonContent
-    ? JSON.stringify(parsedContent, null, 2)
-    : contentString;
+  const contentStr = isJsonContent ? JSON.stringify(parsedContent, null, 2) : contentString;
   const contentLines = contentStr.split('\n');
   const shouldTruncate = contentLines.length > 4 || contentStr.length > 500;
   const displayedContent =
@@ -205,7 +200,11 @@ export function ToolResult({ message }: { message: Message }) {
         <div className="border-b border-emerald-500/30 bg-emerald-500/10 px-4 py-3">
           <div className="flex items-center gap-2">
             <div className="flex h-8 w-8 items-center justify-center rounded-full bg-emerald-500/20">
-              <CheckCircle size={18} weight="duotone" className="text-emerald-600 dark:text-emerald-400" />
+              <CheckCircle
+                size={18}
+                weight="duotone"
+                className="text-emerald-600 dark:text-emerald-400"
+              />
             </div>
             <div className="flex-1">
               <div className="flex items-center gap-2 flex-wrap">
@@ -275,9 +274,9 @@ export function ToolResult({ message }: { message: Message }) {
             <button
               onClick={() => setIsExpanded(!isExpanded)}
               className={cn(
-                "flex w-full items-center justify-center gap-1 border-t border-emerald-500/30 py-2.5",
-                "text-sm font-medium text-emerald-700 dark:text-emerald-300",
-                "transition-colors hover:bg-emerald-500/10"
+                'flex w-full items-center justify-center gap-1 border-t border-emerald-500/30 py-2.5',
+                'text-sm font-medium text-emerald-700 dark:text-emerald-300',
+                'transition-colors hover:bg-emerald-500/10'
               )}
             >
               {isExpanded ? (
@@ -288,9 +287,11 @@ export function ToolResult({ message }: { message: Message }) {
               ) : (
                 <>
                   <CaretDown size={16} weight="bold" />
-                  Show more ({isJsonContent && Array.isArray(parsedContent) 
-                    ? `${parsedContent.length - 5} more items` 
-                    : 'full content'})
+                  Show more (
+                  {isJsonContent && Array.isArray(parsedContent)
+                    ? `${parsedContent.length - 5} more items`
+                    : 'full content'}
+                  )
                 </>
               )}
             </button>
