@@ -18,6 +18,7 @@
     "@nivo/line": "^0.99.0",
     "@nivo/pie": "^0.99.0",
     "@radix-ui/react-context-menu": "^2.2.16",
+    "@radix-ui/react-select": "^2.2.6",
     "@react-router/fs-routes": "^7.9.4",
     "@react-router/node": "^7.5.3",
     "@react-router/serve": "^7.5.3",
@@ -54,6 +55,7 @@
     "tailwindcss": "^4.1.4",
     "typescript": "^5.8.3",
     "vite": "^6.3.3",
+    "vite-plugin-devtools-json": "^1.0.0",
     "vite-tsconfig-paths": "^5.1.4"
   }
 }

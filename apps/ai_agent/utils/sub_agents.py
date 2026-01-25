@@ -15,7 +15,7 @@ class QueryEvaluation(BaseModel):
     result: Literal["pass", "fail"] = Field(description="The result of whether the query is detailed or not.")
     suggestions: list[str] = Field(description="Query suggestions based on available data.")
     
-model = get_chat_model("gemini-2.5-flash")
+model = get_chat_model("google_genai:gemini-2.5-flash-lite")
 
 prompt_agent_system = f"""Here are a list of prompts. Decide which prompt to use based on context relevance
 {', '.join([f'"{key}"' for key in available_prompts.keys()])}.

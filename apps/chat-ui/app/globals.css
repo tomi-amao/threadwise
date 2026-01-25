@@ -107,7 +107,7 @@
   html,
   body {
     height: 100%;
-    overflow: hidden; /* Prevent any body-level scrolling */
+    /* Allow body scrolling - individual views manage their own overflow */
   }
 
   body {

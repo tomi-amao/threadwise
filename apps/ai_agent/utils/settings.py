@@ -26,9 +26,9 @@ def get_local_llm(model_name: str = "local-model"):
         streaming=True,
     )
 
-def get_chat_model(model:str = "gemini-2.5-flash"):
+def get_chat_model(model:str = "google_genai:gemini-2.5-flash-lite"):
     """Get LLM instance based on model name"""
-    llm = init_chat_model("google_genai:gemini-2.5-flash-lite")
+    llm = init_chat_model(model)
     return llm
 # def get_local_llm_streaming():
 #     """Get streaming LLM instance."""

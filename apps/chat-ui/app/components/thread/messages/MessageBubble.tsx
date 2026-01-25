@@ -1,21 +1,91 @@
-import React from 'react';
+import React, { useState } from 'react';
 import type { Message } from '@langchain/langgraph-sdk';
 import { type UIMessage } from '@langchain/langgraph-sdk/react-ui';
-import { User, Robot, Wrench } from 'phosphor-react';
+import { User, Robot, Wrench, File, Brain, CaretDown, CaretUp } from 'phosphor-react';
 import { cn } from '~/lib/utils';
 import { MarkdownText } from './MarkdownText';
 import { ToolCalls, ToolResult } from './ToolCalls';
 import { useChat } from '~/providers/ChatProvider';
 import {
   BarChartViz,
+  LineChartViz,
   PieChartViz,
   FinancialTableViz,
   MetricCardViz,
   type BarChartProps,
+  type LineChartProps,
   type PieChartProps,
   type FinancialTableProps,
   type MetricCardProps,
 } from '~/components/visualizations';
+
+/**
+ * ThinkingBlock Component - Collapsible display for AI thinking/reasoning
+ *
+ * Shows the first line of thinking content with option to expand.
+ * Styled with low opacity to distinguish from main response.
+ */
+function ThinkingBlock({ content }: { content: string }) {
+  const [isExpanded, setIsExpanded] = useState(false);
+
+  const lines = content.trim().split('\n');
+  const firstLine = lines[0] || '';
+  const hasMoreContent = lines.length > 1 || firstLine.length > 100;
+  const displayFirstLine = firstLine.length > 100 ? firstLine.slice(0, 100) + '...' : firstLine;
+
+  return (
+    <div className="mb-3 rounded-lg bg-muted/30 border border-border/50 overflow-hidden">
+      <button
+        onClick={() => setIsExpanded(!isExpanded)}
+        className="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-muted/50 transition-colors"
+      >
+        <Brain size={14} weight="duotone" className="text-muted-foreground/60 shrink-0" />
+        <span className="text-xs font-medium text-muted-foreground/50 uppercase tracking-wide">
+          Thinking
+        </span>
+        {hasMoreContent && (
+          <span className="ml-auto text-muted-foreground/40">
+            {isExpanded ? <CaretUp size={14} /> : <CaretDown size={14} />}
+          </span>
+        )}
+      </button>
+
+      <div className="px-3 pb-2">
+        {isExpanded ? (
+          <div className="text-sm text-muted-foreground/50 leading-relaxed whitespace-pre-wrap">
+            {content}
+          </div>
+        ) : (
+          <div className="text-sm text-muted-foreground/50 leading-relaxed truncate">
+            {displayFirstLine}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Parse content to extract thinking blocks and regular content
+ */
+function parseThinkingBlocks(content: string): {
+  thinkingBlocks: string[];
+  regularContent: string;
+} {
+  const thinkingRegex = /<thinking>([\s\S]*?)<\/thinking>/gi;
+  const thinkingBlocks: string[] = [];
+  let regularContent = content;
+
+  let match;
+  while ((match = thinkingRegex.exec(content)) !== null) {
+    thinkingBlocks.push(match[1].trim());
+  }
+
+  // Remove thinking blocks from regular content
+  regularContent = content.replace(thinkingRegex, '').trim();
+
+  return { thinkingBlocks, regularContent };
+}
 
 /**
  * Transform simple data format from agent to visualization component format
@@ -46,6 +116,39 @@ function transformChartData(
     label: item.label,
     value: item.value,
   }));
+}
+
+/**
+ * Transform line chart data from LLM format to Nivo format
+ *
+ * Supports two input formats from the LLM:
+ * 1. Simple format: Array<{ label: string; value: number }>
+ *    - Converted to a single series with label as x-axis
+ * 2. Series format: Array<{ id: string; data: Array<{ x: string | number; y: number }> }>
+ *    - Already in Nivo format, passed through directly
+ */
+function transformLineChartData(
+  data:
+    | Array<{ label: string; value: number }>
+    | Array<{ id: string; data: Array<{ x: string | number; y: number }> }>,
+  seriesId: string = 'Series 1'
+): LineChartProps['data'] {
+  // Check if data is already in Nivo series format
+  if (data.length > 0 && 'data' in data[0] && Array.isArray((data[0] as any).data)) {
+    return data as LineChartProps['data'];
+  }
+
+  // Transform simple { label, value } format to Nivo format
+  const simpleData = data as Array<{ label: string; value: number }>;
+  return [
+    {
+      id: seriesId,
+      data: simpleData.map(item => ({
+        x: item.label,
+        y: item.value,
+      })),
+    },
+  ];
 }
 
 /**
@@ -84,6 +187,28 @@ function LocalUIRenderer({ uiMessage }: { uiMessage: UIMessage }) {
           title={pieProps.title}
           data={chartData}
           format={pieProps.format as PieChartProps['format']}
+        />
+      );
+    }
+    case 'line-chart': {
+      const lineProps = props as unknown as {
+        title: string;
+        data:
+          | Array<{ label: string; value: number }>
+          | Array<{ id: string; data: Array<{ x: string | number; y: number }> }>;
+        seriesId?: string;
+        xAxisLabel?: string;
+        yAxisLabel?: string;
+        format?: string;
+      };
+      const chartData = transformLineChartData(lineProps.data, lineProps.seriesId);
+      return (
+        <LineChartViz
+          title={lineProps.title}
+          data={chartData}
+          xAxisLabel={lineProps.xAxisLabel}
+          yAxisLabel={lineProps.yAxisLabel}
+          format={lineProps.format as LineChartProps['format']}
         />
       );
     }
@@ -271,7 +396,33 @@ export function MessageBubble({ message }: MessageBubbleProps) {
     return '';
   };
 
+  // Extract file attachments from message content
+  const getFileAttachments = (): Array<{
+    type: string;
+    mime_type: string;
+    data?: string;
+    filename?: string;
+  }> => {
+    if (!Array.isArray(message.content)) return [];
+
+    return message.content
+      .filter(
+        (part: any) =>
+          (part.type === 'file' || part.type === 'image') && part.source_type === 'base64'
+      )
+      .map((part: any) => ({
+        type: part.type,
+        mime_type: part.mime_type,
+        data: part.data,
+        filename:
+          part.metadata?.filename ||
+          part.metadata?.name ||
+          (part.type === 'file' ? 'Document' : 'Image'),
+      }));
+  };
+
   const contentString = getContentString();
+  const fileAttachments = getFileAttachments();
 
   return (
     <div className={cn('flex gap-2 md:gap-3', isUser ? 'flex-row-reverse' : 'flex-row')}>
@@ -306,19 +457,61 @@ export function MessageBubble({ message }: MessageBubbleProps) {
                 : 'bg-card border border-border text-card-foreground mr-8 md:mr-12'
           )}
         >
-          {/* Render AI messages with markdown support */}
+          {/* Render AI messages with markdown support and thinking blocks */}
           {isAI ? (
-            <div className="prose prose-sm dark:prose-invert max-w-none">
-              <MarkdownText>{contentString}</MarkdownText>
-            </div>
+            (() => {
+              const { thinkingBlocks, regularContent } = parseThinkingBlocks(contentString);
+              return (
+                <>
+                  {/* Render thinking blocks first */}
+                  {thinkingBlocks.map((thinking, idx) => (
+                    <ThinkingBlock key={`thinking-${idx}`} content={thinking} />
+                  ))}
+                  {/* Render regular content with markdown */}
+                  {regularContent && (
+                    <div className="prose prose-sm dark:prose-invert max-w-none">
+                      <MarkdownText>{regularContent}</MarkdownText>
+                    </div>
+                  )}
+                </>
+              );
+            })()
           ) : (
-            <div
-              className={cn(
-                'text-sm leading-relaxed wrap-break-word',
-                isUser ? 'text-white' : 'text-foreground'
+            <div className="space-y-2">
+              {/* Render file attachments for human messages */}
+              {fileAttachments.length > 0 && (
+                <div className="flex flex-wrap gap-2">
+                  {fileAttachments.map((attachment, idx) => (
+                    <div key={idx}>
+                      {attachment.type === 'image' && attachment.data ? (
+                        <img
+                          src={`data:${attachment.mime_type};base64,${attachment.data}`}
+                          alt={attachment.filename}
+                          className="rounded-md max-w-[200px] max-h-[150px] object-cover"
+                        />
+                      ) : (
+                        <div className="flex items-center gap-2 bg-white/10 rounded-md px-3 py-2">
+                          <File size={18} weight="duotone" className="text-white/80" />
+                          <span className="text-sm text-white/90 truncate max-w-[150px]">
+                            {attachment.filename}
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
               )}
-            >
-              {contentString}
+              {/* Render text content */}
+              {contentString && (
+                <div
+                  className={cn(
+                    'text-sm leading-relaxed wrap-break-word',
+                    isUser ? 'text-white' : 'text-foreground'
+                  )}
+                >
+                  {contentString}
+                </div>
+              )}
             </div>
           )}
 

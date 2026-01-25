@@ -1,10 +1,6 @@
 import type { MetaFunction, LoaderFunctionArgs } from 'react-router';
-import { useState, useEffect } from 'react';
-import { useSearchParams, useLoaderData } from 'react-router';
-import { ChatProvider } from '~/providers/ChatProvider';
-import { ChatInterface } from '~/components/ChatInterface';
+import { useLoaderData } from 'react-router';
 import { DashboardView } from '~/components/dashboard/DashboardView';
-import { AppNavigation } from './AppNavigation';
 import {
   getDashboardMetrics,
   getHealthIndicators,
@@ -19,14 +15,15 @@ import type { DashboardLoaderData } from '~/types/dashboard';
 
 export const meta: MetaFunction = () => {
   return [
-    { title: 'ThreadWise - Business Intelligence' },
-    { name: 'description', content: 'AI-powered conversational business intelligence platform' },
+    { title: 'ThreadWise Dashboard - Business Intelligence' },
+    {
+      name: 'description',
+      content: 'Monitor your business health with key metrics and financial reports',
+    },
   ];
 };
 
-export async function loader({
-  request,
-}: LoaderFunctionArgs): Promise<{ dashboard: DashboardLoaderData }> {
+export async function loader({ request }: LoaderFunctionArgs): Promise<DashboardLoaderData> {
   // Fetch all dashboard data in parallel
   const [
     entity,
@@ -50,12 +47,7 @@ export async function loader({
     getInvoiceStats(),
   ]);
 
-  // Transform data for dashboard (same logic as dashboard.tsx)
-  const formatMonth = (monthStr: string): string => {
-    const date = new Date(monthStr + '-01');
-    return date.toLocaleDateString('en-US', { month: 'short' });
-  };
-
+  // Transform metrics to KPI card format
   const kpis = {
     revenue: {
       title: 'Total Revenue',
@@ -75,18 +67,42 @@ export async function loader({
       title: 'Net Income',
       value: metrics.net_income,
       format: 'currency' as const,
+      trend:
+        metrics.net_income_change !== 0
+          ? {
+              direction: metrics.net_income_change > 0 ? ('up' as const) : ('down' as const),
+              value: Math.abs(metrics.net_income_change),
+              period: 'vs last period',
+            }
+          : undefined,
       description: 'Profit after all expenses',
     },
     cashBalance: {
       title: 'Cash Balance',
       value: metrics.cash_balance,
       format: 'currency' as const,
+      trend:
+        metrics.cash_change !== 0
+          ? {
+              direction: metrics.cash_change > 0 ? ('up' as const) : ('down' as const),
+              value: Math.abs(metrics.cash_change),
+              period: 'vs last period',
+            }
+          : undefined,
       description: 'Current cash on hand',
     },
     grossMargin: {
       title: 'Gross Margin',
       value: metrics.gross_margin,
       format: 'percentage' as const,
+      trend:
+        metrics.gross_margin_change !== 0
+          ? {
+              direction: metrics.gross_margin_change > 0 ? ('up' as const) : ('down' as const),
+              value: Math.abs(metrics.gross_margin_change),
+              period: 'vs last period',
+            }
+          : undefined,
       description: 'Revenue minus cost of goods sold',
     },
     cogs: {
@@ -99,10 +115,19 @@ export async function loader({
       title: 'Accounts Receivable',
       value: metrics.accounts_receivable,
       format: 'currency' as const,
+      trend:
+        metrics.ar_change !== 0
+          ? {
+              direction: metrics.ar_change > 0 ? ('up' as const) : ('down' as const),
+              value: Math.abs(metrics.ar_change),
+              period: 'vs last period',
+            }
+          : undefined,
       description: 'Outstanding customer payments',
     },
   };
 
+  // Transform monthly data to income statement chart
   const incomeChart = {
     title: 'Income Statement Trend',
     xAxisLabel: 'Month',
@@ -111,45 +136,85 @@ export async function loader({
     data: [
       {
         id: 'Revenue',
-        data: monthlyData.map(m => ({ x: formatMonth(m.month), y: m.revenue })),
+        data: monthlyData.map(m => ({
+          x: formatMonth(m.month),
+          y: m.revenue,
+        })),
       },
       {
         id: 'Net Income',
-        data: monthlyData.map(m => ({ x: formatMonth(m.month), y: m.net_income })),
+        data: monthlyData.map(m => ({
+          x: formatMonth(m.month),
+          y: m.net_income,
+        })),
+      },
+      {
+        id: 'COGS',
+        data: monthlyData.map(m => ({
+          x: formatMonth(m.month),
+          y: m.cogs,
+        })),
       },
     ],
   };
 
+  // Income statement table
   const currentMonth = monthlyData[monthlyData.length - 1];
   const prevMonth = monthlyData[monthlyData.length - 2] || currentMonth;
 
   const incomeTable = {
-    title: `Income Statement`,
+    title: `Income Statement - ${currentMonth ? formatMonth(currentMonth.month) : 'Current Period'}`,
     format: 'currency' as const,
     data: {
-      headers: ['Description', 'Current', 'Previous'],
+      headers: ['Description', 'Current', 'Previous', 'Change'],
       rows: [
         {
           label: 'Revenue',
-          values: [currentMonth?.revenue || 0, prevMonth?.revenue || 0],
+          values: [
+            currentMonth?.revenue || 0,
+            prevMonth?.revenue || 0,
+            (currentMonth?.revenue || 0) - (prevMonth?.revenue || 0),
+          ],
           isTotal: false,
           indent: 0,
         },
         {
           label: 'Cost of Goods Sold',
-          values: [-(currentMonth?.cogs || 0), -(prevMonth?.cogs || 0)],
+          values: [
+            -(currentMonth?.cogs || 0),
+            -(prevMonth?.cogs || 0),
+            -((currentMonth?.cogs || 0) - (prevMonth?.cogs || 0)),
+          ],
           isTotal: false,
           indent: 1,
         },
         {
           label: 'Gross Profit',
-          values: [currentMonth?.gross_profit || 0, prevMonth?.gross_profit || 0],
+          values: [
+            currentMonth?.gross_profit || 0,
+            prevMonth?.gross_profit || 0,
+            (currentMonth?.gross_profit || 0) - (prevMonth?.gross_profit || 0),
+          ],
           isTotal: true,
           indent: 0,
         },
         {
+          label: 'Operating Expenses',
+          values: [
+            -(currentMonth?.operating_expenses || 0),
+            -(prevMonth?.operating_expenses || 0),
+            -((currentMonth?.operating_expenses || 0) - (prevMonth?.operating_expenses || 0)),
+          ],
+          isTotal: false,
+          indent: 1,
+        },
+        {
           label: 'Net Income',
-          values: [currentMonth?.net_income || 0, prevMonth?.net_income || 0],
+          values: [
+            currentMonth?.net_income || 0,
+            prevMonth?.net_income || 0,
+            (currentMonth?.net_income || 0) - (prevMonth?.net_income || 0),
+          ],
           isTotal: true,
           indent: 0,
         },
@@ -157,6 +222,7 @@ export async function loader({
     },
   };
 
+  // Balance sheet chart
   const balanceChart = {
     title: 'Assets vs Liabilities',
     xAxisLabel: 'Category',
@@ -176,6 +242,7 @@ export async function loader({
     ],
   };
 
+  // Balance sheet table
   const balanceTable = {
     title: 'Balance Sheet',
     format: 'currency' as const,
@@ -195,6 +262,7 @@ export async function loader({
           isTotal: true,
           indent: 0,
         },
+        { label: '', values: [''], isTotal: false, indent: 0 },
         { label: 'LIABILITIES', values: [''], isTotal: false, indent: 0 },
         ...balanceSheetData.liabilities.map(l => ({
           label: l.name,
@@ -208,6 +276,7 @@ export async function loader({
           isTotal: true,
           indent: 0,
         },
+        { label: '', values: [''], isTotal: false, indent: 0 },
         { label: 'EQUITY', values: [''], isTotal: false, indent: 0 },
         ...balanceSheetData.equity.map(e => ({
           label: e.name,
@@ -225,6 +294,7 @@ export async function loader({
     },
   };
 
+  // Cash flow chart (simplified - using monthly net income as proxy for operating cash flow)
   const cashFlowChart = {
     title: 'Cash Flow Trend',
     xAxisLabel: 'Month',
@@ -232,12 +302,23 @@ export async function loader({
     format: 'currency' as const,
     data: [
       {
+        id: 'Operating',
+        data: monthlyData.map(m => ({
+          x: formatMonth(m.month),
+          y: m.net_income + m.cogs * 0.1, // Simplified: net income + depreciation estimate
+        })),
+      },
+      {
         id: 'Net Cash Flow',
-        data: monthlyData.map(m => ({ x: formatMonth(m.month), y: m.net_income })),
+        data: monthlyData.map(m => ({
+          x: formatMonth(m.month),
+          y: m.net_income,
+        })),
       },
     ],
   };
 
+  // Cash flow table
   const cashFlowTable = {
     title: 'Cash Flow Statement',
     format: 'currency' as const,
@@ -245,12 +326,14 @@ export async function loader({
       headers: ['Description', 'Amount'],
       rows: [
         { label: 'Operating Activities', values: [''], isTotal: false, indent: 0 },
+        { label: 'Net Income', values: [metrics.net_income], isTotal: false, indent: 1 },
         {
           label: 'Net Cash from Operations',
           values: [cashFlowData.operating],
           isTotal: true,
           indent: 0,
         },
+        { label: '', values: [''], isTotal: false, indent: 0 },
         { label: 'Investing Activities', values: [''], isTotal: false, indent: 0 },
         {
           label: 'Net Cash from Investing',
@@ -258,6 +341,15 @@ export async function loader({
           isTotal: true,
           indent: 0,
         },
+        { label: '', values: [''], isTotal: false, indent: 0 },
+        { label: 'Financing Activities', values: [''], isTotal: false, indent: 0 },
+        {
+          label: 'Net Cash from Financing',
+          values: [cashFlowData.financing],
+          isTotal: true,
+          indent: 0,
+        },
+        { label: '', values: [''], isTotal: false, indent: 0 },
         {
           label: 'Net Change in Cash',
           values: [cashFlowData.net_change],
@@ -269,6 +361,7 @@ export async function loader({
     },
   };
 
+  // Revenue by category (from products)
   const revenueByCategory = {
     title: 'Revenue by Product',
     xAxisLabel: 'Product',
@@ -285,53 +378,35 @@ export async function loader({
   };
 
   return {
-    dashboard: {
-      entity,
-      kpis,
-      healthIndicators,
-      incomeStatement: { chart: incomeChart, table: incomeTable },
-      balanceSheet: { chart: balanceChart, table: balanceTable },
-      cashFlow: { chart: cashFlowChart, table: cashFlowTable },
-      revenueByCategory,
-      orderAnalytics,
-      invoices: invoicesResult.invoices,
-      invoiceStats,
-      lastUpdated: new Date().toISOString(),
+    entity,
+    kpis,
+    healthIndicators,
+    incomeStatement: {
+      chart: incomeChart,
+      table: incomeTable,
     },
+    balanceSheet: {
+      chart: balanceChart,
+      table: balanceTable,
+    },
+    cashFlow: {
+      chart: cashFlowChart,
+      table: cashFlowTable,
+    },
+    revenueByCategory,
+    orderAnalytics,
+    invoices: invoicesResult.invoices,
+    invoiceStats,
+    lastUpdated: new Date().toISOString(),
   };
 }
 
-export default function Index() {
-  const { dashboard } = useLoaderData<typeof loader>();
-  const [searchParams] = useSearchParams();
+function formatMonth(monthStr: string): string {
+  const date = new Date(monthStr + '-01');
+  return date.toLocaleDateString('en-US', { month: 'short' });
+}
 
-  // Default to dashboard view, switch to chat if thread param exists or view=chat
-  const hasThread = searchParams.has('thread');
-  const viewParam = searchParams.get('view');
-  const [activeView, setActiveView] = useState<'dashboard' | 'chat'>(
-    hasThread || viewParam === 'chat' ? 'chat' : 'dashboard'
-  );
-
-  // Update view when URL params change
-  useEffect(() => {
-    if (hasThread || viewParam === 'chat') {
-      setActiveView('chat');
-    }
-  }, [hasThread, viewParam]);
-
-  return (
-    <div className="min-h-screen bg-background">
-      {/* App-wide navigation */}
-      <AppNavigation activeView={activeView} onViewChange={setActiveView} />
-
-      {/* Conditional content rendering */}
-      {activeView === 'dashboard' ? (
-        <DashboardView data={dashboard} />
-      ) : (
-        <ChatProvider>
-          <ChatInterface />
-        </ChatProvider>
-      )}
-    </div>
-  );
+export default function Dashboard() {
+  const data = useLoaderData<typeof loader>();
+  return <DashboardView data={data} />;
 }

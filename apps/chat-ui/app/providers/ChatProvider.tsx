@@ -10,6 +10,7 @@ import {
 } from '@langchain/langgraph-sdk/react-ui';
 import { useNavigate, useSearchParams } from 'react-router';
 import { v4 as uuidv4 } from 'uuid';
+import type { Base64ContentBlock } from '~/lib/multimodal-utils';
 
 /**
  * ThreadWise Chat Provider - Client-side only architecture
@@ -22,6 +23,8 @@ import { v4 as uuidv4 } from 'uuid';
  * - UI messages are streamed via onCustomEvent handler
  * - Uses uiMessageReducer from @langchain/langgraph-sdk/react-ui
  */
+
+export type ModelType = 'local' | 'gemini';
 
 // Type for stream state including UI messages
 export type StreamStateType = {
@@ -37,6 +40,14 @@ interface ChatState {
   threads: Thread[];
   currentThread: Thread | null;
   error: string | null;
+  selectedModel: ModelType;
+}
+
+interface ChatState {
+  threads: Thread[];
+  currentThread: Thread | null;
+  error: string | null;
+  selectedModel: ModelType;
 }
 
 // Type for the useStream hook return value
@@ -57,11 +68,12 @@ interface ChatContextType extends ChatState {
   createThread: () => Promise<Thread>;
   selectThread: (threadId: string) => void;
   deleteThread: (threadId: string) => Promise<void>;
-  sendMessage: (content: string) => Promise<void>;
+  sendMessage: (content: string, attachments?: Base64ContentBlock[]) => Promise<void>;
   refreshThreads: () => Promise<void>;
   isStreaming: boolean;
   stopGeneration: () => void;
   messages: Message[];
+  setSelectedModel: (model: ModelType) => void;
   // Expose full stream for UI message rendering with for rendering generative UI
   stream: StreamType;
   // UI messages from generative UI
@@ -120,6 +132,9 @@ export function ChatProvider({ children }: ChatProviderProps) {
 
   // Threads state
   const [threads, setThreads] = useState<Thread[]>([]);
+
+  // Model selection state
+  const [selectedModel, setSelectedModel] = useState<ModelType>('local');
 
   // Fetch threads from LangGraph
   const fetchThreads = useCallback(async () => {
@@ -231,28 +246,86 @@ export function ChatProvider({ children }: ChatProviderProps) {
     }
   };
 
-  const sendMessage = async (content: string) => {
-    if (!langGraphClient || !content.trim()) return;
+  const sendMessage = async (content: string, attachments?: Base64ContentBlock[]) => {
+    if (!langGraphClient) return;
+
+    // Require either text content or attachments
+    if (!content.trim() && (!attachments || attachments.length === 0)) return;
 
     const isFirstMessage = !currentThread || stream.messages.length === 0;
+
+    // Build message content - either string or array of content blocks
+    let messageContent:
+      | string
+      | Array<{
+          type: string;
+          text?: string;
+          source_type?: string;
+          mime_type?: string;
+          data?: string;
+          metadata?: Record<string, string>;
+        }>;
+
+    if (attachments && attachments.length > 0) {
+      // Multimodal message with attachments
+      const contentBlocks: Array<{
+        type: string;
+        text?: string;
+        source_type?: string;
+        mime_type?: string;
+        data?: string;
+        metadata?: Record<string, string>;
+      }> = [];
+
+      // Add text content if present
+      if (content.trim()) {
+        contentBlocks.push({ type: 'text', text: content });
+      }
+
+      // Add file attachments
+      for (const attachment of attachments) {
+        if (attachment.type === 'image') {
+          contentBlocks.push({
+            type: 'image',
+            source_type: 'base64',
+            mime_type: attachment.mime_type,
+            data: attachment.data,
+            metadata: attachment.metadata as Record<string, string>,
+          });
+        } else if (attachment.type === 'file') {
+          contentBlocks.push({
+            type: 'file',
+            source_type: 'base64',
+            mime_type: attachment.mime_type,
+            data: attachment.data,
+            metadata: attachment.metadata as Record<string, string>,
+          });
+        }
+      }
+
+      messageContent = contentBlocks;
+    } else {
+      // Simple text message
+      messageContent = content;
+    }
 
     // Create new human message
     const newHumanMessage: Message = {
       id: uuidv4(),
       type: 'human',
-      content: content,
+      content: messageContent,
     };
 
     // Auto-generate title for first message
     if (isFirstMessage && currentThread) {
-      const newTitle = generateThreadTitle(content);
+      const newTitle = generateThreadTitle(content || 'Document analysis');
 
       try {
         await updateThreadMetadata(langGraphClient, currentThread.thread_id, {
           title: newTitle,
           created_by: 'threadwise-ui',
           auto_titled: true,
-          first_message: content.substring(0, 100),
+          first_message: (content || 'Document analysis').substring(0, 100),
         });
 
         // Refresh threads to show new title
@@ -265,7 +338,7 @@ export function ChatProvider({ children }: ChatProviderProps) {
     // Submit to LangGraph with optimistic update
     try {
       await stream.submit(
-        { messages: [newHumanMessage] },
+        { messages: [newHumanMessage], model: selectedModel },
         {
           streamMode: ['values'],
           streamSubgraphs: true,
@@ -275,6 +348,7 @@ export function ChatProvider({ children }: ChatProviderProps) {
             messages: [...(prev.messages ?? []), newHumanMessage],
           }),
           context: { user_id: 'user_123' },
+          // command: { update: { model: 'local' } },
         }
       );
     } catch (error) {
@@ -292,6 +366,7 @@ export function ChatProvider({ children }: ChatProviderProps) {
   const value: ChatContextType = {
     threads,
     currentThread,
+    selectedModel,
     error: stream.error ? String(stream.error) : null,
     createThread,
     selectThread,
@@ -301,6 +376,7 @@ export function ChatProvider({ children }: ChatProviderProps) {
     isStreaming: stream.isLoading,
     stopGeneration,
     messages: stream.messages,
+    setSelectedModel,
     // Expose stream for UI message rendering with for rendering generative UI
     stream,
     // Expose UI messages for filtering by message ID
