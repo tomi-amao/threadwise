@@ -1,6 +1,7 @@
 import React, { useState, useCallback, useEffect } from 'react';
 import { useFetcher } from 'react-router';
 import { Receipt, FunnelSimple, MagnifyingGlass, X, ArrowsClockwise } from 'phosphor-react';
+import { toast } from 'sonner';
 import { InvoiceUpload } from './InvoiceUpload';
 import { InvoiceList } from './InvoiceList';
 import type {
@@ -41,6 +42,7 @@ export function InvoicesSection({
   onRefresh,
 }: InvoicesSectionProps) {
   const fetcher = useFetcher();
+  const statusFetcher = useFetcher<{ success: boolean; invoice: Invoice; isProcessing: boolean }>();
   const [invoices, setInvoices] = useState<Invoice[]>(initialInvoices);
   const [stats, setStats] = useState<InvoiceStats>(initialStats);
   const [statusFilter, setStatusFilter] = useState<InvoiceStatus | 'all'>('all');
@@ -48,12 +50,80 @@ export function InvoicesSection({
   const [isUploading, setIsUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState<UploadProgress[]>([]);
   const [previewInvoice, setPreviewInvoice] = useState<Invoice | null>(null);
+  // Track invoices that are still being processed by AI
+  const [processingInvoiceIds, setProcessingInvoiceIds] = useState<Set<string>>(new Set());
 
   // Update local state when props change
   useEffect(() => {
     setInvoices(initialInvoices);
     setStats(initialStats);
   }, [initialInvoices, initialStats]);
+
+  // Initialize processing tracker with any invoices that are already processing
+  useEffect(() => {
+    const processingIds = initialInvoices
+      .filter(inv => inv.extraction_status === 'processing' || inv.extraction_status === 'pending')
+      .map(inv => inv.id);
+
+    if (processingIds.length > 0) {
+      setProcessingInvoiceIds(new Set(processingIds));
+    }
+  }, []); // Only run on mount
+
+  // Handle status polling response - update invoice and show toast when processing completes
+  useEffect(() => {
+    if (statusFetcher.data?.success && statusFetcher.data?.invoice) {
+      const updatedInvoice = statusFetcher.data.invoice;
+      const isStillProcessing = statusFetcher.data.isProcessing;
+
+      // Update the invoice in local state
+      setInvoices(prev => prev.map(inv => (inv.id === updatedInvoice.id ? updatedInvoice : inv)));
+
+      // If processing is complete, remove from tracking and show toast
+      if (!isStillProcessing && processingInvoiceIds.has(updatedInvoice.id)) {
+        setProcessingInvoiceIds(prev => {
+          const next = new Set(prev);
+          next.delete(updatedInvoice.id);
+          return next;
+        });
+
+        // Show completion toast based on extraction status
+        if (updatedInvoice.extraction_status === 'completed') {
+          toast.success(`AI processing complete`, {
+            description: updatedInvoice.vendor_name
+              ? `Extracted data from ${updatedInvoice.vendor_name}`
+              : `${updatedInvoice.file_name} has been processed`,
+            duration: 4000,
+          });
+        } else if (updatedInvoice.extraction_status === 'failed') {
+          toast.error(`AI processing failed`, {
+            description: `Could not extract data from ${updatedInvoice.file_name}`,
+            duration: 5000,
+          });
+        }
+      }
+    }
+  }, [statusFetcher.data, processingInvoiceIds]);
+
+  // Poll for processing status updates
+  useEffect(() => {
+    if (processingInvoiceIds.size === 0) return;
+
+    const pollInterval = setInterval(() => {
+      // Poll status for each processing invoice
+      processingInvoiceIds.forEach(invoiceId => {
+        const formData = new FormData();
+        formData.append('intent', 'getStatus');
+        formData.append('invoiceId', invoiceId);
+        statusFetcher.submit(formData, {
+          method: 'POST',
+          action: '/api/invoices',
+        });
+      });
+    }, 3000); // Poll every 3 seconds
+
+    return () => clearInterval(pollInterval);
+  }, [processingInvoiceIds, statusFetcher]);
 
   // Filter invoices
   const filteredInvoices = invoices.filter(invoice => {
@@ -84,6 +154,15 @@ export function InvoicesSection({
       }));
       setUploadProgress(progressItems);
 
+      // Show initial toast for batch upload
+      const uploadToastId = toast.loading(
+        files.length === 1 ? `Uploading ${files[0].name}...` : `Uploading ${files.length} files...`
+      );
+
+      let successCount = 0;
+      let failCount = 0;
+      const newProcessingIds: string[] = [];
+
       for (let i = 0; i < files.length; i++) {
         const file = files[i];
 
@@ -93,49 +172,107 @@ export function InvoicesSection({
             prev.map((p, idx) => (idx === i ? { ...p, progress: 30, status: 'uploading' } : p))
           );
 
-          // Create FormData and submit
+          // Create FormData and use fetch directly to await response
           const formData = new FormData();
           formData.append('file', file);
           formData.append('intent', 'upload');
-          console.log('Uploading file:', file);
 
-          // Use fetcher to submit
-          fetcher.submit(formData, {
+          // Use fetch to properly await the response
+          const response = await fetch('/api/invoices', {
             method: 'POST',
-            action: '/api/invoices',
-            encType: 'multipart/form-data',
+            body: formData,
           });
 
-          // Simulate progress (actual progress would come from upload)
+          // Update progress to processing
           setUploadProgress(prev =>
             prev.map((p, idx) => (idx === i ? { ...p, progress: 70, status: 'processing' } : p))
           );
 
-          // Wait a bit for the upload to complete
-          await new Promise(resolve => setTimeout(resolve, 500));
+          const result = await response.json();
+
+          if (!response.ok || result.error) {
+            throw new Error(result.error || 'Upload failed');
+          }
 
           // Mark as complete
           setUploadProgress(prev =>
             prev.map((p, idx) => (idx === i ? { ...p, progress: 100, status: 'complete' } : p))
           );
+
+          successCount++;
+
+          // Add the invoice to local state immediately
+          if (result.invoice) {
+            setInvoices(prev => [result.invoice, ...prev]);
+            setStats(prev => ({ ...prev, total: prev.total + 1, pending: prev.pending + 1 }));
+
+            // Track this invoice for processing status polling
+            newProcessingIds.push(result.invoice.id);
+          }
+
+          // Show individual success toast for each file
+          toast.success(`${file.name} uploaded`, {
+            description: 'AI extraction & embedding in progress...',
+            duration: 3000,
+          });
         } catch (error) {
+          failCount++;
           setUploadProgress(prev =>
             prev.map((p, idx) =>
               idx === i ? { ...p, status: 'error', error: 'Upload failed' } : p
             )
           );
+
+          // Show error toast for failed file
+          toast.error(`Failed to upload ${file.name}`, {
+            description: error instanceof Error ? error.message : 'An error occurred',
+            duration: 5000,
+          });
         }
+      }
+
+      // Add all successfully uploaded invoices to the processing tracker
+      if (newProcessingIds.length > 0) {
+        setProcessingInvoiceIds(prev => {
+          const next = new Set(prev);
+          newProcessingIds.forEach(id => next.add(id));
+          return next;
+        });
       }
 
       setIsUploading(false);
 
-      // Clear progress after a delay
+      // Dismiss the loading toast and show summary
+      toast.dismiss(uploadToastId);
+
+      if (successCount > 0 && failCount === 0) {
+        toast.success(
+          successCount === 1
+            ? 'Invoice uploaded successfully!'
+            : `${successCount} invoices uploaded successfully!`,
+          {
+            description: "AI is processing your documents. You'll be notified when complete.",
+            duration: 4000,
+          }
+        );
+      } else if (successCount > 0 && failCount > 0) {
+        toast.warning(`${successCount} uploaded, ${failCount} failed`, {
+          description: 'Some files could not be uploaded. Please try again.',
+          duration: 5000,
+        });
+      } else if (failCount > 0) {
+        toast.error('Upload failed', {
+          description: 'No files were uploaded. Please check your connection and try again.',
+          duration: 5000,
+        });
+      }
+
+      // Clear progress after a delay (no need to call onRefresh since we update state directly)
       setTimeout(() => {
         setUploadProgress([]);
-        onRefresh?.();
       }, 2000);
     },
-    [fetcher, onRefresh]
+    [onRefresh]
   );
 
   // Handle view invoice
@@ -188,6 +325,11 @@ export function InvoicesSection({
           inv.id === id ? { ...inv, ...data, updated_at: new Date().toISOString() } : inv
         )
       );
+
+      toast.success('Invoice updated', {
+        description: 'Your changes have been saved.',
+        duration: 3000,
+      });
     },
     [fetcher]
   );
@@ -195,6 +337,10 @@ export function InvoicesSection({
   // Handle delete invoice
   const handleDelete = useCallback(
     async (id: string) => {
+      // Get the invoice name before deleting for the toast
+      const invoiceToDelete = invoices.find(inv => inv.id === id);
+      const fileName = invoiceToDelete?.file_name || 'Invoice';
+
       fetcher.submit(
         { intent: 'delete', invoiceId: id },
         { method: 'POST', action: '/api/invoices' }
@@ -206,8 +352,13 @@ export function InvoicesSection({
         ...prev,
         total: prev.total - 1,
       }));
+
+      toast.success('Invoice deleted', {
+        description: `${fileName} has been removed.`,
+        duration: 3000,
+      });
     },
-    [fetcher]
+    [fetcher, invoices]
   );
 
   return (

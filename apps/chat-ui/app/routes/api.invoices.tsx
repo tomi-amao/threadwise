@@ -12,10 +12,12 @@ import {
   createInvoice,
   updateInvoice,
   deleteInvoice,
+  getInvoice,
   getInvoiceUrl,
   listInvoices,
   getInvoiceStats,
 } from '~/lib/api/invoices.server';
+import { embedInvoiceFile } from '~/lib/api/embeddings.server';
 import { createClient } from '@supabase/supabase-js';
 
 // LangGraph API URL
@@ -120,7 +122,7 @@ async function extractDocumentData(
               ],
             },
           ],
-          model: 'local', // Use local model for extraction
+          model: 'chat', // Use local model for extraction
         },
         config: {
           configurable: {
@@ -318,7 +320,58 @@ export async function action({ request }: ActionFunctionArgs) {
           await updateInvoice(invoice.id, { extraction_status: 'processing' });
         }
 
-        return json({ success: true, invoice: { ...invoice, extraction_status: 'processing' } });
+        // Get signed URL for embedding
+        const supabaseForUrl = getSupabaseClient();
+        const { data: signedUrlData } = await supabaseForUrl.storage
+          .from('invoices')
+          .createSignedUrl(uploadData.path, 3600);
+
+        // Embed the file asynchronously (don't block the response)
+        let embeddingStatus: 'pending' | 'success' | 'failed' = 'pending';
+        if (signedUrlData?.signedUrl) {
+          embedInvoiceFile(signedUrlData.signedUrl, file.type)
+            .then(result => {
+              if (result.success) {
+                console.log(`Embedding succeeded for invoice ${invoice?.id}`);
+              } else {
+                console.error(`Embedding failed for invoice ${invoice?.id}:`, result.error);
+              }
+            })
+            .catch(err => {
+              console.error('Embedding background task error:', err);
+            });
+          embeddingStatus = 'pending';
+        } else {
+          console.warn('Could not get signed URL for embedding');
+          embeddingStatus = 'failed';
+        }
+
+        return json({
+          success: true,
+          invoice: { ...invoice, extraction_status: 'processing' },
+          embeddingStatus,
+        });
+      }
+
+      case 'getStatus': {
+        // Poll for invoice processing status - used to check if extraction/embedding is complete
+        const invoiceId = formData.get('invoiceId') as string;
+        if (!invoiceId) {
+          return json({ error: 'Invoice ID required' }, { status: 400 });
+        }
+
+        const { invoice, error } = await getInvoice(invoiceId);
+
+        if (error || !invoice) {
+          return json({ error: error || 'Invoice not found' }, { status: 404 });
+        }
+
+        return json({
+          success: true,
+          invoice,
+          isProcessing:
+            invoice.extraction_status === 'processing' || invoice.extraction_status === 'pending',
+        });
       }
 
       case 'update': {
