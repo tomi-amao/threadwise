@@ -3,21 +3,13 @@ import { useRevalidator } from 'react-router';
 import { DashboardHeader } from './DashboardHeader';
 import { KPIMetricsGrid } from './KPIMetricsGrid';
 import { HealthIndicators } from './HealthIndicators';
-import { FinancialReportsSection } from './FinancialReportsSection';
 import { QuickInsights } from './QuickInsights';
-import { InvoicesSection } from '~/components/invoices';
 import type { DashboardLoaderData } from '~/types/dashboard';
 
 // Fallback mock data imports for standalone usage
 import {
   getDashboardKPIs,
   getBusinessHealthIndicators,
-  getIncomeStatementChart,
-  getIncomeStatementTable,
-  getBalanceSheetChart,
-  getBalanceSheetTable,
-  getCashFlowChart,
-  getCashFlowTable,
   getRevenueByCategory,
   getExpenseBreakdown,
 } from '~/lib/mock-dashboard-data';
@@ -46,12 +38,6 @@ export function DashboardView({ data }: DashboardViewProps) {
   // Use real data if provided, otherwise fall back to mock data
   const kpis = data?.kpis || getDashboardKPIs();
   const healthIndicators = data?.healthIndicators || getBusinessHealthIndicators();
-  const incomeChart = data?.incomeStatement?.chart || getIncomeStatementChart();
-  const incomeTable = data?.incomeStatement?.table || getIncomeStatementTable();
-  const balanceChart = data?.balanceSheet?.chart || getBalanceSheetChart();
-  const balanceTable = data?.balanceSheet?.table || getBalanceSheetTable();
-  const cashFlowChart = data?.cashFlow?.chart || getCashFlowChart();
-  const cashFlowTable = data?.cashFlow?.table || getCashFlowTable();
   const revenueByCategory = data?.revenueByCategory || getRevenueByCategory();
   const expenseBreakdown = getExpenseBreakdown(); // Always use mock for now
 
@@ -79,37 +65,11 @@ export function DashboardView({ data }: DashboardViewProps) {
         {/* Business Health Indicators */}
         <HealthIndicators indicators={healthIndicators} />
 
-        {/* Financial Reports */}
-        <FinancialReportsSection
-          incomeChart={incomeChart}
-          incomeTable={incomeTable}
-          balanceChart={balanceChart}
-          balanceTable={balanceTable}
-          cashFlowChart={cashFlowChart}
-          cashFlowTable={cashFlowTable}
-        />
-
-        {/* Quick Insights */}
+        {/* Insights & Analysis */}
         <QuickInsights
           revenueByCategory={revenueByCategory}
           expenseBreakdown={expenseBreakdown}
           orderAnalytics={data?.orderAnalytics}
-        />
-
-        {/* Invoice Management */}
-        <InvoicesSection
-          invoices={data?.invoices || []}
-          stats={
-            data?.invoiceStats || {
-              total: 0,
-              pending: 0,
-              paid: 0,
-              overdue: 0,
-              totalAmount: 0,
-              pendingAmount: 0,
-            }
-          }
-          onRefresh={handleRefresh}
         />
       </main>
     </div>

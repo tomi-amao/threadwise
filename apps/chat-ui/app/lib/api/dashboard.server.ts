@@ -5,7 +5,7 @@
  * Uses Supabase to query financial data from the double-entry accounting system.
  */
 
-import { createClient } from '@supabase/supabase-js';
+import { getServerSupabaseClient } from '~/lib/supabase';
 
 // Types for database schema
 export interface Account {
@@ -74,14 +74,8 @@ export interface HealthMetric {
   description: string;
 }
 
-// Create Supabase client
-function getSupabaseClient() {
-  const supabaseUrl =
-    process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || 'http://127.0.0.1:54321';
-  const supabaseKey = process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY || '';
-
-  return createClient(supabaseUrl, supabaseKey);
-}
+// Use shared Supabase client
+const getSupabaseClient = getServerSupabaseClient;
 
 /**
  * Get account balances from journal entry lines

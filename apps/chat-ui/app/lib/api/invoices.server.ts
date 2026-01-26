@@ -7,7 +7,7 @@
  * - List and filter invoices
  */
 
-import { createClient } from '@supabase/supabase-js';
+import { getServerSupabaseClient } from '~/lib/supabase';
 
 // Invoice status type
 export type InvoiceStatus = 'pending' | 'paid' | 'overdue' | 'cancelled';
@@ -96,20 +96,8 @@ export interface InvoiceFilters {
   search?: string;
 }
 
-// Create Supabase client
-function getSupabaseClient() {
-  const supabaseUrl =
-    process.env.SUPABASE_URL ||
-    process.env.VITE_SUPABASE_URL ||
-    'https://iojdlaqvohuebsexmbad.supabase.co';
-  const supabaseKey = process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY || '';
-
-  if (!supabaseKey) {
-    console.warn('No Supabase key found, invoice operations will fail');
-  }
-
-  return createClient(supabaseUrl, supabaseKey);
-}
+// Use shared Supabase client
+const getSupabaseClient = getServerSupabaseClient;
 
 /**
  * Upload a PDF file to Supabase Storage

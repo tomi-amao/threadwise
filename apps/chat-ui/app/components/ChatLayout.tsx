@@ -1,9 +1,10 @@
 import React, { useEffect, useState } from 'react';
 import { useChat } from '~/providers/ChatProvider';
+import { useSidebar } from '~/providers/SidebarProvider';
 import { ThreadSidebar } from './thread/ThreadSidebar';
 import { ChatArea } from './thread/ChatArea';
 import { Button } from './ui/button';
-import { List, ChatCircle } from 'phosphor-react';
+import { List, ChatCircle, Sidebar } from 'phosphor-react';
 
 /**
  * ChatLayout Component - Main responsive layout manager for ThreadWise chat interface
@@ -20,6 +21,7 @@ import { List, ChatCircle } from 'phosphor-react';
  */
 export function ChatLayout() {
   const { threads, currentThread, createThread } = useChat();
+  const { setMobileOpen: setNavSidebarOpen } = useSidebar();
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
   // Mobile UX: Auto-close sidebar when thread is selected
@@ -65,23 +67,32 @@ export function ChatLayout() {
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden max-h-screen">
         {/* Prevent overflow beyond screen height */}
         {/* Mobile Header Bar */}
-        <div className="lg:hidden border-b border-border bg-card/95 backdrop-blur-sm p-4 flex-shrink-0">
+        <div className="lg:hidden border-b border-border bg-card/95 backdrop-blur-sm p-4 shrink-0">
           <div className="flex items-center justify-between">
-            {/* Hamburger menu button */}
+            {/* Navigation sidebar hamburger */}
             <Button
               variant="ghost"
               size="icon"
-              onClick={() => setSidebarOpen(true)}
+              onClick={() => setNavSidebarOpen(true)}
               className="h-8 w-8"
+              title="Open navigation menu"
             >
-              <List size={20} weight="bold" />
+              <Sidebar size={20} weight="bold" />
             </Button>
 
             {/* Centered ThreadWise logo/title */}
             <h1 className="text-lg font-semibold">ThreadWise</h1>
 
-            {/* Spacer for perfect centering */}
-            <div className="w-8" />
+            {/* Chat list sidebar hamburger */}
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => setSidebarOpen(true)}
+              className="h-8 w-8"
+              title="Open chat list"
+            >
+              <List size={20} weight="bold" />
+            </Button>
           </div>
         </div>
 

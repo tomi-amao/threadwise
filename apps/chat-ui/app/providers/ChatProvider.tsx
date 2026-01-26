@@ -183,7 +183,7 @@ export function ChatProvider({ children }: ChatProviderProps) {
     onThreadId: id => {
       // Update URL when thread ID changes
       if (id !== threadIdFromUrl) {
-        navigate(`/?thread=${id}`, { replace: false });
+        navigate(`/chat?thread=${id}`, { replace: false });
         // Refresh threads list after a delay
         setTimeout(() => fetchThreads(), 1000);
       }
@@ -218,7 +218,7 @@ export function ChatProvider({ children }: ChatProviderProps) {
     });
 
     // Navigate to new thread
-    navigate(`/?thread=${langGraphThread.thread_id}`, { replace: false });
+    navigate(`/chat?thread=${langGraphThread.thread_id}`, { replace: false });
 
     // Refresh threads list
     await fetchThreads();
@@ -227,7 +227,7 @@ export function ChatProvider({ children }: ChatProviderProps) {
   };
 
   const selectThread = (threadId: string) => {
-    navigate(`/?thread=${threadId}`);
+    navigate(`/chat?thread=${threadId}`);
   };
 
   const deleteThread = async (threadId: string) => {
@@ -237,7 +237,7 @@ export function ChatProvider({ children }: ChatProviderProps) {
       await langGraphClient.threads.delete(threadId);
 
       if (currentThread?.thread_id === threadId) {
-        navigate('/');
+        navigate('/chat');
       }
 
       await fetchThreads();

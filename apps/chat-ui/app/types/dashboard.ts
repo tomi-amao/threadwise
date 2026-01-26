@@ -24,28 +24,30 @@ export interface DashboardLoaderData {
     accountsReceivable: MetricCardProps;
   };
   healthIndicators: HealthIndicator[];
-  incomeStatement: {
+  // Financial reports - optional (used in reports page)
+  incomeStatement?: {
     chart: LineChartProps;
     table: FinancialTableProps;
   };
-  balanceSheet: {
+  balanceSheet?: {
     chart: BarChartProps;
     table: FinancialTableProps;
   };
-  cashFlow: {
+  cashFlow?: {
     chart: LineChartProps;
     table: FinancialTableProps;
   };
   revenueByCategory: BarChartProps;
-  orderAnalytics: {
+  orderAnalytics?: {
     total_orders: number;
     total_revenue: number;
     avg_order_value: number;
     top_customers: { name: string; total: number }[];
     top_products: { name: string; qty: number; revenue: number }[];
   };
-  invoices: Invoice[];
-  invoiceStats: InvoiceStats;
+  // Invoice data - optional (used in invoices page)
+  invoices?: Invoice[];
+  invoiceStats?: InvoiceStats;
   lastUpdated: string;
 }
 

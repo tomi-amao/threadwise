@@ -18,10 +18,11 @@ import {
   getInvoiceStats,
 } from '~/lib/api/invoices.server';
 import { embedInvoiceFile } from '~/lib/api/embeddings.server';
-import { createClient } from '@supabase/supabase-js';
+import { getServerSupabaseClient } from '~/lib/supabase';
 
-// LangGraph API URL
-const LANGGRAPH_API_URL = process.env.VITE_LANGGRAPH_API_URL || 'http://localhost:2024';
+// LangGraph API URL - check both server and Vite env vars
+const LANGGRAPH_API_URL =
+  process.env.LANGGRAPH_API_URL || process.env.VITE_LANGGRAPH_API_URL || 'http://localhost:2024';
 
 // Helper to return JSON responses
 function json(data: unknown, init?: ResponseInit) {
@@ -34,16 +35,8 @@ function json(data: unknown, init?: ResponseInit) {
   });
 }
 
-// Get Supabase client for storage operations
-function getSupabaseClient() {
-  const supabaseUrl =
-    process.env.SUPABASE_URL ||
-    process.env.VITE_SUPABASE_URL ||
-    'https://iojdlaqvohuebsexmbad.supabase.co';
-  const supabaseKey = process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY || '';
-
-  return createClient(supabaseUrl, supabaseKey);
-}
+// Use shared Supabase client for storage operations
+const getSupabaseClient = getServerSupabaseClient;
 
 // Extracted document data from LangGraph
 interface ExtractedDocumentData {
@@ -251,6 +244,8 @@ export async function action({ request }: ActionFunctionArgs) {
           await supabase.storage.from('invoices').remove([uploadData.path]);
           return json({ error: createError }, { status: 500 });
         }
+
+        console.debug(`Invoice created with ID: ${invoice?.id}`);
 
         // Convert file to base64 for LangGraph extraction
         const base64Content = Buffer.from(uint8Array).toString('base64');

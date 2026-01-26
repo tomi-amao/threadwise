@@ -200,7 +200,7 @@ export function QuickInsights({
                     <p className="text-xs text-muted-foreground mt-1">{insight.description}</p>
                     {insight.suggestedAction && (
                       <Link
-                        to={`/?view=chat&q=${encodeURIComponent(insight.suggestedAction)}`}
+                        to={`/chat?q=${encodeURIComponent(insight.suggestedAction)}`}
                         className="inline-flex items-center gap-1 text-xs text-primary hover:underline mt-2"
                       >
                         <ChatCircle size={12} />
@@ -213,7 +213,7 @@ export function QuickInsights({
             ))}
           </div>
 
-          <Link to="/?view=chat">
+          <Link to="/chat">
             <Button variant="outline" size="sm" className="w-full gap-2">
               <ChatCircle size={16} />
               Ask AI for more insights
