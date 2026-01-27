@@ -41,12 +41,17 @@ except ImportError:
     create_client = None
     Client = None
 
+from dotenv import load_dotenv
+
+load_dotenv(dotenv_path="/Users/trendstomi/projects/web-applications/threadwise/apps/ai_agent/.env")
+
 logger = logging.getLogger(__name__)
 
 # Configuration
 SUPABASE_URL = os.getenv("SUPABASE_URL", "http://localhost:8000")
-SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyAgCiAgICAicm9sZSI6ICJzZXJ2aWNlX3JvbGUiLAogICAgImlzcyI6ICJzdXBhYmFzZS1kZW1vIiwKICAgICJpYXQiOiAxNjQxNzY5MjAwLAogICAgImV4cCI6IDE3OTk1MzU2MDAKfQ.DaYlNEoUrrEn2Ig7tqibS-PHK5vgusbcbo7X36XVt4Q")
+SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_KEY", "")
 
+print(f"Supabase URL: {SUPABASE_URL}")
 # Embedding model configuration
 EMBEDDING_MODEL = "BAAI/bge-small-en"
 VECTOR_TABLE_NAME = "documents"
@@ -213,8 +218,7 @@ class EmbeddingService:
                 return splitter.split_documents(documents)
 
             documents = await asyncio.to_thread(load_and_split_pdf)
-            print(documents[0].page_content[:100])
-            print(documents[0].metadata)
+
 
             # Store in vector database
             logger.info(f"Storing {len(documents)} document chunks in vector database")
@@ -227,6 +231,7 @@ class EmbeddingService:
                     client=self.supabase,
                     table_name=VECTOR_TABLE_NAME,
                     query_name=VECTOR_QUERY_NAME,
+
                 )
             
             vector_store = await asyncio.to_thread(create_vector_store)

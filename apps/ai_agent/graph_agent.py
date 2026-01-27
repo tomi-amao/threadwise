@@ -1,20 +1,27 @@
-"""LangGraph Financial AI Agent with Custom Nodes.
+"""LangGraph Ad-hoc Analytics Agent with Custom Nodes.
 
-This module implements a custom graph-based agent for financial data analysis
-and reporting using LangGraph's StateGraph API with dedicated nodes for:
-- Query classification (generic, analytics, financial_report)
-- Query validation (for financial reports)
-- SQL execution (for analytics and reports)
+This module implements a custom graph-based agent for ad-hoc database exploration
+and business intelligence using LangGraph's StateGraph API with dedicated nodes for:
+- Query classification (analytics vs generic)
+- Semantic search context retrieval
+- SQL-based data exploration (insights, trends, comparisons)
+- Document extraction from uploads
 - Generative UI (charts, tables, metrics)
 
 Architecture:
-    START → classify_query → [route based on type]
+    START → classify_query → retrieve_context → [route based on type]
     
-    Generic:          generic_response → END
-    Analytics:        analytics_agent → push_ui → END
-    Financial Report: validate_query → [route based on validation]
-        - Passed:     execute_report → push_ui → END
-        - Failed:     clarify_query → END
+    Generic:            generic_response → END
+    Analytics:          analytics_agent → push_visualization → END
+    Document Extraction: extract_document → END
+
+Capabilities:
+- Insights & Trends: "What were our top-selling products last quarter?"
+- Comparisons: "Compare sales between Q1 and Q2"
+- Forecasting: "Based on current trends, what might next month look like?"
+- Data Discovery: "What tables do we have?", "Show me sample customer data"
+- Aggregations: "Total revenue by region", "Average order value"
+- Anomaly Detection: "Are there unusual patterns in recent orders?"
 """
 
 import json
@@ -33,15 +40,14 @@ from pydantic import BaseModel, Field
 
 from utils.prompts import (
     analytics_system_prompt,
-    check_financial_prompt,
     generic_system_prompt,
-    sql_system_prompt,
-    validate_financial_prompt_against_database,
-    report_type_prompts,
     invoice_extraction_prompt,
 )
 from utils.settings import get_local_llm, get_chat_model
 from utils.tools import sql_tools, toolkit
+
+# Import embedding service for semantic search
+from src.ai_agent.services.embedding_service import embedding_service
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -53,37 +59,25 @@ logging.basicConfig(level=logging.INFO)
 # =============================================================================
 
 
-class FinancialAgentState:
-    """State schema for the financial agent graph.
-    
-    This TypedDict defines all state fields that flow through the graph.
-    """
-    messages: Annotated[Sequence[BaseMessage], add_messages]
-    ui: Annotated[Sequence[AnyUIMessage], ui_message_reducer]
-    query_type: Literal["financial_report", "database_analytics", "generic"] | None
-    is_query_valid: bool | None
-    validation_issues: list[str] | None
-    validation_suggestions: list[dict] | None
-    sql_result: str | None
-
-
 # Use TypedDict for proper LangGraph compatibility
 from typing import TypedDict
 
 class AgentState(TypedDict):
-    """State schema for the financial agent graph."""
+    """State schema for the ad-hoc analytics agent graph.
+    
+    This TypedDict defines all state fields that flow through the graph.
+    Simplified to focus on analytics queries and document extraction.
+    """
     messages: Annotated[Sequence[BaseMessage], add_messages]
     ui: Annotated[Sequence[AnyUIMessage], ui_message_reducer]
-    query_type: str | None
-    report_type: Literal["income_statement", "balance_sheet", "cash_flow_statement"] | None
-    is_query_valid: bool | None
-    validation_issues: list[str] | None
-    validation_suggestions: list[str] | None
+    query_type: Literal["analytics", "generic", "document_extraction"] | None
     sql_result: str | None
     # Document extraction fields
     has_file_attachment: bool | None
     extracted_document: dict | None
     model: str | None
+    # Semantic search context
+    retrieved_context: list[dict] | None
 
 
 # =============================================================================
@@ -92,36 +86,18 @@ class AgentState(TypedDict):
 
 
 class QueryClassification(BaseModel):
-    """Structured output for query classification."""
-    query_type: Literal["financial_report", "database_analytics", "generic", "document_extraction"] = Field(
-        description="Type of query: financial_report, database_analytics, generic, or document_extraction"
+    """Structured output for query classification.
+    
+    Classifies user queries into:
+    - analytics: Data exploration, insights, trends, comparisons, aggregations
+    - generic: Conversational, explanations, advice, non-database queries
+    - document_extraction: File attachments that need parsing
+    """
+    query_type: Literal["analytics", "generic", "document_extraction"] = Field(
+        description="Type of query: analytics (data exploration), generic (conversational), or document_extraction (file uploads)"
     )
     confidence: float = Field(ge=0.0, le=1.0, description="Confidence score")
     reasoning: str = Field(description="Brief explanation of classification")
-
-
-class FinancialQueryValidation(BaseModel):
-    """Structured output for financial query validation."""
-    status: Literal["pass", "fail"] = Field(
-        description="'pass' if query is complete, 'fail' if needs clarification"
-    )
-    missing_information: list[str] = Field(
-        default_factory=list, 
-        description="List of missing information"
-    )
-    suggestions: list[str] = Field(
-        default_factory=list,
-        description="Suggestions to improve the query"
-    )
-
-
-class FinancialReportTypeClassification(BaseModel):
-    """Structured output for identifying the specific type of financial report."""
-    report_type: Literal["income_statement", "balance_sheet", "cash_flow_statement"] = Field(
-        description="Type of financial report: income_statement (P&L), balance_sheet, or cash_flow_statement"
-    )
-    confidence: float = Field(ge=0.0, le=1.0, description="Confidence score")
-    reasoning: str = Field(description="Brief explanation of why this report type was identified")
 
 
 class ExtractedLineItem(BaseModel):
@@ -189,17 +165,11 @@ class ExtractedDocumentData(BaseModel):
 local_model = get_local_llm("qwen/qwen3-vl-4b")
 gemini = get_chat_model("google_genai:gemini-2.5-flash-lite")
 model = local_model  # Default model
-# Classifier with structured output
+
+# Classifier with structured output for query routing
 classifier = local_model.with_structured_output(QueryClassification)
-    
-# Report type classifier with structured output
-report_type_classifier = local_model.with_structured_output(FinancialReportTypeClassification)
 
-# Validator with structured output
-validator_model = local_model.with_structured_output(FinancialQueryValidation)
-
-# Document extractor with structured output (uses multimodal-capable model)
-# Use a vision-capable model for document extraction
+# Document extractor uses multimodal-capable model for PDF/image processing
 
 
 # =============================================================================
@@ -330,13 +300,12 @@ def extract_file_data(human_msg: HumanMessage) -> dict | None:
 
 
 async def classify_query_node(state: AgentState) -> dict[str, Any]:
-    """Classify the user query into one of four categories.
+    """Classify the user query into one of three categories.
     
     Categories:
     - document_extraction: File attachments (PDFs, images) that need parsing
-    - financial_report: P&L, Balance Sheet, Cash Flow statements
-    - database_analytics: Data exploration (top customers, trends, etc.)
-    - generic: Conversational, explanations, advice
+    - analytics: Data exploration, insights, trends, comparisons, forecasting
+    - generic: Conversational, explanations, advice, non-database queries
     
     Returns updated state with query_type set.
     """
@@ -365,38 +334,37 @@ async def classify_query_node(state: AgentState) -> dict[str, Any]:
     user_query = extract_query_text(human_msg)
     logger.info(f"Classifying query: {user_query[:100]}...")
     
-    classification_prompt = f"""Analyze this query and classify it into ONE of three categories:
+    classification_prompt = f"""Analyze this query and classify it into ONE of two categories:
 
 Query: "{user_query}"
 
 **Categories:**
 
-1. **financial_report**: Formal financial statements
-   - Income Statement, P&L, Profit and Loss
-   - Balance Sheet, Statement of Financial Position
-   - Cash Flow Statement
-   - Require specific time periods and entity context
+1. **analytics**: Data exploration and business intelligence queries that require database access
+   - Insights & Trends: "What were our top-selling products last quarter?"
+   - Comparisons: "Compare sales between Q1 and Q2", "How does this month compare to last year?"
+   - Rankings: "Show top 10 customers by revenue", "Who ordered the most in March?"
+   - Aggregations: "Total revenue by region", "Average order value by segment"
+   - Forecasting: "Based on current trends, what might next month look like?"
+   - Data Discovery: "What tables do we have?", "Show me sample customer data"
+   - Anomaly Detection: "Are there unusual patterns in recent orders?"
+   - Any question that requires querying the database
 
-2. **database_analytics**: Data exploration and business intelligence
-   - "Who ordered the most in March?"
-   - "Show top 10 customers by revenue"
-   - "What products sold best?"
-   - Flexible SQL queries for insights
-
-3. **generic**: Non-data queries and conversation
-   - Explanations of financial concepts
+2. **generic**: Non-data queries and conversation that don't need database access
+   - Explanations of financial or business concepts
    - General business advice
-   - Questions about system usage
-   - No database access needed
+   - Questions about how to use the system
+   - Greetings, clarifications, follow-up conversation
+   - Hypothetical questions not about actual data
 
 **Rules:**
-- Financial REPORT/STATEMENT request → financial_report
-- Data EXPLORATION/ANALYSIS → database_analytics  
-- EXPLANATION/ADVICE/HELP → generic"""
+- If the query asks about ACTUAL DATA (customers, orders, sales, revenue, etc.) → analytics
+- If the query is CONCEPTUAL, ADVICE, or CONVERSATIONAL → generic
+- When in doubt, prefer analytics (we can always explain if no data is found)"""
 
     try:
         result = await classifier.ainvoke([
-            {"role": "system", "content": "Classify queries precisely."},
+            {"role": "system", "content": "Classify queries precisely into analytics or generic."},
             {"role": "user", "content": classification_prompt},
         ])
         
@@ -408,145 +376,34 @@ Query: "{user_query}"
         
         logger.info(f"Query classified as: {query_type}")
         
-        # If it's a financial report, also determine the specific report type
-        report_type = None
-        if query_type == "financial_report":
-            report_type = await _classify_report_type(user_query)
-            logger.info(f"Report type classified as: {report_type}")
-        
-        return {"query_type": query_type, "report_type": report_type}
+        return {"query_type": query_type}
         
     except Exception as e:
         logger.error(f"Classification error: {e}")
-        return {"query_type": "database_analytics", "report_type": None}  # Safe fallback
-
-
-async def _classify_report_type(user_query: str) -> str:
-    """Classify the specific type of financial report being requested.
-    
-    Returns one of: income_statement, balance_sheet, cash_flow_statement
-    """
-    report_type_prompt = f"""Identify what type of financial report is being requested:
-
-Query: "{user_query}"
-
-**Report Types:**
-
-1. **income_statement**: Also known as:
-   - Profit and Loss (P&L)
-   - Profit & Loss Statement
-   - Income Statement
-   - Statement of Operations
-   - Revenue/Expense report
-   - "How much profit/loss did we make?"
-
-2. **balance_sheet**: Also known as:
-   - Balance Sheet
-   - Statement of Financial Position
-   - Assets/Liabilities/Equity report
-   - "What do we own and owe?"
-   - Net worth statement
-
-3. **cash_flow_statement**: Also known as:
-   - Cash Flow Statement
-   - Statement of Cash Flows
-   - Cash movement report
-   - "Where did the money go?"
-   - Sources and uses of cash
-
-Identify which report type best matches the user's request."""
-
-    try:
-        result = await report_type_classifier.ainvoke([
-            {"role": "system", "content": "Identify the specific financial report type."},
-            {"role": "user", "content": report_type_prompt},
-        ])
-        
-        # Handle both Pydantic model and dict responses
-        if isinstance(result, dict):
-            return result.get('report_type', 'income_statement')
-        else:
-            return getattr(result, 'report_type', 'income_statement')
-            
-    except Exception as e:
-        logger.error(f"Report type classification error: {e}")
-        return "income_statement"  # Default fallback
-
-
-async def validate_financial_query_node(state: AgentState) -> dict[str, Any]:
-    """Validate that a financial report query has all required information.
-    
-    Checks for:
-    - Clear report type (P&L, Balance Sheet, Cash Flow)
-    - Entity specification
-    - Time period specification
-    
-    Returns validation status and any issues/suggestions.
-    """
-    logger.info("=== VALIDATE FINANCIAL QUERY NODE ===")
-    
-    messages = state.get("messages", [])
-    human_msg = get_last_human_message(messages)
-    
-    if not human_msg:
-        return {"is_query_valid": False, "validation_issues": ["No query found"]}
-    
-    user_query = extract_query_text(human_msg)
-    
-    validation_prompt = f"""Validate this financial report query:
-
-Query: "{user_query}"
-
-Check if the query includes:
-1. Report type (Income Statement/P&L, Balance Sheet, Cash Flow)
-2. Entity/company name (or if there's only one entity, accept it)
-3. Time period (date range, quarter, month, year, or "as of" date)
-
-If ANY of these are missing, status should be "fail".
-Provide specific suggestions for what information is needed."""
-
-    try:
-        result = await validator_model.ainvoke([
-            {"role": "system", "content": check_financial_prompt},
-            {"role": "user", "content": validation_prompt},
-        ])
-        
-        # Handle both Pydantic model and dict responses
-        if isinstance(result, dict):
-            status = result.get('status', 'fail')
-            missing = result.get('missing_information', [])
-            suggestions = result.get('suggestions', [])
-        else:
-            status = getattr(result, 'status', 'fail')
-            missing = getattr(result, 'missing_information', [])
-            suggestions = getattr(result, 'suggestions', [])
-        
-        is_valid = status == "pass"
-        logger.info(f"Validation result: {'PASS' if is_valid else 'FAIL'}")
-        
-        return {
-            "is_query_valid": is_valid,
-            "validation_issues": missing if not is_valid else None,
-            "validation_suggestions": [{"description": s} for s in suggestions] if suggestions else None,
-        }
-        
-    except Exception as e:
-        logger.error(f"Validation error: {e}")
-        return {"is_query_valid": True}  # Optimistic fallback
+        return {"query_type": "analytics"}  # Safe fallback to analytics
 
 
 async def generic_response_node(state: AgentState) -> dict[str, Any]:
     """Handle generic/conversational queries without database access.
     
     Uses a general-purpose prompt to provide helpful responses about
-    financial concepts, advice, or system usage.
+    financial concepts, advice, or system usage. Enriches response with
+    relevant context from the vector store if available.
     """
     logger.info("=== GENERIC RESPONSE NODE ===")
     
     messages = state.get("messages", [])
+    retrieved_context = state.get("retrieved_context")
+    
+    # Build system prompt with optional context
+    system_content = generic_system_prompt
+    if retrieved_context:
+        context_str = format_retrieved_context(retrieved_context)
+        system_content = f"{generic_system_prompt}\n\n{context_str}\n\nUse the above context to inform your response when relevant."
+        logger.info(f"Including {len(retrieved_context)} context documents in generic response")
     
     response = await model.ainvoke([
-        {"role": "system", "content": generic_system_prompt},
+        {"role": "system", "content": system_content},
         *[{"role": "user" if isinstance(m, HumanMessage) else "assistant", 
            "content": m.content} for m in messages[-5:]]  # Last 5 messages for context
     ])
@@ -560,16 +417,25 @@ async def analytics_agent_node(state: AgentState) -> dict[str, Any]:
     """Handle data analytics queries with SQL tools.
     
     Uses create_agent internally for flexible data exploration queries.
-    This node can execute SQL and generate visualizations.
+    This node can execute SQL and generate visualizations. Enriches
+    queries with relevant context from the vector store.
     """
     logger.info("=== ANALYTICS AGENT NODE ===")
     
+    retrieved_context = state.get("retrieved_context")
+    
+    # Build system prompt with optional context
+    system_prompt = analytics_system_prompt
+    if retrieved_context:
+        context_str = format_retrieved_context(retrieved_context)
+        system_prompt = f"{analytics_system_prompt}\n\n{context_str}\n\nUse the above context to inform your analysis when relevant."
+        logger.info(f"Including {len(retrieved_context)} context documents in analytics")
     
     # Create a sub-agent for analytics with SQL tools
     analytics_agent = create_agent(
         model,
         tools=sql_tools,
-        system_prompt=analytics_system_prompt,
+        system_prompt=system_prompt,
     )
     
     messages = state.get("messages", [])
@@ -590,96 +456,71 @@ async def analytics_agent_node(state: AgentState) -> dict[str, Any]:
     return {"messages": new_messages}
 
 
-async def execute_report_node(state: AgentState) -> dict[str, Any]:
-    """Execute a validated financial report query.
+async def retrieve_context_node(state: AgentState) -> dict[str, Any]:
+    """Retrieve relevant context from the vector store using semantic search.
     
-    Uses create_agent with SQL tools and a report-type-specific prompt
-    to generate formal financial statements. The prompt is selected based
-    on the report_type in state (income_statement, balance_sheet, or cash_flow_statement).
+    This node runs after query classification and before processing nodes.
+    It searches the document store for relevant context that can help
+    answer the user's query more accurately.
+    
+    Returns updated state with retrieved_context populated.
     """
-    logger.info("=== EXECUTE REPORT NODE ===")
-    
-    # Get the report type from state and select the appropriate prompt
-    report_type = state.get("report_type")
-    
-    # Select the appropriate system prompt based on report type
-    if report_type and report_type in report_type_prompts:
-        system_prompt = report_type_prompts[report_type]
-        logger.info(f"Using {report_type} specific prompt")
-    else:
-        # Fallback to generic SQL prompt if report type not recognized
-        system_prompt = sql_system_prompt
-        logger.warning(f"Unknown report type '{report_type}', using generic SQL prompt")
-    
-    # Create a sub-agent for financial reporting with the appropriate prompt
-    report_agent = create_agent(
-        model,
-        tools=sql_tools,
-        system_prompt=system_prompt,
-    )
+    logger.info("=== RETRIEVE CONTEXT NODE ===")
     
     messages = state.get("messages", [])
-    last_msg = get_last_human_message(messages)
+    query_type = state.get("query_type")
     
-    if not last_msg:
-        logger.error("No human message found in execute_report_node")
-        return {"messages": [AIMessage(content="I couldn't find your request. Please try again.", id=str(uuid.uuid4()))]}
+    # Skip context retrieval for document extraction (the document IS the context)
+    if query_type == "document_extraction":
+        logger.info("Skipping context retrieval for document extraction")
+        return {"retrieved_context": None}
     
-    human_msg = last_msg.content
-    logger.info(f"Executing {report_type or 'financial'} report for query: {str(human_msg)[:100]}...")
+    # Get the user's query
+    human_msg = get_last_human_message(messages)
+    if not human_msg:
+        logger.warning("No human message found for context retrieval")
+        return {"retrieved_context": None}
     
-    # Run the report agent - cast to list for compatibility
-    result = await report_agent.ainvoke({"messages": [{"role": "user", "content": human_msg}]})  # type: ignore
+    user_query = extract_query_text(human_msg)
+    logger.info(f"Retrieving context for query: {user_query[:100]}...")
     
-    new_messages = result.get("messages", [])
-    
-    return {"messages": new_messages}
+    try:
+        # Perform semantic search
+        search_results = await embedding_service.search_documents(
+            query=user_query,
+            limit=5  # Retrieve top 5 relevant documents
+        )
+        
+        # Filter out error results
+        valid_results = [r for r in search_results if "error" not in r]
+        
+        if valid_results:
+            logger.info(f"Retrieved {len(valid_results)} relevant context documents")
+        else:
+            logger.info("No relevant context found in vector store")
+        
+        return {"retrieved_context": valid_results if valid_results else None}
+        
+    except Exception as e:
+        logger.error(f"Error retrieving context: {e}")
+        return {"retrieved_context": None}
 
 
-async def clarify_query_node(state: AgentState) -> dict[str, Any]:
-    """Ask the user for clarification when a financial query is incomplete.
+def format_retrieved_context(context: list[dict] | None) -> str:
+    """Format retrieved context documents into a string for LLM consumption."""
+    if not context:
+        return ""
     
-    Uses the validation issues and suggestions to construct a helpful
-    clarification message.
-    """
-    logger.info("=== CLARIFY QUERY NODE ===")
+    formatted_parts = ["## Relevant Context from Knowledge Base:\n"]
     
-    issues = state.get("validation_issues", [])
-    suggestions = state.get("validation_suggestions", [])
+    for i, doc in enumerate(context, 1):
+        content = doc.get("content", "")
+        metadata = doc.get("metadata", {})
+        source = metadata.get("source", "Unknown source")
+        
+        formatted_parts.append(f"### Document {i} (Source: {source})\n{content}\n")
     
-    # Format issues and suggestions
-    issues_text = "\n".join(f"- {issue}" for issue in issues) if issues else "The query needs more details."
-    
-    suggestions_text = ""
-    if suggestions:
-        # Handle suggestions that can be either strings or dicts
-        formatted_suggestions = []
-        for s in suggestions:
-            if isinstance(s, dict):
-                formatted_suggestions.append(f"- {s.get('description', str(s))}")
-            else:
-                formatted_suggestions.append(f"- {s}")
-        suggestions_text = "\n\nHere are some suggestions:\n" + "\n".join(formatted_suggestions)
-    
-    clarification_prompt = f"""You are a financial assistant. The user asked a question, but it needs more detail.
-
-Issues identified:
-{issues_text}
-{suggestions_text}
-
-Politely ask the user to provide the missing information. Be specific about what you need."""
-
-    messages = state.get("messages", [])
-    
-    response = await model.ainvoke([
-        {"role": "system", "content": clarification_prompt},
-        *[{"role": "user" if isinstance(m, HumanMessage) else "assistant", 
-           "content": m.content} for m in messages[-3:]]
-    ])
-    
-    ai_message = AIMessage(content=response.content, id=str(uuid.uuid4()))
-    
-    return {"messages": [ai_message]}
+    return "\n".join(formatted_parts)
 
 
 async def extract_document_node(state: AgentState) -> dict[str, Any]:
@@ -1044,32 +885,24 @@ Return ONLY valid JSON, no explanation."""
 # =============================================================================
 
 
-def route_by_query_type(state: AgentState) -> Literal["generic_response", "analytics_agent", "validate_financial", "extract_document"]:
-    """Route to appropriate handler based on query classification."""
+def route_by_query_type(state: AgentState) -> Literal["generic_response", "analytics_agent", "extract_document"]:
+    """Route to appropriate handler based on query classification.
+    
+    Routes:
+    - document_extraction → extract_document
+    - analytics → analytics_agent
+    - generic → generic_response
+    """
     query_type = state.get("query_type", "generic")
     
     logger.info(f"Routing based on query_type: {query_type}")
     
     if query_type == "document_extraction":
         return "extract_document"
-    elif query_type == "generic":
-        return "generic_response"
-    elif query_type == "database_analytics":
+    elif query_type == "analytics":
         return "analytics_agent"
-    else:  # financial_report
-        return "validate_financial"
-
-
-def route_by_validation(state: AgentState) -> Literal["execute_report", "clarify_query"]:
-    """Route based on whether the financial query passed validation."""
-    is_valid = state.get("is_query_valid", False)
-    
-    logger.info(f"Routing based on validation: {'PASS' if is_valid else 'FAIL'}")
-    
-    if is_valid:
-        return "execute_report"
-    else:
-        return "clarify_query"
+    else:  # generic
+        return "generic_response"
 
 
 # =============================================================================
@@ -1077,18 +910,17 @@ def route_by_validation(state: AgentState) -> Literal["execute_report", "clarify
 # =============================================================================
 
 
-def create_financial_agent_graph() -> StateGraph:
-    """Create and compile the financial agent graph.
+def create_analytics_agent_graph() -> StateGraph:
+    """Create and compile the ad-hoc analytics agent graph.
     
     Graph structure:
-        START → classify_query
-        classify_query → [route_by_query_type]
+        START → classify_query → retrieve_context → [route_by_query_type]
             → extract_document → END
             → generic_response → END
             → analytics_agent → push_visualization → END
-            → validate_financial → [route_by_validation]
-                → execute_report → push_visualization → END
-                → clarify_query → END
+    
+    The retrieve_context node performs semantic search to enrich queries
+    with relevant context from the vector store before processing.
     """
     
     # Create the graph with our state schema
@@ -1096,26 +928,26 @@ def create_financial_agent_graph() -> StateGraph:
     
     # Add all nodes
     builder.add_node("classify_query", classify_query_node)
+    builder.add_node("retrieve_context", retrieve_context_node)
     builder.add_node("extract_document", extract_document_node)
     builder.add_node("generic_response", generic_response_node)
     builder.add_node("analytics_agent", analytics_agent_node)
-    builder.add_node("validate_financial", validate_financial_query_node)
-    builder.add_node("execute_report", execute_report_node)
-    builder.add_node("clarify_query", clarify_query_node)
     builder.add_node("push_visualization", push_visualization_node)
     
     # Add edges
     builder.add_edge(START, "classify_query")
     
-    # Conditional routing after classification
+    # After classification, retrieve relevant context
+    builder.add_edge("classify_query", "retrieve_context")
+    
+    # Conditional routing after context retrieval
     builder.add_conditional_edges(
-        "classify_query",
+        "retrieve_context",
         route_by_query_type,
         {
             "extract_document": "extract_document",
             "generic_response": "generic_response",
             "analytics_agent": "analytics_agent",
-            "validate_financial": "validate_financial",
         }
     )
     
@@ -1129,22 +961,6 @@ def create_financial_agent_graph() -> StateGraph:
     builder.add_edge("analytics_agent", "push_visualization")
     builder.add_edge("push_visualization", END)
     
-    # Conditional routing after validation
-    builder.add_conditional_edges(
-        "validate_financial",
-        route_by_validation,
-        {
-            "execute_report": "execute_report",
-            "clarify_query": "clarify_query",
-        }
-    )
-    
-    # Report execution goes through visualization
-    builder.add_edge("execute_report", "push_visualization")
-    
-    # Clarification goes straight to END
-    builder.add_edge("clarify_query", END)
-    
     return builder
 
 
@@ -1154,12 +970,12 @@ def create_financial_agent_graph() -> StateGraph:
 
 
 # Create and compile the graph
-graph_builder = create_financial_agent_graph()
-agent = graph_builder.compile(name="threadwise-financial-agent")
+graph_builder = create_analytics_agent_graph()
+agent = graph_builder.compile(name="threadwise-analytics-agent")
 
 
 # =============================================================================
 # EXPORTS
 # =============================================================================
 
-__all__ = ["agent", "AgentState", "create_financial_agent_graph"]
+__all__ = ["agent", "AgentState", "create_analytics_agent_graph"]
