@@ -101,6 +101,7 @@ class EmbedFileRequest(BaseModel):
     """Request model for file embedding from storage"""
     file_type: str
     file_url: str
+    entity_id: Optional[str] = None  # Optional tenant/entity scoping
 
 
 class EmbedFileResponse(BaseModel):
@@ -109,6 +110,12 @@ class EmbedFileResponse(BaseModel):
     documentId: Optional[str] = None
     chunks: Optional[int] = None
     filename: str
+    text_length: Optional[int] = None
+    document_category: Optional[str] = None
+    entity_id: Optional[str] = None
+    namespace: Optional[str] = None  # Pinecone namespace for multi-tenancy
+    hybrid_enabled: Optional[bool] = None  # Whether sparse vectors were stored
+    sparse_vector_count: Optional[int] = None  # Number of chunks with sparse vectors
     error: Optional[str] = None
 
 
@@ -116,11 +123,29 @@ class SearchRequest(BaseModel):
     """Request model for document search"""
     query: str
     limit: Optional[int] = 5
+    namespace: Optional[str] = None  # Pinecone namespace for multi-tenancy
+    filter_metadata: Optional[Dict[str, Any]] = None  # Pinecone filter format, e.g., {"document_category": {"$eq": "invoice"}}
+    similarity_threshold: Optional[float] = 0.7  # Minimum similarity score (0-1)
+
+
+class HybridSearchRequest(BaseModel):
+    """Request model for hybrid document search (semantic + lexical)"""
+    query: str
+    limit: Optional[int] = 5
+    namespace: Optional[str] = None
+    filter_metadata: Optional[Dict[str, Any]] = None
+    alpha: Optional[float] = 0.7  # Balance: 1.0=pure semantic, 0.0=pure lexical
+    similarity_threshold: Optional[float] = 0.0  # Lower threshold for hybrid
 
 
 class SearchResponse(BaseModel):
     """Response model for document search"""
     results: List[dict]
+    query: str
+    namespace: Optional[str] = None
+    filters_applied: Optional[Dict[str, Any]] = None
+    search_type: Optional[str] = "semantic"  # "semantic" or "hybrid"
+    alpha: Optional[float] = None  # Only for hybrid search
 
 
 # Legacy message models (for backwards compatibility)
@@ -288,27 +313,28 @@ async def create_assistant(request: CreateAssistantRequest):
 # ===========================================
 
 @app.get("/embeddings/health")
-def embeddings_health():
+async def embeddings_health():
     """Check embedding service health."""
     if not embedding_service:
         return {"status": "error", "message": "Embedding service not available"}
     
     try:
-        # Simple health check for embedding service
-        return {
-            "status": "healthy",
-            "service": "embedding_service",
-            "model": embedding_service.embeddings.model_name,
-            "vector_store": embedding_service.supabase.storage.list_buckets(),
-            "timestamp": datetime.now().isoformat()
-        }
+        # Full health check including Pinecone connection
+        health_status = await embedding_service.health_check()
+        health_status["timestamp"] = datetime.now().isoformat()
+        return health_status
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
 
 @app.post("/embeddings/embed", response_model=EmbedFileResponse)
 async def embed_file(request: EmbedFileRequest):
-    """Embed a file from Supabase storage."""
+    """Embed a file with enriched metadata into Pinecone vector store.
+    
+    The file will be automatically categorized based on filename patterns.
+    Provide entity_id for multi-tenant namespace isolation - each entity_id
+    maps to a separate Pinecone namespace for efficient data isolation.
+    """
     if not embedding_service:
         raise HTTPException(status_code=503, detail="Embedding service not available")
     
@@ -316,7 +342,8 @@ async def embed_file(request: EmbedFileRequest):
         result = await embedding_service.embed_file(
             file_url=request.file_url,
             filename=request.file_url.split("/")[-1],
-            file_type=request.file_type
+            file_type=request.file_type,
+            entity_id=request.entity_id
         )
         return EmbedFileResponse(**result)
     except Exception as e:
@@ -326,36 +353,189 @@ async def embed_file(request: EmbedFileRequest):
 
 @app.post("/embeddings/search", response_model=SearchResponse)
 async def search_documents(request: SearchRequest):
-    """Search documents using vector similarity."""
+    """Search documents using dense (semantic) vector similarity.
+    
+    This is pure semantic search - matches by meaning and relationships.
+    For combined semantic + keyword search, use /embeddings/hybrid-search.
+    
+    Pinecone filter examples (use operator syntax):
+    - {"document_category": {"$eq": "invoice"}} - Only invoice documents
+    - {"file_type": {"$eq": "application/pdf"}} - Only PDF documents
+    - {"chunk_index": {"$lt": 5}} - Only first 5 chunks
+    
+    Namespace: Use namespace parameter for multi-tenant searches. If not provided,
+    searches in the "default" namespace.
+    """
     if not embedding_service:
         raise HTTPException(status_code=503, detail="Embedding service not available")
     
     try:
         results = await embedding_service.search_documents(
             query=request.query,
-            limit=request.limit or 5
+            limit=request.limit or 5,
+            namespace=request.namespace,
+            filter_metadata=request.filter_metadata,
+            similarity_threshold=request.similarity_threshold or 0.7
         )
-        return SearchResponse(results=results)
+        return SearchResponse(
+            results=results,
+            query=request.query,
+            namespace=request.namespace,
+            filters_applied=request.filter_metadata,
+            search_type="semantic"
+        )
     except Exception as e:
         logger.error(f"Search error: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.delete("/embeddings/{filename}")
-async def delete_document_embeddings(filename: str):
-    """Delete embeddings for a specific document."""
+@app.post("/embeddings/hybrid-search", response_model=SearchResponse)
+async def hybrid_search_documents(request: HybridSearchRequest):
+    """Search documents using hybrid (semantic + lexical) search.
+    
+    Hybrid search combines:
+    - Dense vectors (semantic): Captures meaning and relationships
+    - Sparse vectors (lexical): Captures exact keyword matches
+    
+    Alpha parameter controls the balance:
+    - alpha=1.0: Pure semantic search (meaning-based)
+    - alpha=0.0: Pure lexical search (keyword-based)
+    - alpha=0.7: Recommended default (70% semantic, 30% lexical)
+    
+    Use cases:
+    - alpha=0.7-0.8: General document search (best for most cases)
+    - alpha=0.5: Balanced search (good for mixed queries)
+    - alpha=0.2-0.3: Keyword-focused (good for exact terms, IDs, codes)
+    
+    Example:
+        {"query": "Q3 revenue analysis", "alpha": 0.7}  # General search
+        {"query": "invoice #12345", "alpha": 0.3}  # Exact term search
+    """
     if not embedding_service:
         raise HTTPException(status_code=503, detail="Embedding service not available")
     
     try:
-        result = await embedding_service.delete_document_embeddings(filename)
-        return result
+        results = await embedding_service.hybrid_search(
+            query=request.query,
+            limit=request.limit or 5,
+            namespace=request.namespace,
+            filter_metadata=request.filter_metadata,
+            alpha=request.alpha or 0.7,
+            similarity_threshold=request.similarity_threshold or 0.0
+        )
+        return SearchResponse(
+            results=results,
+            query=request.query,
+            namespace=request.namespace,
+            filters_applied=request.filter_metadata,
+            search_type="hybrid",
+            alpha=request.alpha or 0.7
+        )
+    except Exception as e:
+        logger.error(f"Hybrid search error: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class DeleteEmbeddingsRequest(BaseModel):
+    """Request model for deleting embeddings"""
+    filename: Optional[str] = None
+    document_id: Optional[str] = None  # More precise deletion by document_id
+    namespace: Optional[str] = None  # Namespace to delete from
+
+
+@app.delete("/embeddings")
+async def delete_document_embeddings(request: DeleteEmbeddingsRequest):
+    """Delete embeddings for a specific document by filename or document_id.
+    
+    Provide either filename or document_id (document_id is more precise).
+    Uses hierarchical vector IDs for efficient deletion.
+    """
+    if not embedding_service:
+        raise HTTPException(status_code=503, detail="Embedding service not available")
+    
+    if not request.filename and not request.document_id:
+        raise HTTPException(status_code=400, detail="Must provide either filename or document_id")
+    
+    try:
+        result = await embedding_service.delete_file_embeddings(
+            filename=request.filename,
+            document_id=request.document_id,
+            namespace=request.namespace
+        )
+        return {
+            "success": result,
+            "deleted_by": "document_id" if request.document_id else "filename",
+            "identifier": request.document_id or request.filename,
+            "namespace": request.namespace or "default"
+        }
     except Exception as e:
         logger.error(f"Delete embeddings error: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/embeddings/categories")
+async def list_document_categories():
+    """List available document categories for filtering."""
+    return {
+        "categories": [
+            {"name": "invoice", "patterns": ["invoice", "bill", "receipt"]},
+            {"name": "contract", "patterns": ["contract", "agreement", "terms"]},
+            {"name": "report", "patterns": ["report", "analysis", "summary"]},
+            {"name": "financial", "patterns": ["financial", "statement", "balance", "p&l", "profit"]},
+            {"name": "legal", "patterns": ["legal", "compliance", "regulation"]},
+            {"name": "hr", "patterns": ["employee", "hr", "payroll", "personnel"]},
+            {"name": "general", "patterns": []},
+        ],
+        "usage": "Use category name in filter_metadata with Pinecone operator syntax when searching, e.g., {\"document_category\": {\"$eq\": \"invoice\"}}",
+        "operators": ["$eq", "$ne", "$gt", "$gte", "$lt", "$lte", "$in", "$nin"]
+    }
 
+
+@app.get("/embeddings/stats")
+async def get_index_stats():
+    """Get Pinecone index statistics including namespace breakdown."""
+    if not embedding_service:
+        raise HTTPException(status_code=503, detail="Embedding service not available")
+    
+    try:
+        stats = await embedding_service.get_index_stats()
+        return stats
+    except Exception as e:
+        logger.error(f"Get index stats error: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class DeleteNamespaceRequest(BaseModel):
+    """Request model for deleting an entire namespace"""
+    namespace: str
+
+
+@app.delete("/embeddings/namespace")
+async def delete_namespace(request: DeleteNamespaceRequest):
+    """Delete an entire namespace (all documents for a tenant).
+    
+    WARNING: This permanently deletes all vectors in the namespace.
+    Useful for tenant offboarding or complete data cleanup.
+    """
+    if not embedding_service:
+        raise HTTPException(status_code=503, detail="Embedding service not available")
+    
+    if not request.namespace or request.namespace == "default":
+        raise HTTPException(
+            status_code=400, 
+            detail="Cannot delete the default namespace. Specify a tenant namespace."
+        )
+    
+    try:
+        result = await embedding_service.delete_namespace(request.namespace)
+        return {
+            "success": result,
+            "namespace": request.namespace,
+            "message": f"Namespace '{request.namespace}' deleted successfully" if result else "Deletion failed"
+        }
+    except Exception as e:
+        logger.error(f"Delete namespace error: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.get("/stats")

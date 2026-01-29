@@ -4,16 +4,25 @@ This module implements a custom graph-based agent for ad-hoc database exploratio
 and business intelligence using LangGraph's StateGraph API with dedicated nodes for:
 - Query classification (analytics vs generic)
 - Semantic search context retrieval
+- Context sufficiency evaluation (LLM decides if context answers the query)
 - SQL-based data exploration (insights, trends, comparisons)
 - Document extraction from uploads
 - Generative UI (charts, tables, metrics)
 
 Architecture:
-    START → classify_query → retrieve_context → [route based on type]
-    
-    Generic:            generic_response → END
-    Analytics:          analytics_agent → push_visualization → END
-    Document Extraction: extract_document → END
+    START → classify_query → retrieve_context → evaluate_context_sufficiency
+        → [route_by_context_sufficiency]
+            → context_response → END  (if context is sufficient)
+            → [route_by_query_type]   (if context not sufficient)
+                → extract_document → END
+                → generic_response → END
+                → analytics_agent → push_visualization → END
+
+Key Feature - Context Sufficiency Evaluation:
+    After retrieving context from the vector store, an LLM evaluates whether
+    the retrieved documents fully answer the user's question. If sufficient,
+    the agent responds directly without needing database queries or additional
+    processing. This enables faster responses for knowledge-based queries.
 
 Capabilities:
 - Insights & Trends: "What were our top-selling products last quarter?"
@@ -22,6 +31,7 @@ Capabilities:
 - Data Discovery: "What tables do we have?", "Show me sample customer data"
 - Aggregations: "Total revenue by region", "Average order value"
 - Anomaly Detection: "Are there unusual patterns in recent orders?"
+- Knowledge Queries: Direct answers from embedded documents when context is sufficient
 """
 
 import json
@@ -78,6 +88,9 @@ class AgentState(TypedDict):
     model: str | None
     # Semantic search context
     retrieved_context: list[dict] | None
+    # Context sufficiency evaluation
+    context_sufficient: bool | None
+    context_response: str | None  # Pre-generated response if context is sufficient
 
 
 # =============================================================================
@@ -98,6 +111,28 @@ class QueryClassification(BaseModel):
     )
     confidence: float = Field(ge=0.0, le=1.0, description="Confidence score")
     reasoning: str = Field(description="Brief explanation of classification")
+
+
+class ContextSufficiency(BaseModel):
+    """Structured output for evaluating if retrieved context sufficiently answers the query.
+    
+    The LLM evaluates whether the retrieved documents provide enough information
+    to answer the user's question directly, or if additional processing is needed.
+    """
+    is_sufficient: bool = Field(
+        description="True if the retrieved context fully answers the user's query, False if more processing is needed"
+    )
+    confidence: float = Field(
+        ge=0.0, le=1.0, 
+        description="Confidence in the sufficiency assessment"
+    )
+    reasoning: str = Field(
+        description="Brief explanation of why context is or isn't sufficient"
+    )
+    suggested_response: str | None = Field(
+        default=None,
+        description="If sufficient, a draft response based on the context. None if not sufficient."
+    )
 
 
 class ExtractedLineItem(BaseModel):
@@ -168,6 +203,9 @@ model = local_model  # Default model
 
 # Classifier with structured output for query routing
 classifier = local_model.with_structured_output(QueryClassification)
+
+# Context sufficiency evaluator - decides if retrieved context answers the query
+context_evaluator = local_model.with_structured_output(ContextSufficiency)
 
 # Document extractor uses multimodal-capable model for PDF/image processing
 
@@ -241,8 +279,8 @@ def extract_file_data(human_msg: HumanMessage) -> dict | None:
     for block in content:
         if isinstance(block, dict) and block.get("type") != "text":
             block_type = block.get("type", "")
-            with open("message", "a" ) as f:
-                f.write(f"The block type: {block_type}\n The mime type: {block.get('mime_type')}\n The data: {block.get('data')}\n")
+            # with open("message", "a" ) as f:
+            #     f.write(f"The block type: {block_type}\n The mime type: {block.get('mime_type')}\n The data: {block.get('data')}\n")
 
 
             
@@ -486,7 +524,7 @@ async def retrieve_context_node(state: AgentState) -> dict[str, Any]:
     
     try:
         # Perform semantic search
-        search_results = await embedding_service.search_documents(
+        search_results = await embedding_service.hybrid_search(
             query=user_query,
             limit=5  # Retrieve top 5 relevant documents
         )
@@ -521,6 +559,151 @@ def format_retrieved_context(context: list[dict] | None) -> str:
         formatted_parts.append(f"### Document {i} (Source: {source})\n{content}\n")
     
     return "\n".join(formatted_parts)
+
+
+async def evaluate_context_sufficiency_node(state: AgentState) -> dict[str, Any]:
+    """Evaluate if the retrieved context is sufficient to answer the user's query.
+    
+    This node uses an LLM to determine whether the retrieved documents contain
+    enough information to directly answer the user's question, or if additional
+    processing (analytics, database queries, etc.) is needed.
+    
+    Decision criteria:
+    - SUFFICIENT: The context directly answers the question with clear, complete info
+    - NOT SUFFICIENT: The question requires computation, database access, or info not in context
+    
+    Returns updated state with context_sufficient and optionally context_response.
+    """
+    logger.info("=== EVALUATE CONTEXT SUFFICIENCY NODE ===")
+    
+    messages = state.get("messages", [])
+    query_type = state.get("query_type")
+    retrieved_context = state.get("retrieved_context")
+    
+    # Skip evaluation for document extraction - always needs processing
+    if query_type == "document_extraction":
+        logger.info("Skipping sufficiency check for document extraction")
+        return {"context_sufficient": False, "context_response": None}
+    
+    # If no context was retrieved, definitely not sufficient
+    if not retrieved_context:
+        logger.info("No context retrieved - marking as not sufficient")
+        return {"context_sufficient": False, "context_response": None}
+    
+    # Get the user's query
+    human_msg = get_last_human_message(messages)
+    if not human_msg:
+        return {"context_sufficient": False, "context_response": None}
+    
+    user_query = extract_query_text(human_msg)
+    context_str = format_retrieved_context(retrieved_context)
+    
+    evaluation_prompt = f"""Evaluate whether the provided context is sufficient to fully answer the user's question.
+
+## User's Question:
+{user_query}
+
+## Retrieved Context:
+{context_str}
+
+## Evaluation Criteria:
+
+**Mark as SUFFICIENT (is_sufficient=true) if:**
+- The context directly and completely answers the question
+- All information needed is present in the documents
+- No calculations, aggregations, or database queries are needed
+- The answer can be derived purely from reading the context
+
+**Mark as NOT SUFFICIENT (is_sufficient=false) if:**
+- The question asks for specific data/metrics not in the context
+- The question requires database queries, calculations, or aggregations
+- The question asks about real-time or recent data not in documents
+- The context is related but doesn't fully answer the question
+- The question is about analytics, trends, or comparisons needing computation
+
+## Important:
+- For analytics queries (data exploration, insights, trends), lean toward NOT SUFFICIENT
+- For informational queries about documented knowledge, lean toward SUFFICIENT
+- If uncertain, mark as NOT SUFFICIENT to ensure thorough processing
+
+If sufficient, provide a complete, helpful response in suggested_response.
+If not sufficient, set suggested_response to null."""
+
+    try:
+        result = await context_evaluator.ainvoke([
+            {"role": "system", "content": "You evaluate whether retrieved context answers user queries. Be conservative - if in doubt, say it's not sufficient."},
+            {"role": "user", "content": evaluation_prompt},
+        ])
+        
+        # Handle both Pydantic model and dict responses
+        if isinstance(result, dict):
+            is_sufficient = result.get('is_sufficient', False)
+            confidence = result.get('confidence', 0.0)
+            reasoning = result.get('reasoning', '')
+            suggested_response = result.get('suggested_response')
+        else:
+            is_sufficient = getattr(result, 'is_sufficient', False)
+            confidence = getattr(result, 'confidence', 0.0)
+            reasoning = getattr(result, 'reasoning', '')
+            suggested_response = getattr(result, 'suggested_response', None)
+        
+        logger.info(f"Context sufficiency: {is_sufficient} (confidence: {confidence:.2f})")
+        logger.info(f"Reasoning: {reasoning}")
+        
+        # Only mark as sufficient if confidence is high enough
+        if is_sufficient and confidence < 0.7:
+            logger.info("Low confidence - proceeding with full processing")
+            is_sufficient = False
+            suggested_response = None
+        
+        return {
+            "context_sufficient": is_sufficient,
+            "context_response": suggested_response if is_sufficient else None,
+        }
+        
+    except Exception as e:
+        logger.error(f"Context evaluation error: {e}")
+        # On error, proceed with full processing
+        return {"context_sufficient": False, "context_response": None}
+
+
+async def context_response_node(state: AgentState) -> dict[str, Any]:
+    """Generate a response directly from the evaluated context.
+    
+    This node is called when the context sufficiency evaluation determined
+    that the retrieved context fully answers the user's question.
+    Uses the pre-generated response from the evaluation or generates a new one.
+    """
+    logger.info("=== CONTEXT RESPONSE NODE ===")
+    
+    context_response = state.get("context_response")
+    retrieved_context = state.get("retrieved_context")
+    messages = state.get("messages", [])
+    
+    # Use pre-generated response if available
+    if context_response:
+        logger.info("Using pre-generated context response")
+        response_content = context_response
+    else:
+        # Generate response from context (fallback)
+        logger.info("Generating response from context")
+        human_msg = get_last_human_message(messages)
+        user_query = extract_query_text(human_msg) if human_msg else ""
+        context_str = format_retrieved_context(retrieved_context)
+        
+        response = await model.ainvoke([
+            {"role": "system", "content": f"""You are a helpful assistant. Answer the user's question based on the provided context.
+            
+{context_str}
+
+Provide a clear, comprehensive answer based on this context. If the context doesn't fully answer the question, acknowledge any limitations."""},
+            {"role": "user", "content": user_query},
+        ])
+        response_content = response.content
+    
+    ai_message = AIMessage(content=response_content, id=str(uuid.uuid4()))
+    
+    return {"messages": [ai_message]}
 
 
 async def extract_document_node(state: AgentState) -> dict[str, Any]:
@@ -563,7 +746,7 @@ async def extract_document_node(state: AgentState) -> dict[str, Any]:
             )]
         }
     
-    logger.info(f"Processing document: type={file_data['type']}, mime={file_data['mime_type']}")
+    # logger.info(f"Processing document: type={file_data['type']}, mime={file_data['mime_type']}")
     
     # Build multimodal message for the LLM
     # The content format follows LangChain's multimodal message structure
@@ -885,6 +1068,29 @@ Return ONLY valid JSON, no explanation."""
 # =============================================================================
 
 
+def route_by_context_sufficiency(state: AgentState) -> Literal["context_response", "route_by_type"]:
+    """Route based on whether retrieved context is sufficient to answer the query.
+    
+    Routes:
+    - context_sufficient=True → context_response (direct answer from context)
+    - context_sufficient=False → route_by_type (continue to appropriate handler)
+    """
+    context_sufficient = state.get("context_sufficient", False)
+    query_type = state.get("query_type")
+    
+    # Document extraction always needs processing
+    if query_type == "document_extraction":
+        logger.info("Document extraction - skipping context response")
+        return "route_by_type"
+    
+    if context_sufficient:
+        logger.info("Context is sufficient - routing to direct response")
+        return "context_response"
+    else:
+        logger.info("Context not sufficient - continuing to specialized handler")
+        return "route_by_type"
+
+
 def route_by_query_type(state: AgentState) -> Literal["generic_response", "analytics_agent", "extract_document"]:
     """Route to appropriate handler based on query classification.
     
@@ -914,13 +1120,17 @@ def create_analytics_agent_graph() -> StateGraph:
     """Create and compile the ad-hoc analytics agent graph.
     
     Graph structure:
-        START → classify_query → retrieve_context → [route_by_query_type]
-            → extract_document → END
-            → generic_response → END
-            → analytics_agent → push_visualization → END
+        START → classify_query → retrieve_context → evaluate_context_sufficiency
+            → [route_by_context_sufficiency]
+                → context_response → END  (if context is sufficient)
+                → [route_by_query_type]   (if context not sufficient)
+                    → extract_document → END
+                    → generic_response → END
+                    → analytics_agent → push_visualization → END
     
-    The retrieve_context node performs semantic search to enrich queries
-    with relevant context from the vector store before processing.
+    The evaluate_context_sufficiency node uses an LLM to determine if the
+    retrieved context fully answers the query, enabling early exit when
+    document context is sufficient without needing database/analytics processing.
     """
     
     # Create the graph with our state schema
@@ -929,6 +1139,8 @@ def create_analytics_agent_graph() -> StateGraph:
     # Add all nodes
     builder.add_node("classify_query", classify_query_node)
     builder.add_node("retrieve_context", retrieve_context_node)
+    builder.add_node("evaluate_context_sufficiency", evaluate_context_sufficiency_node)
+    builder.add_node("context_response", context_response_node)
     builder.add_node("extract_document", extract_document_node)
     builder.add_node("generic_response", generic_response_node)
     builder.add_node("analytics_agent", analytics_agent_node)
@@ -940,9 +1152,30 @@ def create_analytics_agent_graph() -> StateGraph:
     # After classification, retrieve relevant context
     builder.add_edge("classify_query", "retrieve_context")
     
-    # Conditional routing after context retrieval
+    # After context retrieval, evaluate if context is sufficient
+    builder.add_edge("retrieve_context", "evaluate_context_sufficiency")
+    
+    # Conditional routing based on context sufficiency
     builder.add_conditional_edges(
-        "retrieve_context",
+        "evaluate_context_sufficiency",
+        route_by_context_sufficiency,
+        {
+            "context_response": "context_response",
+            "route_by_type": "route_by_type_node",
+        }
+    )
+    
+    # Add a pass-through node for query type routing
+    # (needed because conditional edges need a target node)
+    async def route_by_type_passthrough(state: AgentState) -> dict[str, Any]:
+        """Pass-through node for query type routing."""
+        return {}
+    
+    builder.add_node("route_by_type_node", route_by_type_passthrough)
+    
+    # Route from pass-through to appropriate handler
+    builder.add_conditional_edges(
+        "route_by_type_node",
         route_by_query_type,
         {
             "extract_document": "extract_document",
@@ -950,6 +1183,9 @@ def create_analytics_agent_graph() -> StateGraph:
             "analytics_agent": "analytics_agent",
         }
     )
+    
+    # Context-based response goes straight to END
+    builder.add_edge("context_response", END)
     
     # Document extraction goes straight to END
     builder.add_edge("extract_document", END)

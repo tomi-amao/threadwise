@@ -3,6 +3,10 @@
 		"langchain": {
 			"url": "https://docs.langchain.com/mcp",
 			"type": "http"
+		},
+		"pinecone": {
+			"url": "https://docs.pinecone.io/mcp",
+			"type": "http"
 		}
 	},
 	"inputs": []
