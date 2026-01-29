@@ -69,3 +69,8 @@ Comparing LoadExternalComponent to LocalUIRenderer
 | Network Request          | Fetches component JS from LangGraph server | No extra requests – components are local |
 | Requires `langgraph dev` | ✅ Yes                                     | ❌ No                                    |
 | Works with any server    | ❌ Only LangGraph CLI                      | ✅ Yes (uvicorn, Docker, etc.)           |
+
+Further improvements including adding semantic search for memories, caching requests
+
+Changed to pinecone vector store as it enables hybrid search capability, lexical and semantic search
+Additionally it includes reranking to improve document relevantcy
