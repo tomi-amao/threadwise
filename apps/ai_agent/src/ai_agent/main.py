@@ -136,6 +136,8 @@ class HybridSearchRequest(BaseModel):
     filter_metadata: Optional[Dict[str, Any]] = None
     alpha: Optional[float] = 0.7  # Balance: 1.0=pure semantic, 0.0=pure lexical
     similarity_threshold: Optional[float] = 0.0  # Lower threshold for hybrid
+    rerank: Optional[bool] = True  # Enable reranking for improved relevance
+    rerank_candidates_multiplier: Optional[int] = 3  # Retrieve N×limit candidates for reranking
 
 
 class SearchResponse(BaseModel):
@@ -391,44 +393,89 @@ async def search_documents(request: SearchRequest):
 
 @app.post("/embeddings/hybrid-search", response_model=SearchResponse)
 async def hybrid_search_documents(request: HybridSearchRequest):
-    """Search documents using hybrid (semantic + lexical) search.
+    """Search documents using hybrid (semantic + lexical) search with optional reranking.
     
-    Hybrid search combines:
+    ## Two-Stage Retrieval Architecture:
+    
+    **Stage 1 - Hybrid Search:** Combines semantic and lexical matching
     - Dense vectors (semantic): Captures meaning and relationships
     - Sparse vectors (lexical): Captures exact keyword matches
     
-    Alpha parameter controls the balance:
+    **Stage 2 - Reranking (default: enabled):** Cross-encoder model re-scores results
+    - Uses bge-reranker-v2-m3 for precise relevance scoring
+    - Retrieves more candidates initially, returns top N after reranking
+    - Significantly improves relevance for RAG pipelines
+    
+    ## Parameters:
+    
+    **alpha** (float, 0.0-1.0): Balance between semantic and lexical search
     - alpha=1.0: Pure semantic search (meaning-based)
     - alpha=0.0: Pure lexical search (keyword-based)
     - alpha=0.7: Recommended default (70% semantic, 30% lexical)
     
-    Use cases:
-    - alpha=0.7-0.8: General document search (best for most cases)
-    - alpha=0.5: Balanced search (good for mixed queries)
-    - alpha=0.2-0.3: Keyword-focused (good for exact terms, IDs, codes)
+    **rerank** (bool): Enable/disable reranking
+    - true (default): Two-stage retrieval with reranking (best quality)
+    - false: Single-stage hybrid search only (faster, less accurate)
     
-    Example:
-        {"query": "Q3 revenue analysis", "alpha": 0.7}  # General search
-        {"query": "invoice #12345", "alpha": 0.3}  # Exact term search
+    **rerank_candidates_multiplier** (int): Candidate retrieval multiplier
+    - Default: 3 (retrieves 3× limit candidates for reranking)
+    - Higher values: More candidates to choose from (slower but potentially better)
+    - Lower values: Fewer candidates (faster but may miss relevant results)
+    
+    ## Use Cases:
+    
+    **With Reranking (Recommended for RAG):**
+    ```json
+    {
+        "query": "What are the payment terms in my invoices?",
+        "limit": 5,
+        "alpha": 0.7,
+        "rerank": true,
+        "filter_metadata": {"document_category": {"$eq": "invoice"}}
+    }
+    ```
+    
+    **Without Reranking (Speed-Critical):**
+    ```json
+    {
+        "query": "invoice #12345",
+        "limit": 10,
+        "alpha": 0.3,
+        "rerank": false
+    }
+    ```
+    
+    **General Search with Custom Reranking:**
+    ```json
+    {
+        "query": "Q3 revenue analysis",
+        "limit": 5,
+        "alpha": 0.8,
+        "rerank": true,
+        "rerank_candidates_multiplier": 4
+    }
+    ```
     """
     if not embedding_service:
         raise HTTPException(status_code=503, detail="Embedding service not available")
     
     try:
-        results = await embedding_service.hybrid_search(
+        results = await embedding_service.hybrid_search_with_rerank(
             query=request.query,
             limit=request.limit or 5,
             namespace=request.namespace,
             filter_metadata=request.filter_metadata,
             alpha=request.alpha or 0.7,
-            similarity_threshold=request.similarity_threshold or 0.0
+            similarity_threshold=request.similarity_threshold or 0.0,
+            rerank=request.rerank if request.rerank is not None else True,
+            rerank_candidates_multiplier=request.rerank_candidates_multiplier or 3,
         )
         return SearchResponse(
             results=results,
             query=request.query,
             namespace=request.namespace,
             filters_applied=request.filter_metadata,
-            search_type="hybrid",
+            search_type="hybrid_with_rerank" if request.rerank else "hybrid",
             alpha=request.alpha or 0.7
         )
     except Exception as e:

@@ -135,6 +135,32 @@ class ContextSufficiency(BaseModel):
     )
 
 
+# Document category type for filtering - must match categories stored in vector DB
+DocumentCategoryType = Literal[
+    "invoice", "receipt", "credit_memo", "purchase_order",
+    "bank_statement", "expense_report", "contract", "other"
+]
+
+
+class DocumentCategoryInference(BaseModel):
+    """Structured output for inferring document category from user query.
+    
+    Used to filter hybrid search results by document_category metadata,
+    improving search relevance by focusing on the right type of documents.
+    """
+    category: DocumentCategoryType | None = Field(
+        default=None,
+        description="The document category to filter by, or None if the query doesn't target a specific document type"
+    )
+    confidence: float = Field(
+        ge=0.0, le=1.0,
+        description="Confidence in the category inference"
+    )
+    reasoning: str = Field(
+        description="Brief explanation of why this category was selected or why no filter applies"
+    )
+
+
 class ExtractedLineItem(BaseModel):
     """A single line item from an invoice or receipt."""
     description: str = Field(description="Product or service description")
@@ -206,6 +232,9 @@ classifier = local_model.with_structured_output(QueryClassification)
 
 # Context sufficiency evaluator - decides if retrieved context answers the query
 context_evaluator = local_model.with_structured_output(ContextSufficiency)
+
+# Document category inferrer - determines which category to filter by in search
+category_inferrer = local_model.with_structured_output(DocumentCategoryInference)
 
 # Document extractor uses multimodal-capable model for PDF/image processing
 
@@ -494,12 +523,88 @@ async def analytics_agent_node(state: AgentState) -> dict[str, Any]:
     return {"messages": new_messages}
 
 
+async def infer_document_category_filter(user_query: str) -> dict[str, Any] | None:
+    """Infer the document category to filter by based on the user's query.
+    
+    Uses an LLM to analyze the query and determine if it targets a specific
+    type of document (invoice, receipt, contract, etc.). Returns a Pinecone
+    filter dict if a category is identified with high confidence.
+    
+    Args:
+        user_query: The user's search query
+        
+    Returns:
+        Pinecone filter dict like {"document_category": {"$eq": "invoice"}}
+        or None if no specific category is identified
+    """
+    inference_prompt = f"""Analyze this query and determine if it's looking for a specific type of document.
+
+Query: "{user_query}"
+
+**Available Document Categories:**
+- invoice: Bills, invoices, billing documents
+- receipt: Purchase receipts, payment confirmations
+- credit_memo: Credit notes, refund documents
+- purchase_order: POs, purchase requisitions
+- bank_statement: Bank account statements, transaction histories
+- expense_report: Expense claims, reimbursement requests
+- contract: Agreements, contracts, legal documents
+- other: Documents that don't fit other categories
+
+**Rules:**
+- If the query explicitly mentions a document type (e.g., "show my invoices", "find the contract"), select that category
+- If the query asks about specific document attributes (e.g., "vendor payment terms" → likely invoice/contract), infer the category
+- If the query is general or could apply to any document type, return null for category
+- Only select a category if you're reasonably confident (>0.6)
+
+**Examples:**
+- "What invoices do I have from Acme Corp?" → invoice (0.95)
+- "Show me the contract renewal terms" → contract (0.9)
+- "List all my receipts from last month" → receipt (0.9)
+- "What documents mention Project Alpha?" → null (too general)
+- "Find bank transactions over $1000" → bank_statement (0.85)
+- "What's the total I owe?" → invoice (0.7)"""
+
+    try:
+        result = await category_inferrer.ainvoke([
+            {"role": "system", "content": "Infer the document category for search filtering. Be precise."},
+            {"role": "user", "content": inference_prompt},
+        ])
+        
+        # Handle both Pydantic model and dict responses
+        if isinstance(result, dict):
+            category = result.get('category')
+            confidence = result.get('confidence', 0.0)
+            reasoning = result.get('reasoning', '')
+        else:
+            category = getattr(result, 'category', None)
+            confidence = getattr(result, 'confidence', 0.0)
+            reasoning = getattr(result, 'reasoning', '')
+        
+        logger.info(f"Category inference: {category} (confidence: {confidence:.2f})")
+        logger.info(f"Reasoning: {reasoning}")
+        
+        # Only apply filter if confidence is high enough
+        if category and confidence >= 0.6:
+            return {"document_category": {"$eq": category}}
+        
+        return None
+        
+    except Exception as e:
+        logger.error(f"Category inference error: {e}")
+        return None
+
+
 async def retrieve_context_node(state: AgentState) -> dict[str, Any]:
     """Retrieve relevant context from the vector store using semantic search.
     
     This node runs after query classification and before processing nodes.
     It searches the document store for relevant context that can help
     answer the user's query more accurately.
+    
+    The node first infers if the query targets a specific document category
+    (invoice, contract, receipt, etc.) and applies a metadata filter to
+    improve search relevance.
     
     Returns updated state with retrieved_context populated.
     """
@@ -523,17 +628,29 @@ async def retrieve_context_node(state: AgentState) -> dict[str, Any]:
     logger.info(f"Retrieving context for query: {user_query[:100]}...")
     
     try:
-        # Perform semantic search
-        search_results = await embedding_service.hybrid_search(
+        # Infer document category filter from the query
+        filter_metadata = await infer_document_category_filter(user_query)
+        if filter_metadata:
+            logger.info(f"Applying document category filter: {filter_metadata}")
+        else:
+            logger.info("No category filter applied - searching all documents")
+        
+        # Perform hybrid search with reranking for improved relevance
+        # Two-stage retrieval: 1) Hybrid search retrieves candidates, 2) Reranker re-scores for accuracy
+        search_results = await embedding_service.hybrid_search_with_rerank(
             query=user_query,
-            limit=5  # Retrieve top 5 relevant documents
+            limit=5,  # Final number of results after reranking
+            similarity_threshold=0.3,  # Minimum similarity score for initial retrieval
+            filter_metadata=filter_metadata,
+            rerank=True,  # Enable reranking for better relevance
         )
         
         # Filter out error results
         valid_results = [r for r in search_results if "error" not in r]
         
         if valid_results:
-            logger.info(f"Retrieved {len(valid_results)} relevant context documents")
+            reranked_count = sum(1 for r in valid_results if r.get("reranked", False))
+            logger.info(f"Retrieved {len(valid_results)} context documents ({reranked_count} reranked)")
         else:
             logger.info("No relevant context found in vector store")
         

@@ -83,6 +83,14 @@ SPARSE_EMBEDDING_MODEL = "pinecone-sparse-english-v0"
 # Default 0.7 = 70% semantic, 30% lexical (good for most use cases)
 DEFAULT_HYBRID_ALPHA = float(os.getenv("HYBRID_SEARCH_ALPHA", "0.7"))
 
+# Reranking configuration
+# bge-reranker-v2-m3 is a high-performance, multilingual reranking model
+RERANK_MODEL = os.getenv("PINECONE_RERANK_MODEL", "bge-reranker-v2-m3")
+# Enable reranking by default for improved relevance
+DEFAULT_RERANK_ENABLED = os.getenv("RERANK_ENABLED", "true").lower() == "true"
+# Multiplier for initial retrieval when reranking (retrieve more candidates)
+RERANK_CANDIDATE_MULTIPLIER = int(os.getenv("RERANK_CANDIDATE_MULTIPLIER", "3"))
+
 # Index metric must be dotproduct for hybrid search
 # (cosine doesn't support sparse vectors)
 INDEX_METRIC = "dotproduct"
@@ -944,6 +952,201 @@ class EmbeddingService:
         except Exception as e:
             logger.error(f"Error in hybrid search: {e}")
             return [{"error": str(e)}]
+
+    async def rerank_results(
+        self,
+        query: str,
+        results: List[Dict[str, Any]],
+        top_n: int = 5,
+        rank_field: str = "content",
+    ) -> List[Dict[str, Any]]:
+        """
+        Rerank search results using Pinecone's hosted reranking model.
+        
+        Reranking is a two-stage retrieval optimization that improves result
+        quality by re-scoring initial candidates based on their semantic
+        relevance to the query using a specialized cross-encoder model.
+        
+        How it works:
+        1. Initial retrieval (hybrid search) returns N candidates quickly
+        2. Reranker evaluates query-document pairs more thoroughly
+        3. Returns top_n results with improved relevance ordering
+        
+        Args:
+            query: The original search query
+            results: List of search results to rerank (from hybrid_search)
+            top_n: Number of top results to return after reranking
+            rank_field: The field in results to use for reranking (default: "content")
+            
+        Returns:
+            Reranked list of results with updated scores, ordered by relevance
+            
+        Example:
+            # Get initial candidates
+            candidates = await service.hybrid_search(query="invoice terms", limit=15)
+            
+            # Rerank to get top 5 most relevant
+            top_results = await service.rerank_results(
+                query="invoice terms",
+                results=candidates,
+                top_n=5
+            )
+        """
+        if not results or len(results) == 0:
+            logger.info("No results to rerank")
+            return results
+        
+        # Filter out error results before reranking
+        valid_results = [r for r in results if "error" not in r]
+        if not valid_results:
+            logger.warning("No valid results to rerank")
+            return results
+        
+        try:
+            logger.info(
+                f"Reranking {len(valid_results)} results with {RERANK_MODEL} "
+                f"(returning top {top_n})"
+            )
+            
+            # Prepare documents for reranking
+            # Format: list of dicts with id and the text field to rank by
+            documents = []
+            for i, result in enumerate(valid_results):
+                doc = {
+                    "id": result.get("id", str(i)),
+                    rank_field: result.get(rank_field, result.get("content", "")),
+                }
+                documents.append(doc)
+            
+            # Call Pinecone rerank API
+            rerank_response = await asyncio.to_thread(
+                self.pc.inference.rerank,
+                model=RERANK_MODEL,
+                query=query,
+                documents=documents,
+                top_n=min(top_n, len(documents)),
+                rank_fields=[rank_field],
+                return_documents=True,
+                parameters={"truncate": "END"},  # Truncate long docs at end
+            )
+            
+            # Map reranked results back to original result objects with new scores
+            reranked_results = []
+            for item in rerank_response.data:
+                original_index = item.index
+                rerank_score = item.score  # Normalized 0-1, higher is more relevant
+                
+                # Get the original result and update its score
+                original_result = valid_results[original_index].copy()
+                original_result["original_score"] = original_result.get("score", 0)
+                original_result["score"] = rerank_score
+                original_result["reranked"] = True
+                original_result["rerank_model"] = RERANK_MODEL
+                
+                reranked_results.append(original_result)
+            
+            top_score = reranked_results[0]['score'] if reranked_results else 0.0
+            logger.info(
+                f"Reranking complete: returned {len(reranked_results)} results "
+                f"(top score: {top_score:.4f})"
+            )
+            return reranked_results
+            
+        except Exception as e:
+            logger.error(f"Error reranking results: {e}")
+            # On error, return original results unchanged
+            return valid_results[:top_n]
+
+    async def hybrid_search_with_rerank(
+        self,
+        query: str,
+        limit: int = 5,
+        namespace: Optional[str] = None,
+        filter_metadata: Optional[Dict[str, Any]] = None,
+        alpha: float = DEFAULT_HYBRID_ALPHA,
+        similarity_threshold: float = 0.0,
+        rerank: bool = DEFAULT_RERANK_ENABLED,
+        rerank_candidates_multiplier: int = RERANK_CANDIDATE_MULTIPLIER,
+    ) -> List[Dict[str, Any]]:
+        """
+        Perform hybrid search with optional reranking for improved relevance.
+        
+        This is the recommended search method for RAG pipelines as it combines:
+        1. Hybrid search (semantic + lexical) for broad candidate retrieval
+        2. Cross-encoder reranking for precise relevance ordering
+        
+        The two-stage approach retrieves more candidates initially, then uses
+        a more accurate (but slower) reranking model to select the best matches.
+        
+        Args:
+            query: The search query text
+            limit: Final number of results to return (after reranking)
+            namespace: Namespace to search in (entity_id for multi-tenancy)
+            filter_metadata: Optional metadata filter (e.g., document_category)
+            alpha: Balance between semantic and lexical search (0.0 to 1.0)
+            similarity_threshold: Minimum score for initial results
+            rerank: Whether to apply reranking (default: True)
+            rerank_candidates_multiplier: How many more candidates to retrieve
+                for reranking (default: 3x the limit)
+                
+        Returns:
+            List of search results, reranked for optimal relevance
+            
+        Example:
+            # Search with reranking (recommended for RAG)
+            results = await service.hybrid_search_with_rerank(
+                query="What are the payment terms?",
+                limit=5,  # Get top 5 after reranking
+                filter_metadata={"document_category": {"$eq": "invoice"}}
+            )
+            
+            # Without reranking (faster, less accurate)
+            results = await service.hybrid_search_with_rerank(
+                query="invoice total",
+                limit=5,
+                rerank=False
+            )
+        """
+        # If reranking is disabled, just do normal hybrid search
+        if not rerank:
+            return await self.hybrid_search(
+                query=query,
+                limit=limit,
+                namespace=namespace,
+                filter_metadata=filter_metadata,
+                alpha=alpha,
+                similarity_threshold=similarity_threshold,
+            )
+        
+        # Retrieve more candidates for reranking
+        candidate_limit = limit * rerank_candidates_multiplier
+        logger.info(
+            f"Hybrid search with rerank: retrieving {candidate_limit} candidates "
+            f"for top {limit} results"
+        )
+        
+        # Stage 1: Retrieve candidates with hybrid search
+        candidates = await self.hybrid_search(
+            query=query,
+            limit=candidate_limit,
+            namespace=namespace,
+            filter_metadata=filter_metadata,
+            alpha=alpha,
+            similarity_threshold=similarity_threshold,
+        )
+        
+        # Check for errors in candidates
+        if candidates and "error" in candidates[0]:
+            return candidates
+        
+        # Stage 2: Rerank candidates to get final results
+        reranked_results = await self.rerank_results(
+            query=query,
+            results=candidates,
+            top_n=limit,
+        )
+        
+        return reranked_results
 
     async def search_across_namespaces(
         self,
