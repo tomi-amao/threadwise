@@ -34,6 +34,7 @@ dependencies = [
     # Pinecone vector store integration
     "pinecone (>=5.0.0)",
     "langchain-pinecone (>=0.2.0)",
+    "inngest (>=0.5.15,<0.6.0)",
 ]
 
 [tool.poetry]

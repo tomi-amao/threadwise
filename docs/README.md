@@ -75,4 +75,8 @@ Further improvements including adding semantic search for memories, caching requ
 Changed to pinecone vector store as it enables hybrid search capability, lexical and semantic search
 Additionally it includes reranking to improve document relevantcy
 
-Cehck if an uploaded documents has been successfully embeded, if not add functionality to retry embed
+Check if an uploaded documents has been successfully embeded, if not add functionality to retry embed
+
+add memories with semantic search, based on logged in user
+
+create database funcions to calacualre common financial reports metrics

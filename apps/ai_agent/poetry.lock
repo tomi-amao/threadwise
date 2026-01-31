@@ -1596,6 +1596,27 @@ files = [
 ]
 
 [[package]]
+name = "inngest"
+version = "0.5.15"
+description = "Python SDK for Inngest"
+optional = false
+python-versions = ">=3.10"
+groups = ["main"]
+files = [
+    {file = "inngest-0.5.15-py3-none-any.whl", hash = "sha256:32716fee8dcb8a207a767d17d9a9032bd087a3e0a7dd511f21886353b8862406"},
+    {file = "inngest-0.5.15.tar.gz", hash = "sha256:74651ca943ba9ebbe7ab00a9c53c0f78daf38af720567babad179f32e2ea2923"},
+]
+
+[package.dependencies]
+httpx = ">=0.26.0"
+jcs = ">=0.2.1"
+pydantic = ">=2.11.0"
+typing-extensions = ">=4.13.0"
+
+[package.extras]
+connect = ["protobuf (>=5.29.4)", "psutil (>=6.0.0)", "websockets (>=15.0.0)"]
+
+[[package]]
 name = "isort"
 version = "6.1.0"
 description = "A Python utility / library to sort Python imports."
@@ -1610,6 +1631,18 @@ files = [
 [package.extras]
 colors = ["colorama"]
 plugins = ["setuptools"]
+
+[[package]]
+name = "jcs"
+version = "0.2.1"
+description = "JCS - JSON Canonicalization"
+optional = false
+python-versions = ">=3.6.2"
+groups = ["main"]
+files = [
+    {file = "jcs-0.2.1-py3-none-any.whl", hash = "sha256:e23a3e1de60f832d33cd811bb9c3b3be79219cdf95f63b88f0972732c3fa8476"},
+    {file = "jcs-0.2.1.tar.gz", hash = "sha256:9f20360b2f3b0a410d65493b448f96306d80e37fb46283f3f4aa5db2c7c1472b"},
+]
 
 [[package]]
 name = "jinja2"
@@ -7149,4 +7182,4 @@ cffi = ["cffi (>=1.17,<2.0) ; platform_python_implementation != \"PyPy\" and pyt
 [metadata]
 lock-version = "2.1"
 python-versions = "<3.14,>=3.10"
-content-hash = "a8efb9d42452613dd416103227546acf6086178a3871550959f3433d3f14273e"
+content-hash = "ad148f16cea43dd1986f30e442a7e483a610c86648cb12b8d9835e5c5d7fab8b"

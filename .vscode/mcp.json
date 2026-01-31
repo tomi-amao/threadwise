@@ -7,6 +7,10 @@
 		"pinecone": {
 			"url": "https://docs.pinecone.io/mcp",
 			"type": "http"
+		},
+		"inngest": {
+			"url": "http://127.0.0.1:8288/mcp",
+			"type": "http"
 		}
 	},
 	"inputs": []

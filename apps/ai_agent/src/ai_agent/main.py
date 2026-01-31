@@ -12,6 +12,7 @@ import logging
 from contextlib import asynccontextmanager
 
 import uvicorn
+from inngest.fast_api import serve as inngest_serve
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -34,8 +35,29 @@ from fastapi import Body
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Import Inngest configuration and functions
+try:
+    from .inngest_config import get_client as get_inngest_client, validate_config as validate_inngest_config
+    from .inngest_functions import FUNCTIONS as inngest_functions
+    from .inngest_events import send_chat_message_event, send_document_embedding_event
+except ImportError:
+    try:
+        from ai_agent.inngest_config import get_client as get_inngest_client, validate_config as validate_inngest_config
+        from ai_agent.inngest_functions import FUNCTIONS as inngest_functions
+        from ai_agent.inngest_events import send_chat_message_event, send_document_embedding_event
+    except ImportError:
+        get_inngest_client = None
+        validate_inngest_config = None
+        inngest_functions = []
+        send_chat_message_event = None
+        send_document_embedding_event = None
+        logger.warning("Inngest modules not available")
+
 # Initialize services
 langgraph_service = LangGraphService() if LangGraphService else None
+inngest_client = get_inngest_client() if get_inngest_client else None
+
+
 
 
 @asynccontextmanager
@@ -48,6 +70,10 @@ async def lifespan(app: FastAPI):
     
     if embedding_service:
         logger.info("Embedding service available")
+    
+    if inngest_client and validate_inngest_config:
+        config_status = validate_inngest_config()
+        logger.info(f"Inngest initialized: {config_status}")
     
     yield
     
@@ -62,6 +88,7 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+
 # Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
@@ -70,6 +97,14 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Setup Inngest endpoint
+if inngest_client and inngest_functions:
+    inngest_serve(app, inngest_client, inngest_functions)
+    logger.info(f"Inngest endpoint configured with {len(inngest_functions)} functions")
+
+
+
 
 # Pydantic models for chat
 class ChatMessage(BaseModel):
@@ -180,7 +215,8 @@ def read_root():
         "docs": "/docs",
         "services": {
             "chat": "enabled" if langgraph_service else "disabled",
-            "embeddings": "enabled" if embedding_service else "disabled"
+            "embeddings": "enabled" if embedding_service else "disabled",
+            "inngest": "enabled" if inngest_client else "disabled"
         }
     }
 
@@ -188,13 +224,68 @@ def read_root():
 @app.get("/health")
 def health_check():
     """Health check endpoint."""
+    inngest_status = "disabled"
+    inngest_config = {}
+    
+    if inngest_client and validate_inngest_config:
+        inngest_status = "enabled"
+        inngest_config = validate_inngest_config()
+    
     return {
         "status": "ok",
         "timestamp": datetime.now().isoformat(),
         "service": "ai-agent",
         "chat_service": "enabled" if langgraph_service else "disabled",
-        "embedding_service": "enabled" if embedding_service else "disabled"
+        "embedding_service": "enabled" if embedding_service else "disabled",
+        "inngest_service": inngest_status,
+        "inngest_config": inngest_config
     }
+
+
+# ======================================
+# INNGEST ENDPOINTS
+# ======================================
+
+@app.get("/inngest/health")
+async def inngest_health():
+    """Check Inngest service health and configuration."""
+    if not inngest_client or not validate_inngest_config:
+        return {"status": "disabled", "message": "Inngest service not available"}
+    
+    try:
+        config_status = validate_inngest_config()
+        return {
+            "status": "enabled",
+            "config": config_status,
+            "functions_registered": len(inngest_functions),
+            "timestamp": datetime.now().isoformat()
+        }
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+@app.post("/inngest/trigger-cleanup")
+async def trigger_cleanup():
+    """Manually trigger the cleanup function for testing."""
+    if not inngest_client:
+        raise HTTPException(status_code=503, detail="Inngest service not available")
+    
+    try:
+        from .inngest_events import send_custom_event
+        
+        success = await send_custom_event(
+            event_name="manual/cleanup.triggered",
+            data={"triggered_by": "manual_api_call"}
+        )
+        
+        return {
+            "success": success,
+            "message": "Cleanup event triggered" if success else "Failed to trigger cleanup event",
+            "timestamp": datetime.now().isoformat()
+        }
+    except Exception as e:
+        logger.error(f"Error triggering cleanup: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # ======================================
@@ -227,6 +318,15 @@ async def send_chat_message(message: ChatMessage):
             attachments=message.attachments,
             assistant_id=message.assistant_id
         )
+        
+        # Send event to Inngest for background processing (fire-and-forget)
+        if send_chat_message_event:
+            asyncio.create_task(send_chat_message_event(
+                content=message.content,
+                thread_id=response.get("thread_id"),
+                assistant_id=response.get("assistant_id")
+            ))
+        
         return ChatResponse(**response)
     except Exception as e:
         logger.error(f"Chat error: {str(e)}")
@@ -347,9 +447,33 @@ async def embed_file(request: EmbedFileRequest):
             file_type=request.file_type,
             entity_id=request.entity_id
         )
+        
+        # Send event to Inngest for background processing (fire-and-forget)
+        if send_document_embedding_event:
+            asyncio.create_task(send_document_embedding_event(
+                document_id=result.get("documentId", ""),
+                filename=result.get("filename", ""),
+                entity_id=request.entity_id,
+                chunks=result.get("chunks", 0),
+                file_type=request.file_type,
+                success=result.get("success", False)
+            ))
+        
         return EmbedFileResponse(**result)
     except Exception as e:
         logger.error(f"Embedding error: {str(e)}")
+        
+        # Send error event to Inngest
+        if send_document_embedding_event:
+            asyncio.create_task(send_document_embedding_event(
+                document_id="",
+                filename=request.file_url.split("/")[-1],
+                entity_id=request.entity_id,
+                file_type=request.file_type,
+                success=False,
+                error=str(e)
+            ))
+        
         raise HTTPException(status_code=500, detail=str(e))
 
 
