@@ -4,7 +4,7 @@ import logging
 from typing import Dict, Any, Optional
 from datetime import datetime
 
-from .inngest_config import get_client
+from .config import get_client
 
 logger = logging.getLogger(__name__)
 
@@ -16,7 +16,18 @@ async def send_chat_message_event(
     assistant_id: Optional[str] = None,
     metadata: Optional[Dict[str, Any]] = None
 ) -> bool:
-    """Send a chat message event to trigger background processing."""
+    """Send a chat message event to trigger background processing.
+    
+    Args:
+        content: The message content
+        thread_id: Optional thread identifier
+        user_id: Optional user identifier
+        assistant_id: Optional assistant identifier
+        metadata: Optional additional metadata
+        
+    Returns:
+        True if event was sent successfully, False otherwise
+    """
     try:
         client = get_client()
         
@@ -51,7 +62,20 @@ async def send_document_embedding_event(
     success: bool = True,
     error: Optional[str] = None
 ) -> bool:
-    """Send a document embedding completion event."""
+    """Send a document embedding completion event.
+    
+    Args:
+        document_id: The document identifier
+        filename: Name of the embedded file
+        entity_id: Optional entity/tenant identifier
+        chunks: Number of chunks created
+        file_type: MIME type of the file
+        success: Whether embedding was successful
+        error: Error message if failed
+        
+    Returns:
+        True if event was sent successfully, False otherwise
+    """
     try:
         client = get_client()
         
@@ -84,7 +108,16 @@ async def send_custom_event(
     data: Dict[str, Any],
     user_id: Optional[str] = None
 ) -> bool:
-    """Send a custom event to Inngest."""
+    """Send a custom event to Inngest.
+    
+    Args:
+        event_name: Name of the event (e.g., "custom/my-event")
+        data: Event payload data
+        user_id: Optional user identifier
+        
+    Returns:
+        True if event was sent successfully, False otherwise
+    """
     try:
         client = get_client()
         

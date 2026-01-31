@@ -10,10 +10,6 @@ This module implements a middleware chain that:
    - Database Analytics: Analytics prompt with SQL tools for flexible queries
    - Financial Report (passed quality): SQL financial prompt with tools
    - Financial Report (failed quality): Suggestion prompt with tools for guidance
-
-Design Pattern:
-- Single @before_model middleware for classification + validation (only for financial reports)
-- Single @wrap_model_call for routing and tool/prompt injection
 """
 
 import json
@@ -39,15 +35,16 @@ from .prompts import (
     sql_system_prompt,
     validate_financial_prompt_against_database,
 )
-from .settings import get_local_llm
-from .tools import sql_tools
+from ..core.config import get_local_llm
+from ..tools.sql_tools import sql_tools
 
 # Configure logging
 logger = logging.getLogger(__name__)
 
-# ============================================================================
+
+# =============================================================================
 # PYDANTIC MODELS
-# ============================================================================
+# =============================================================================
 
 
 class QueryTypeClassification(BaseModel):
@@ -107,9 +104,9 @@ class QueryState(AgentState):
     issues: List[str] | None
 
 
-# ============================================================================
+# =============================================================================
 # MODEL INITIALIZATION
-# ============================================================================
+# =============================================================================
 
 _classification_model = get_local_llm("qwen/qwen3-vl-4b")
 _type_classifier = _classification_model.with_structured_output(QueryTypeClassification)
@@ -125,10 +122,9 @@ _validation_agent_with_tools = create_agent(
 )
 
 
-# ============================================================================
+# =============================================================================
 # HELPER FUNCTIONS
-# ============================================================================
-
+# =============================================================================
 
 
 def _get_last_human_message(messages: list) -> Optional[HumanMessage]:
@@ -157,9 +153,9 @@ def _extract_query_text(human_msg: HumanMessage) -> str:
     return str(raw_content)
 
 
-# ============================================================================
+# =============================================================================
 # CLASSIFICATION MIDDLEWARE
-# ============================================================================
+# =============================================================================
 
 
 @before_model(state_schema=QueryState, can_jump_to=["end", "model"])
@@ -247,7 +243,6 @@ async def classify_query(state: QueryState, runtime: Runtime) -> dict[str, Any] 
         }
 
 
-
 async def _classify_query_type(user_query: str) -> dict[str, Any]:
     """Classify query into financial_report, database_analytics, or generic.
 
@@ -318,7 +313,6 @@ Return:
         "confidence": getattr(result, "confidence", 0.5),
         "reasoning": getattr(result, "reasoning", ""),
     }
-
 
 
 async def _validate_financial_query(user_query: str) -> dict[str, Any]:
@@ -400,10 +394,9 @@ async def _validate_financial_query(user_query: str) -> dict[str, Any]:
     }
 
 
-
-# ============================================================================
+# =============================================================================
 # ROUTING MIDDLEWARE
-# ============================================================================
+# =============================================================================
 
 
 def _format_suggestions_for_prompt(suggestions: List[dict]) -> List[str]:
@@ -447,8 +440,6 @@ async def route_and_configure(
        - System prompt: Dynamic clarification prompt
        - Tools: None (suggestions only, no SQL execution)
        - Context: Includes suggestions and issues from validation
-
-    Note: Intellisense errors for await handler can be ignored - works correctly at runtime.
     """
     query_type = request.state.get("query_type", "generic")
     query_quality_passed = request.state.get("is_query_quality_passed", True)
@@ -515,34 +506,3 @@ Your job is to inform the user about these issues and advise them on refining th
             tools=[],
         )
     )
-
-
-
-# ============================================================================
-# MIDDLEWARE CHAIN EXPORT
-# ============================================================================
-# 
-# The middleware executes in this order:
-#
-# 1. classify_and_grade_query (@before_model):
-#    - Classifies queries into THREE categories:
-#      * financial_report: P&L, Balance Sheet, Cash Flow (needs validation)
-#      * database_analytics: Data exploration queries (no validation)
-#      * generic: Conversational queries (no database access)
-#    - Only financial_report queries go through quality grading
-#    - Sets state: query_type, is_query_quality_passed, suggestions, etc.
-#
-# 2. route_and_configure (@wrap_model_call):
-#    - Reads classification state
-#    - Routes to appropriate handler:
-#      * generic → generic_system_prompt, no tools
-#      * database_analytics → analytics_system_prompt, SQL tools
-#      * financial_report (passed) → sql_system_prompt, SQL tools
-#      * financial_report (failed) → query_suggestion_prompt, SQL tools + context
-#
-# Benefits:
-# - Single LLM call for classification (efficient)
-# - Validation only for financial reports (focused quality control)
-# - Flexible data exploration without validation overhead
-# - Data-grounded suggestions when validation fails
-#

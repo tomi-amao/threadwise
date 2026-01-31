@@ -1,10 +1,17 @@
+"""State schemas for ThreadWise AI Agent.
+
+Defines state and context schemas used across the agent graph.
+"""
+
 from __future__ import annotations
 from dataclasses import dataclass
 from typing import TypedDict
 
+
 class Context(TypedDict):
     """Context parameters for the agent."""
     model_name: str
+
 
 @dataclass
 class State:

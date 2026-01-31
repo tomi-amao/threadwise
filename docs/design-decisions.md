@@ -12,3 +12,17 @@ inngest docker
 
 docker run -p 8288:8288 inngest/inngest \
  inngest dev -u http://host.docker.internal:8000/api/inngest --no-discovery
+
+External APIs (Squarespace, Revolut, etc.)
+↓ (webhooks/polling)
+API Gateway / Load Balancer
+↓
+Integration Service
+↓
+Message Queue (optional but recommended)
+↓
+Worker Processes
+↓
+Data Transformation Layer
+↓
+Database (PostgreSQL/MongoDB)

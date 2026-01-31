@@ -48,15 +48,15 @@ from langgraph.graph.ui import AnyUIMessage, push_ui_message, ui_message_reducer
 from langgraph.prebuilt import ToolNode
 from pydantic import BaseModel, Field
 
-# Import from new modular structure
-from src.ai_agent.agents import (
+# Import from package modules (relative imports)
+from .prompts import (
     analytics_system_prompt,
     generic_system_prompt,
     invoice_extraction_prompt,
 )
-from src.ai_agent.core import get_local_llm, get_chat_model
-from src.ai_agent.tools import sql_tools, toolkit
-from src.ai_agent.services.embedding_service import embedding_service
+from ..core import get_local_llm, get_chat_model
+from ..tools import sql_tools, toolkit
+from ..services.embedding_service import embedding_service
 
 # Configure logging
 logger = logging.getLogger(__name__)

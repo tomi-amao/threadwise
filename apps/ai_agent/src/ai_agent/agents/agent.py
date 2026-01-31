@@ -13,10 +13,10 @@ from langchain.agents.middleware import (
     ToolCallLimitMiddleware,
 )
 
-# Import from new modular structure
-from src.ai_agent.agents import classify_query, route_and_configure
-from src.ai_agent.core import CustomContext, CustomState, get_chat_model, get_local_llm, State, Context
-from src.ai_agent.tools import sql_tools
+# Import from package modules (relative imports)
+from .middleware import classify_query, route_and_configure
+from ..core import CustomContext, CustomState, get_chat_model, get_local_llm, State, Context
+from ..tools import sql_tools
 
 
 # Custom state schema with UI support for generative UI

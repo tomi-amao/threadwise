@@ -6,13 +6,15 @@ from typing import Dict, Any
 
 import inngest
 
+from ...core.config import settings
+
 # Configure logger
 logger = logging.getLogger(__name__)
 
-# Inngest client configuration
-INNGEST_APP_ID = os.getenv("INNGEST_APP_ID", "threadwise-ai-agent")
-INNGEST_EVENT_KEY = os.getenv("INNGEST_EVENT_KEY")
-INNGEST_SIGNING_KEY = os.getenv("INNGEST_SIGNING_KEY")
+# Inngest client configuration from settings
+INNGEST_APP_ID = settings.inngest_app_id
+INNGEST_EVENT_KEY = settings.inngest_event_key
+INNGEST_SIGNING_KEY = settings.inngest_signing_key
 
 # Initialize Inngest client
 client = inngest.Inngest(
@@ -22,9 +24,11 @@ client = inngest.Inngest(
     signing_key=INNGEST_SIGNING_KEY,
 )
 
+
 def get_client() -> inngest.Inngest:
     """Get the configured Inngest client."""
     return client
+
 
 def validate_config() -> Dict[str, Any]:
     """Validate Inngest configuration and return status."""

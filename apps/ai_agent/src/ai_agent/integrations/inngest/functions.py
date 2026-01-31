@@ -5,7 +5,7 @@ from typing import Dict, Any, Optional
 from datetime import datetime
 
 import inngest
-from .inngest_config import get_client
+from .config import get_client
 
 logger = logging.getLogger(__name__)
 
@@ -146,7 +146,10 @@ async def cleanup_old_threads(ctx: inngest.Context, step) -> Dict[str, Any]:
         raise
 
 
-# Helper functions (these would integrate with your actual services)
+# =============================================================================
+# HELPER FUNCTIONS
+# =============================================================================
+
 
 async def _log_message_analytics(content: str, thread_id: Optional[str], user_id: Optional[str]) -> bool:
     """Log message for analytics purposes."""
@@ -213,6 +216,10 @@ async def _cleanup_temporary_files() -> int:
     logger.info("Cleanup: Temporary files cleaned")
     return 0
 
+
+# =============================================================================
+# EXPORTS
+# =============================================================================
 
 # Export all functions for registration
 FUNCTIONS = [
