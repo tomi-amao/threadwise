@@ -384,19 +384,21 @@ class ExternalSyncService:
     ) -> Dict[str, int]:
         """Get sync statistics for a source.
         
-        Returns count of raw events by entity type.
+        Returns count of unique items by entity type (deduplicated by external_id).
         """
+        # Use RPC call to get distinct counts per entity_type
+        # This ensures we count unique items, not duplicate sync records
         result = await asyncio.to_thread(
-            lambda: self.client.table("external_raw_events")
-            .select("entity_type")
-            .eq("source_id", source_id)
-            .execute()
+            lambda: self.client.rpc(
+                "get_sync_stats_by_source",
+                {"p_source_id": source_id}
+            ).execute()
         )
         
         stats = {}
         for row in result.data or []:
             entity_type = row["entity_type"]
-            stats[entity_type] = stats.get(entity_type, 0) + 1
+            stats[entity_type] = row["unique_count"]
         
         return stats
 

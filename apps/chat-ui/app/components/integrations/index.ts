@@ -4,4 +4,4 @@
  * Export all integrations-related components.
  */
 
-export { IntegrationsList } from './IntegrationsList';
+export { SyncProgressToast } from './SyncProgressToast';

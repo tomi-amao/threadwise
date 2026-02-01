@@ -10,8 +10,10 @@ from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
 import inngest
+from inngest.experimental import realtime
 
 from .config import get_client
+from .channels import get_sync_channel, SyncProgressData, SyncStatusData
 from ...services.external_sync_service import sync_service
 from ...integrations.squarespace import SquarespaceAdapter, ENDPOINTS
 
@@ -21,7 +23,7 @@ logger = logging.getLogger(__name__)
 inngest_client = get_client()
 
 # Batch size for storing events
-BATCH_SIZE = 25
+BATCH_SIZE = 50
 
 # Delay between pages (rate limiting)
 PAGE_DELAY_SECONDS = 1.0
@@ -49,11 +51,28 @@ async def squarespace_sync_all(ctx: inngest.Context) -> Dict[str, Any]:
         
         ctx.logger.info(f"Starting full Squarespace sync for source {source_id}")
         
+        # Publish initial status
+        channel = get_sync_channel(source_id)
+        await realtime.publish(
+            client=inngest_client,
+            channel=channel,
+            topic="status",
+            data=SyncStatusData(
+                status="syncing",
+                endpoints_completed=0,
+                endpoints_total=len(ENDPOINTS),
+                total_items=0,
+                error=None,
+                timestamp=datetime.now().isoformat(),
+            ),
+        )
+        
         # Update sync status
         await ctx.step.run("update-sync-status", lambda: sync_service.update_sync_status(source_id, "syncing"))
         
         # Sync each endpoint sequentially
         results = {}
+        completed_count = 0
         
         for endpoint in ENDPOINTS.keys():
             endpoint_result = await ctx.step.invoke(
@@ -65,6 +84,22 @@ async def squarespace_sync_all(ctx: inngest.Context) -> Dict[str, Any]:
                 }
             )
             results[endpoint] = endpoint_result
+            completed_count += 1
+            
+            # Publish progress update
+            await realtime.publish(
+                client=inngest_client,
+                channel=channel,
+                topic="status",
+                data=SyncStatusData(
+                    status="syncing",
+                    endpoints_completed=completed_count,
+                    endpoints_total=len(ENDPOINTS),
+                    total_items=sum(r.get("items_stored", 0) for r in results.values()),
+                    error=None,
+                    timestamp=datetime.now().isoformat(),
+                ),
+            )
             
             # Small delay between endpoints
             await ctx.step.sleep(f"delay-after-{endpoint}", timedelta(seconds=2))
@@ -73,6 +108,21 @@ async def squarespace_sync_all(ctx: inngest.Context) -> Dict[str, Any]:
         await ctx.step.run("update-sync-status", lambda: sync_service.update_sync_status(source_id, "completed"))
         
         total_items = sum(r.get("items_stored", 0) for r in results.values())
+        
+        # Publish final status
+        await realtime.publish(
+            client=inngest_client,
+            channel=channel,
+            topic="status",
+            data=SyncStatusData(
+                status="completed",
+                endpoints_completed=len(ENDPOINTS),
+                endpoints_total=len(ENDPOINTS),
+                total_items=total_items,
+                error=None,
+                timestamp=datetime.now().isoformat(),
+            ),
+        )
         
         return {
             "status": "completed",
@@ -88,6 +138,25 @@ async def squarespace_sync_all(ctx: inngest.Context) -> Dict[str, Any]:
         # Update status to error
         if source_id:
             await ctx.step.run("update-sync-status", lambda: sync_service.update_sync_status(source_id, "error", error=str(e)))
+            
+            # Publish error status
+            try:
+                channel = get_sync_channel(source_id)
+                await realtime.publish(
+                    client=inngest_client,
+                    channel=channel,
+                    topic="status",
+                    data=SyncStatusData(
+                        status="error",
+                        endpoints_completed=0,
+                        endpoints_total=len(ENDPOINTS),
+                        total_items=0,
+                        error=str(e),
+                        timestamp=datetime.now().isoformat(),
+                    ),
+                )
+            except Exception as pub_err:
+                ctx.logger.error(f"Failed to publish error status: {str(pub_err)}")
         
         raise
 
@@ -121,6 +190,23 @@ async def squarespace_sync_endpoint(ctx: inngest.Context) -> Dict[str, Any]:
             f"(cursor: {resume_cursor or 'start'})"
         )
         
+        # Publish initial progress
+        channel = get_sync_channel(source_id)
+        await realtime.publish(
+            client=inngest_client,
+            channel=channel,
+            topic="progress",
+            data=SyncProgressData(
+                endpoint=endpoint,
+                status="starting",
+                items_stored=0,
+                pages_processed=0,
+                total_items=None,
+                error=None,
+                timestamp=datetime.now().isoformat(),
+            ),
+        )
+        
         # Get source and API key
         source = await ctx.step.run("get-source", lambda: sync_service.get_external_source(source_id))
         
@@ -128,7 +214,7 @@ async def squarespace_sync_endpoint(ctx: inngest.Context) -> Dict[str, Any]:
             raise ValueError(f"Source not found: {source_id}")
         
         # Get API key from Vault (secure storage)
-        api_key = await ctx.step.run("get-api-key", lambda: sync_service.get_api_key(source_id))
+        api_key = await sync_service.get_api_key(source_id)
         
         if not api_key:
             raise ValueError("API key not found - please configure credentials")
@@ -157,6 +243,22 @@ async def squarespace_sync_endpoint(ctx: inngest.Context) -> Dict[str, Any]:
                 batch = []
                 pages_processed += 1
                 
+                # Publish progress update
+                await realtime.publish(
+                    client=inngest_client,
+                    channel=channel,
+                    topic="progress",
+                    data=SyncProgressData(
+                        endpoint=endpoint,
+                        status="syncing",
+                        items_stored=items_stored,
+                        pages_processed=pages_processed,
+                        total_items=None,
+                        error=None,
+                        timestamp=datetime.now().isoformat(),
+                    ),
+                )
+                
                 # Rate limiting delay
                 await ctx.step.sleep(f"rate-limit-{pages_processed}", timedelta(seconds=PAGE_DELAY_SECONDS))
         
@@ -164,6 +266,22 @@ async def squarespace_sync_endpoint(ctx: inngest.Context) -> Dict[str, Any]:
         if batch:
             stored = await ctx.step.run("store-raw-events-batch", lambda: sync_service.store_raw_events_batch(source_id, "squarespace", batch))
             items_stored += stored
+        
+        # Publish completion status
+        await realtime.publish(
+            client=inngest_client,
+            channel=channel,
+            topic="progress",
+            data=SyncProgressData(
+                endpoint=endpoint,
+                status="completed",
+                items_stored=items_stored,
+                pages_processed=pages_processed,
+                total_items=items_stored,
+                error=None,
+                timestamp=datetime.now().isoformat(),
+            ),
+        )
         
         ctx.logger.info(
             f"Completed {endpoint} sync: {items_stored} items, {pages_processed} pages"
@@ -179,6 +297,30 @@ async def squarespace_sync_endpoint(ctx: inngest.Context) -> Dict[str, Any]:
         
     except Exception as e:
         ctx.logger.error(f"Error syncing {endpoint}: {str(e)}")
+        
+        # Publish error status
+        try:
+            event_data = ctx.event.data
+            source_id = event_data.get("source_id")
+            if source_id:
+                channel = get_sync_channel(source_id)
+                await realtime.publish(
+                    client=inngest_client,
+                    channel=channel,
+                    topic="progress",
+                    data=SyncProgressData(
+                        endpoint=endpoint,
+                        status="error",
+                        items_stored=0,
+                        pages_processed=0,
+                        total_items=None,
+                        error=str(e),
+                        timestamp=datetime.now().isoformat(),
+                    ),
+                )
+        except Exception as pub_err:
+            ctx.logger.error(f"Failed to publish error status: {str(pub_err)}")
+        
         raise
 
 
