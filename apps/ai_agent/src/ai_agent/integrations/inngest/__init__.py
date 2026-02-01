@@ -5,7 +5,18 @@ Provides background processing and workflow automation using Inngest.
 
 from .config import get_client, validate_config, client
 from .functions import FUNCTIONS, process_chat_message, process_document_embedding, cleanup_old_threads
-from .events import send_chat_message_event, send_document_embedding_event, send_custom_event
+from .events import (
+    send_chat_message_event,
+    send_document_embedding_event,
+    send_custom_event,
+    send_squarespace_sync_event,
+)
+from .sync_functions import (
+    squarespace_sync_all,
+    squarespace_sync_endpoint,
+    squarespace_sync_single_endpoint,
+    SYNC_FUNCTIONS,
+)
 
 # Aliases for route compatibility
 get_inngest_client = get_client
@@ -25,8 +36,14 @@ __all__ = [
     "process_chat_message",
     "process_document_embedding",
     "cleanup_old_threads",
+    # Sync functions
+    "squarespace_sync_all",
+    "squarespace_sync_endpoint",
+    "squarespace_sync_single_endpoint",
+    "SYNC_FUNCTIONS",
     # Events
     "send_chat_message_event",
     "send_document_embedding_event",
     "send_custom_event",
+    "send_squarespace_sync_event",
 ]

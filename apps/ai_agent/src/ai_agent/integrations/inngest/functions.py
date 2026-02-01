@@ -221,9 +221,13 @@ async def _cleanup_temporary_files() -> int:
 # EXPORTS
 # =============================================================================
 
+# Import sync functions
+from .sync_functions import SYNC_FUNCTIONS
+
 # Export all functions for registration
 FUNCTIONS = [
     process_chat_message,
     process_document_embedding, 
     cleanup_old_threads,
+    *SYNC_FUNCTIONS,  # Include external sync functions
 ]

@@ -13,6 +13,7 @@ import {
   ChatCircle,
   FileText,
   ChartBar,
+  PlugsConnected,
   User,
   SignOut,
   X,
@@ -132,6 +133,22 @@ export function Sidebar({ className }: SidebarProps) {
             to="/reports"
             icon={<ChartBar size={20} weight="duotone" />}
             label="Financial Reports"
+            collapsed={collapsed}
+            onClick={closeMobile}
+          />
+        </div>
+
+        {/* Integrations Section */}
+        <div className="mb-4">
+          {!collapsed && (
+            <p className="px-4 py-2 text-xs font-semibold text-sidebar-foreground/50 uppercase tracking-wider">
+              Data Sources
+            </p>
+          )}
+          <NavItem
+            to="/integrations"
+            icon={<PlugsConnected size={20} weight="duotone" />}
+            label="Integrations"
             collapsed={collapsed}
             onClick={closeMobile}
           />

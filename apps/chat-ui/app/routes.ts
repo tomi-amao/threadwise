@@ -13,6 +13,7 @@ import { type RouteConfig, route, layout, index } from '@react-router/dev/routes
  * - /chat
  * - /invoices
  * - /reports
+ * - /integrations
  * - /account
  */
 export default [
@@ -31,6 +32,7 @@ export default [
     route('chat', 'routes/app.chat.tsx'),
     route('invoices', 'routes/app.invoices.tsx'),
     route('reports', 'routes/app.reports.tsx'),
+    route('integrations', 'routes/app.integrations.tsx'),
     route('account', 'routes/app.account.tsx'),
   ]),
 

@@ -268,8 +268,6 @@ export function AuthProvider({ children }: AuthProviderProps) {
   // Check if onboarding is needed (user has entity but hasn't completed onboarding)
   const needsOnboarding = Boolean(user && entity && entity.onboarding_completed === false);
 
-  console.log(entity);
-
   const value: AuthContextType = {
     user,
     profile,

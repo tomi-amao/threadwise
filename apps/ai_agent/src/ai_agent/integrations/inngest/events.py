@@ -40,7 +40,7 @@ async def send_chat_message_event(
             "metadata": metadata or {}
         }
         
-        await client.send_async({
+        await client.send({
             "name": "chat/message.received",
             "data": event_data
         })
@@ -90,7 +90,7 @@ async def send_document_embedding_event(
             "timestamp": datetime.now().isoformat()
         }
         
-        await client.send_async({
+        await client.send({
             "name": "documents/embedding.completed",
             "data": event_data
         })
@@ -133,11 +133,59 @@ async def send_custom_event(
         if user_id:
             event_payload["user"] = {"id": user_id}
         
-        await client.send_async(event_payload)
+        await client.send(event_payload)
         
         logger.info(f"Sent custom event: {event_name}")
         return True
         
     except Exception as e:
         logger.error(f"Failed to send custom event {event_name}: {str(e)}")
+        return False
+
+
+async def send_squarespace_sync_event(
+    source_id: str,
+    endpoint: Optional[str] = None,
+    cursor: Optional[str] = None
+) -> bool:
+    """Send a Squarespace sync event to trigger data extraction.
+    
+    Args:
+        source_id: The external source ID to sync
+        endpoint: Optional specific endpoint to sync (products, orders, etc.)
+        cursor: Optional cursor to resume pagination
+        
+    Returns:
+        True if event was sent successfully, False otherwise
+    """
+    try:
+        client = get_client()
+        
+        if endpoint:
+            # Single endpoint sync
+            event_name = "squarespace/sync.endpoint"
+            event_data = {
+                "source_id": source_id,
+                "endpoint": endpoint,
+                "cursor": cursor,
+                "timestamp": datetime.now().isoformat()
+            }
+        else:
+            # Full sync
+            event_name = "squarespace/sync.requested"
+            event_data = {
+                "source_id": source_id,
+                "timestamp": datetime.now().isoformat()
+            }
+        
+        await client.send({
+            "name": event_name,
+            "data": event_data
+        })
+        
+        logger.info(f"Sent Squarespace sync event for source {source_id}")
+        return True
+        
+    except Exception as e:
+        logger.error(f"Failed to send Squarespace sync event: {str(e)}")
         return False
