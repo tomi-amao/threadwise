@@ -14,7 +14,6 @@ from pydantic import BaseModel
 from pydantic_settings import BaseSettings
 
 load_dotenv(dotenv_path=".env", override=True)
-DATABASE_URL = os.getenv("DATABASE_URL", "")
 
 # =============================================================================
 # PYDANTIC SETTINGS
@@ -25,7 +24,7 @@ class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
     
     # Database
-    database_url: str = DATABASE_URL
+    database_url: Optional[str] = None
     
     # LLM Configuration
     local_llm_base_url: str = "http://localhost:1234/v1"

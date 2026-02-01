@@ -16,6 +16,7 @@ interface AuthContextType {
   entity: Entity | null;
   session: Session | null;
   loading: boolean;
+  needsOnboarding: boolean;
   signUp: (
     email: string,
     password: string,
@@ -63,38 +64,38 @@ export function AuthProvider({ children }: AuthProviderProps) {
   const [isClient, setIsClient] = useState(false);
 
   // Fetch user profile and entity
-  const fetchProfileAndEntity = useCallback(async (userId: string) => {
+  const fetchProfileAndEntity = useCallback(async (user: User) => {
     try {
       const supabase = await getSupabase();
 
-      // Fetch user profile
-      const { data: profileData, error: profileError } = await supabase
-        .from('user_profiles')
+      // Create profile from user metadata
+      const userProfile: UserProfile = {
+        id: user.id,
+        user_id: user.id,
+        entity_id: null, // Will be set after entity fetch
+        full_name: user.user_metadata?.full_name || '',
+        role: user.user_metadata?.role || 'owner',
+        created_at: user.created_at,
+        updated_at: user.updated_at || user.created_at,
+      };
+
+      // Fetch entity owned by this user
+      const { data: entityData, error: entityError } = await supabase
+        .from('entities')
         .select('*')
-        .eq('user_id', userId)
+        .eq('owner_user_id', user.id)
         .single();
 
-      if (profileError) {
-        console.error('Error fetching profile:', profileError);
-        return;
+      if (entityError) {
+        console.error('Error fetching entity:', entityError);
+        setEntity(null);
+      } else {
+        setEntity(entityData);
+        // Update profile with entity_id
+        userProfile.entity_id = entityData.id;
       }
 
-      setProfile(profileData);
-
-      // Fetch entity if profile has one
-      if (profileData?.entity_id) {
-        const { data: entityData, error: entityError } = await supabase
-          .from('entities')
-          .select('*')
-          .eq('id', profileData.entity_id)
-          .single();
-
-        if (entityError) {
-          console.error('Error fetching entity:', entityError);
-        } else {
-          setEntity(entityData);
-        }
-      }
+      setProfile(userProfile);
     } catch (error) {
       console.error('Error in fetchProfileAndEntity:', error);
     }
@@ -121,8 +122,10 @@ export function AuthProvider({ children }: AuthProviderProps) {
         } = await supabase.auth.getSession();
         setSession(session);
         setUser(session?.user ?? null);
+        console.log(session?.user);
+
         if (session?.user) {
-          await fetchProfileAndEntity(session.user.id);
+          await fetchProfileAndEntity(session.user);
         }
         setLoading(false);
 
@@ -132,7 +135,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
           setUser(session?.user ?? null);
 
           if (session?.user) {
-            await fetchProfileAndEntity(session.user.id);
+            await fetchProfileAndEntity(session.user);
           } else {
             setProfile(null);
             setEntity(null);
@@ -163,18 +166,39 @@ export function AuthProvider({ children }: AuthProviderProps) {
     companyName: string
   ): Promise<{ error: AuthError | null }> => {
     const supabase = await getSupabase();
-    const { error } = await supabase.auth.signUp({
-      email,
-      password,
-      options: {
-        data: {
-          full_name: fullName,
-          company_name: companyName,
-        },
-      },
-    });
 
-    return { error };
+    try {
+      // First sign up the user
+      const { data: authData, error: authError } = await supabase.auth.signUp({
+        email,
+        password,
+        options: {
+          data: {
+            full_name: fullName,
+            role: 'owner',
+          },
+        },
+      });
+
+      if (authError || !authData.user) {
+        return { error: authError };
+      }
+
+      // Then create the entity with the user as owner
+      const { error: entityError } = await supabase.from('entities').insert({
+        name: companyName,
+        owner_user_id: authData.user.id,
+        onboarding_completed: false,
+      });
+
+      if (entityError) {
+        return { error: entityError as any };
+      }
+
+      return { error: null };
+    } catch (err) {
+      return { error: err as AuthError };
+    }
   };
 
   // Sign in
@@ -203,16 +227,19 @@ export function AuthProvider({ children }: AuthProviderProps) {
     }
 
     const supabase = await getSupabase();
-    const { error } = await supabase
-      .from('user_profiles')
-      .update({ ...updates, updated_at: new Date().toISOString() })
-      .eq('user_id', user.id);
+    const { error } = await supabase.auth.updateUser({
+      data: {
+        ...user.user_metadata,
+        ...updates,
+        updated_at: new Date().toISOString(),
+      },
+    });
 
     if (!error) {
-      await fetchProfileAndEntity(user.id);
+      await fetchProfileAndEntity(user);
     }
 
-    return { error };
+    return { error: error as Error | null };
   };
 
   // Update entity
@@ -225,7 +252,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
     const { error } = await supabase.from('entities').update(updates).eq('id', entity.id);
 
     if (!error && user) {
-      await fetchProfileAndEntity(user.id);
+      await fetchProfileAndEntity(user);
     }
 
     return { error };
@@ -234,9 +261,14 @@ export function AuthProvider({ children }: AuthProviderProps) {
   // Refresh profile
   const refreshProfile = async () => {
     if (user) {
-      await fetchProfileAndEntity(user.id);
+      await fetchProfileAndEntity(user);
     }
   };
+
+  // Check if onboarding is needed (user has entity but hasn't completed onboarding)
+  const needsOnboarding = Boolean(user && entity && entity.onboarding_completed === false);
+
+  console.log(entity);
 
   const value: AuthContextType = {
     user,
@@ -244,6 +276,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
     entity,
     session,
     loading,
+    needsOnboarding,
     signUp,
     signIn,
     signOut,

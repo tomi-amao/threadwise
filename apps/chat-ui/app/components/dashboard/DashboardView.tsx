@@ -1,9 +1,11 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import { useRevalidator } from 'react-router';
 import { DashboardHeader } from './DashboardHeader';
 import { KPIMetricsGrid } from './KPIMetricsGrid';
 import { HealthIndicators } from './HealthIndicators';
 import { QuickInsights } from './QuickInsights';
+import { OnboardingModal } from '~/components/onboarding/OnboardingModal';
+import { useAuth } from '~/providers/AuthProvider';
 import type { DashboardLoaderData } from '~/types/dashboard';
 
 // Fallback mock data imports for standalone usage
@@ -31,9 +33,23 @@ interface DashboardViewProps {
  */
 export function DashboardView({ data }: DashboardViewProps) {
   const revalidator = useRevalidator();
+  const { needsOnboarding, refreshProfile } = useAuth();
+  const [showOnboarding, setShowOnboarding] = useState(false);
   const [lastUpdated, setLastUpdated] = useState(
     data?.lastUpdated ? new Date(data.lastUpdated) : new Date()
   );
+
+  // Show onboarding modal when needed
+  useEffect(() => {
+    if (needsOnboarding) {
+      setShowOnboarding(true);
+    }
+  }, [needsOnboarding]);
+
+  const handleOnboardingComplete = useCallback(async () => {
+    setShowOnboarding(false);
+    await refreshProfile();
+  }, [refreshProfile]);
 
   // Use real data if provided, otherwise fall back to mock data
   const kpis = data?.kpis || getDashboardKPIs();
@@ -51,6 +67,9 @@ export function DashboardView({ data }: DashboardViewProps) {
 
   return (
     <div className="min-h-screen bg-background pb-20">
+      {/* Onboarding Modal */}
+      <OnboardingModal open={showOnboarding} onComplete={handleOnboardingComplete} />
+
       <DashboardHeader
         onRefresh={handleRefresh}
         lastUpdated={lastUpdated}
