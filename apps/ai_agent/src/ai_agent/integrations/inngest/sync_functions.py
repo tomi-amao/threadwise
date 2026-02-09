@@ -124,6 +124,20 @@ async def squarespace_sync_all(ctx: inngest.Context) -> Dict[str, Any]:
             ),
         )
         
+        # Trigger normalization for all new raw events
+        await ctx.step.run(
+            "trigger-normalization",
+            lambda: inngest_client.send(
+                inngest.Event(
+                name="squarespace/sync.completed",
+                data={
+                    "source_id": source_id,
+                    "total_items": total_items,
+                    "endpoints": list(results.keys())
+                }
+            )
+        ))
+        
         return {
             "status": "completed",
             "source_id": source_id,

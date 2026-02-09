@@ -14,13 +14,15 @@ import httpx
 logger = logging.getLogger(__name__)
 
 # Squarespace Commerce API endpoints
-SQUARESPACE_BASE_URL = "https://api.squarespace.com/1.0/commerce"
+SQUARESPACE_BASE_URL = "https://api.squarespace.com"
 
 ENDPOINTS = {
-    "products": f"{SQUARESPACE_BASE_URL}/products",
-    "store_pages": f"{SQUARESPACE_BASE_URL}/store_pages",
-    "orders": f"{SQUARESPACE_BASE_URL}/orders",
-    "inventory": f"{SQUARESPACE_BASE_URL}/inventory",
+    "products": f"{SQUARESPACE_BASE_URL}/v2/commerce/products",
+    "store_pages": f"{SQUARESPACE_BASE_URL}/1.0/commerce/store_pages",
+    "orders": f"{SQUARESPACE_BASE_URL}/1.0/commerce/orders",
+    "inventory": f"{SQUARESPACE_BASE_URL}/1.0/commerce/inventory",
+    "transactions": f"{SQUARESPACE_BASE_URL}/1.0/commerce/transactions",
+    "profiles": f"{SQUARESPACE_BASE_URL}/1.0/profiles"
 }
 
 
@@ -119,6 +121,8 @@ class SquarespaceAdapter:
             "store_pages": "store_page",
             "orders": "order",
             "inventory": "inventory_item",
+            "transactions": "transaction",
+            "profiles": "profile",
         }
         return mapping.get(endpoint, endpoint)
     
@@ -146,6 +150,8 @@ class SquarespaceAdapter:
             "store_page": ["id", "urlId"],
             "order": ["orderId", "id"],
             "inventory_item": ["variantId", "productId", "id"],
+            "transaction": ["transactionId", "id"],
+            "profile": ["profileId", "id"],
         }
         
         for field in id_fields.get(entity_type, ["id"]):
@@ -201,7 +207,7 @@ class SquarespaceAdapter:
         """Fetch a single page of data from an endpoint.
         
         Args:
-            endpoint: Endpoint name (products, store_pages, orders, inventory)
+            endpoint: Endpoint name (products, store_pages, orders, inventory, transactions, profiles, etc.)
             cursor: Pagination cursor from previous request
             
         Returns:
@@ -227,6 +233,8 @@ class SquarespaceAdapter:
             "store_pages": "storePages",
             "orders": "orders",
             "inventory": "inventory",
+            "transactions": "documents",
+            "profiles": "profiles",
         }
         
         items_key = items_key_mapping.get(endpoint, endpoint)

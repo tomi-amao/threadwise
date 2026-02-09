@@ -5,7 +5,7 @@ Handles bulk loading of raw API data without transformation.
 
 import asyncio
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Union, cast
 
 from ..core.supabase_client import get_supabase_client
@@ -246,14 +246,14 @@ class ExternalSyncService:
         """
         data = {
             "sync_status": status,
-            "updated_at": datetime.utcnow().isoformat(),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
         }
         
         if cursor is not None:
             data["sync_cursor"] = cursor
         
         if status == "completed":
-            data["last_synced_at"] = datetime.utcnow().isoformat()
+            data["last_synced_at"] = datetime.now(timezone.utc).isoformat()
             data["sync_error"] = None
         
         if error:
@@ -299,7 +299,7 @@ class ExternalSyncService:
             "external_id": external_id,
             "payload": payload,
             "occurred_at": occurred_at.isoformat() if occurred_at else None,
-            "fetched_at": datetime.utcnow().isoformat(),
+            "fetched_at": datetime.now(timezone.utc).isoformat(),
         }
         
         # Upsert based on unique constraint (provider, entity_type, external_id)
@@ -329,7 +329,7 @@ class ExternalSyncService:
         if not events:
             return 0
         
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         
         data = [
             {

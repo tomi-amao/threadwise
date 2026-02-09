@@ -11,6 +11,7 @@ from .embeddings import router as embeddings_router
 from .inngest import router as inngest_router
 from .integrations import router as integrations_router
 from .realtime import router as realtime_router
+from .normalization import router as normalization_router
 
 # Main API router
 router = APIRouter()
@@ -22,5 +23,6 @@ router.include_router(embeddings_router, prefix="/embeddings", tags=["Embeddings
 router.include_router(inngest_router, prefix="/inngest", tags=["Inngest"])
 router.include_router(integrations_router, prefix="/integrations", tags=["Integrations"])
 router.include_router(realtime_router, prefix="/realtime", tags=["Realtime"])
+router.include_router(normalization_router, tags=["Normalization"])
 
 __all__ = ["router"]

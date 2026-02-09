@@ -3,6 +3,7 @@
 Provides endpoints for managing external sources and triggering syncs.
 """
 
+import asyncio
 import logging
 from typing import List, Optional
 
@@ -14,6 +15,7 @@ import inngest
 
 from ...services.external_sync_service import sync_service
 from ...integrations.inngest import get_client
+from ...normalization.inngest_functions import trigger_source_normalization
 
 logger = logging.getLogger(__name__)
 
@@ -112,6 +114,7 @@ class IntegrationSummary(BaseModel):
     api_key_status: Optional[str] = "pending"
     api_key_last_validated_at: Optional[str] = None
     api_key_error: Optional[str] = None
+    failed_events_count: int = 0
 
 
 class ValidateApiKeyResponse(BaseModel):
@@ -121,6 +124,26 @@ class ValidateApiKeyResponse(BaseModel):
     status: str
     message: str
     provider: str
+
+
+class TriggerNormalizeRequest(BaseModel):
+    """Request to trigger normalization for a source."""
+    
+    mode: str = Field(
+        default="soft",
+        description="'hard' resets all to pending; 'soft' only processes pending"
+    )
+    batch_size: int = Field(default=100, ge=1, le=500, description="Events per batch")
+
+
+class TriggerNormalizeResponse(BaseModel):
+    """Response from triggering normalization."""
+    
+    source_id: str
+    status: str
+    mode: str
+    message: str
+    event_ids: List[str] = []
 
 
 # =============================================================================
@@ -484,6 +507,86 @@ async def get_sync_stats(source_id: str):
 
 
 # =============================================================================
+# NORMALIZATION ENDPOINTS
+# =============================================================================
+
+
+@router.post(
+    "/sources/{source_id}/normalize",
+    response_model=TriggerNormalizeResponse,
+    summary="Trigger Normalization",
+    description="""
+    Trigger normalization and persistence for all raw events from a source.
+    
+    This is the "Load Data" action in the UI. After syncing raw data, this 
+    endpoint processes it into canonical models (customers, orders, products, etc.).
+    
+    **Modes:**
+    - `soft` (default): Only processes events with status 'pending'. Safe to re-run.
+    - `hard`: Resets ALL events to 'pending' and reprocesses everything from scratch.
+    
+    Progress is streamed via Inngest Realtime on the normalization channel.
+    """
+)
+async def trigger_normalize(
+    source_id: str,
+    request: Optional[TriggerNormalizeRequest] = None,
+):
+    """Trigger normalization for an external source."""
+    try:
+        # Verify source exists
+        source = await sync_service.get_external_source(source_id)
+        
+        if not source:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"External source not found: {source_id}"
+            )
+        
+        mode = request.mode if request else "soft"
+        batch_size = request.batch_size if request else 100
+        
+        if mode not in ("hard", "soft"):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="mode must be 'hard' or 'soft'"
+            )
+        
+        event_ids = await trigger_source_normalization(
+            source_id=source_id,
+            mode=mode,
+            batch_size=batch_size
+        )
+        
+        if event_ids is None:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to trigger normalization"
+            )
+        
+        logger.info(
+            f"Triggered {mode} normalization for source {source_id}"
+        )
+        
+        return TriggerNormalizeResponse(
+            source_id=source_id,
+            status="triggered",
+            mode=mode,
+            message=f"Normalization triggered ({mode} mode)",
+            event_ids=event_ids
+        )
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error triggering normalization: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )
+
+
+# =============================================================================
 # INTEGRATION SUMMARY (for UI)
 # =============================================================================
 
@@ -506,6 +609,20 @@ async def get_integrations_summary(entity_id: Optional[str] = None):
             except Exception:
                 stats = None
             
+            # Get failed events count
+            failed_count = 0
+            try:
+                result = await asyncio.to_thread(
+                    lambda: sync_service.client.table("external_raw_events")
+                    .select("id", count="exact")
+                    .eq("source_id", source["id"])
+                    .eq("processing_status", "failed")
+                    .execute()
+                )
+                failed_count = result.count or 0
+            except Exception as e:
+                logger.warning(f"Failed to get failed events count for {source['id']}: {e}")
+            
             # Extract entity name from joined data
             entity_name = None
             if source.get("entities"):
@@ -523,7 +640,8 @@ async def get_integrations_summary(entity_id: Optional[str] = None):
                 stats=stats,
                 api_key_status=source.get("api_key_status", "pending"),
                 api_key_last_validated_at=source.get("api_key_last_validated_at"),
-                api_key_error=source.get("api_key_error")
+                api_key_error=source.get("api_key_error"),
+                failed_events_count=failed_count
             ))
         
         return summaries

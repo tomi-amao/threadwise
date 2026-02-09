@@ -10,6 +10,13 @@ The API is organized into modular routers:
 - Inngest endpoints (/inngest/*)
 """
 
+# IMPORTANT: Configure logging BEFORE any langgraph/inngest imports
+# This prevents the structlog format_exc_info warning
+try:
+    from .core import logging_config  # noqa: F401
+except ImportError:
+    pass
+
 import logging
 from contextlib import asynccontextmanager
 

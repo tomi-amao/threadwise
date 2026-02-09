@@ -21,6 +21,7 @@ export interface IntegrationSummary {
   api_key_status: 'pending' | 'valid' | 'invalid' | 'expired';
   api_key_last_validated_at: string | null;
   api_key_error: string | null;
+  failed_events_count: number;
 }
 
 // Sync trigger response
@@ -29,6 +30,22 @@ export interface TriggerSyncResponse {
   status: string;
   message: string;
   event_ids: string[];
+}
+
+// Normalization trigger response
+export interface TriggerNormalizeResponse {
+  source_id: string;
+  status: string;
+  mode: 'hard' | 'soft';
+  message: string;
+  event_ids: string[];
+}
+
+// Normalization stats (from the normalization API)
+export interface NormalizationStats {
+  by_status: Record<string, number>;
+  by_entity_type: Record<string, number>;
+  by_status_and_type: Record<string, number>;
 }
 
 // API key validation response
@@ -298,6 +315,111 @@ export async function validateApiKey(sourceId: string): Promise<ValidateApiKeyRe
     return await response.json();
   } catch (error) {
     console.error('Error validating API key:', error);
+    return null;
+  }
+}
+
+/**
+ * Trigger normalization for a source (the "Load Data" action)
+ *
+ * Processes synced raw events into canonical models (customers, orders, products, etc.)
+ * Progress is streamed via Inngest Realtime on the normalization channel.
+ *
+ * @param sourceId - The external source ID to normalize
+ * @param mode - 'soft' (default, only pending) or 'hard' (reset everything and reprocess)
+ * @param batchSize - Number of events per batch (default 100)
+ */
+export async function triggerNormalization(
+  sourceId: string,
+  mode: 'hard' | 'soft' = 'soft',
+  batchSize: number = 100
+): Promise<TriggerNormalizeResponse | null> {
+  const baseUrl = getApiBaseUrl();
+
+  try {
+    const response = await fetch(`${baseUrl}/integrations/sources/${sourceId}/normalize`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ mode, batch_size: batchSize }),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('Failed to trigger normalization:', response.status, errorText);
+      return null;
+    }
+
+    return await response.json();
+  } catch (error) {
+    console.error('Error triggering normalization:', error);
+    return null;
+  }
+}
+
+/**
+ * Get normalization processing stats for a source
+ *
+ * Returns counts by status, entity type, and combined status/type.
+ *
+ * @param sourceId - The external source ID to get stats for
+ */
+export async function getNormalizationStats(sourceId: string): Promise<NormalizationStats | null> {
+  const baseUrl = getApiBaseUrl();
+
+  try {
+    const response = await fetch(`${baseUrl}/normalization/stats?source_id=${sourceId}`, {
+      method: 'GET',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+    });
+
+    if (!response.ok) {
+      console.error('Failed to fetch normalization stats:', response.status);
+      return null;
+    }
+
+    return await response.json();
+  } catch (error) {
+    console.error('Error fetching normalization stats:', error);
+    return null;
+  }
+}
+
+/**
+ * Trigger reprocessing of failed events for a source
+ *
+ * @param sourceId - Optional source ID to filter failed events
+ * @param limit - Maximum number of failed events to reprocess (default 100)
+ */
+export async function reprocessFailedEvents(
+  sourceId?: string,
+  limit: number = 100
+): Promise<{ status: string; message: string } | null> {
+  const baseUrl = getApiBaseUrl();
+
+  try {
+    const body = sourceId ? { source_id: sourceId, limit } : { limit };
+
+    const response = await fetch(`${baseUrl}/normalization/reprocess-failed`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(body),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('Failed to trigger reprocessing:', response.status, errorText);
+      return null;
+    }
+
+    return await response.json();
+  } catch (error) {
+    console.error('Error triggering reprocessing:', error);
     return null;
   }
 }

@@ -18,6 +18,22 @@ from .sync_functions import (
     SYNC_FUNCTIONS,
 )
 
+# Import normalization functions and triggers
+from ...normalization.inngest_functions import (
+    normalize_raw_event,
+    normalize_batch,
+    normalize_source,
+    normalize_after_sync,
+    reprocess_failed_events,
+    reprocess_stuck_processing_events,
+    reprocess_failed_manual,
+    trigger_normalization,
+    trigger_batch_normalization,
+    trigger_source_normalization,
+    trigger_reprocess_failed,
+    NORMALIZATION_FUNCTIONS,
+)
+
 # Aliases for route compatibility
 get_inngest_client = get_client
 validate_inngest_config = validate_config
@@ -41,6 +57,19 @@ __all__ = [
     "squarespace_sync_endpoint",
     "squarespace_sync_single_endpoint",
     "SYNC_FUNCTIONS",
+    # Normalization functions
+    "normalize_raw_event",
+    "normalize_batch",
+    "normalize_source",
+    "normalize_after_sync",
+    "reprocess_failed_events",
+    "reprocess_stuck_processing_events",
+    "reprocess_failed_manual",
+    "trigger_normalization",
+    "trigger_batch_normalization",
+    "trigger_source_normalization",
+    "trigger_reprocess_failed",
+    "NORMALIZATION_FUNCTIONS",
     # Events
     "send_chat_message_event",
     "send_document_embedding_event",

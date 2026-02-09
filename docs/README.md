@@ -80,3 +80,9 @@ Check if an uploaded documents has been successfully embeded, if not add functio
 add memories with semantic search, based on logged in user
 
 create database funcions to calacualre common financial reports metrics
+
+implement backend authentication
+
+reprocess button in integration page
+
+highlight raw events that are stuck in processing

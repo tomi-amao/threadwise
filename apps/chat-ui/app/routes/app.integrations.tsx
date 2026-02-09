@@ -26,6 +26,11 @@ import {
   Cube,
   FileText,
   Sparkle,
+  Bank,
+  Coins,
+  UserCircle,
+  Database,
+  CaretDown,
 } from 'phosphor-react';
 import { Button } from '~/components/ui/button';
 import { Input } from '~/components/ui/input';
@@ -34,24 +39,28 @@ import { useAuth } from '~/providers/AuthProvider';
 import {
   getIntegrationsSummary,
   triggerSync,
+  triggerNormalization,
   createExternalSource,
   validateApiKey,
+  reprocessFailedEvents,
   type IntegrationSummary,
 } from '~/lib/api/integrations';
 import { SyncProgressToast } from '~/components/integrations/SyncProgressToast';
+import { NormalizationProgressToast } from '~/components/integrations/NormalizationProgressToast';
 
 // Provider configuration
 const PROVIDERS = {
   squarespace: {
     name: 'Squarespace',
     icon: <Storefront size={24} weight="duotone" className="text-orange-400" />,
-    description: 'Sync products, orders, inventory, and store pages from Squarespace Commerce',
-    endpoints: ['products', 'orders', 'inventory', 'store_pages'],
+    description:
+      'Sync products, orders, inventory, profiles, transactions, and store pages from Squarespace Commerce',
+    endpoints: ['products', 'orders', 'inventory', 'profiles', 'transactions'],
     color: 'orange',
   },
   revolut: {
     name: 'Revolut',
-    icon: <PlugsConnected size={24} weight="duotone" className="text-blue-400" />,
+    icon: <Bank size={24} weight="duotone" className="text-blue-400" />,
     description: 'Sync transactions and accounts from Revolut Business',
     endpoints: ['transactions', 'accounts'],
     color: 'blue',
@@ -64,7 +73,8 @@ const endpointIcons: Record<string, React.ReactNode> = {
   orders: <ShoppingCart size={14} weight="duotone" />,
   inventory: <Cube size={14} weight="duotone" />,
   store_pages: <FileText size={14} weight="duotone" />,
-  transactions: <ArrowsClockwise size={14} weight="duotone" />,
+  profiles: <UserCircle size={14} weight="duotone" />,
+  transactions: <Coins size={14} weight="duotone" />,
   accounts: <Buildings size={14} weight="duotone" />,
 };
 
@@ -187,17 +197,25 @@ function IntegrationCard({
   onSync,
   onSyncEndpoint,
   onValidateApiKey,
+  onLoadData,
+  onReprocessFailed,
   isSyncing,
   syncingEndpoint,
   isValidatingApiKey,
+  isNormalizing,
+  isReprocessing,
 }: {
   integration: IntegrationSummary;
   onSync: () => void;
   onSyncEndpoint: (endpoint: string) => void;
   onValidateApiKey: () => void;
+  onLoadData: (mode: 'hard' | 'soft') => void;
+  onReprocessFailed: () => void;
   isSyncing: boolean;
   syncingEndpoint: string | null;
   isValidatingApiKey: boolean;
+  isNormalizing: boolean;
+  isReprocessing: boolean;
 }) {
   const providerConfig = PROVIDERS[integration.provider as keyof typeof PROVIDERS];
 
@@ -296,6 +314,48 @@ function IntegrationCard({
           <div className="mb-4 p-3 rounded-xl bg-red-500/10 border border-red-500/20">
             <p className="text-sm text-red-400 font-medium">Sync Error</p>
             <p className="text-sm text-red-400/80 mt-1">{integration.sync_error}</p>
+          </div>
+        )}
+
+        {/* Failed Events Warning */}
+        {integration.failed_events_count > 0 && (
+          <div className="mb-4 p-4 rounded-xl bg-orange-500/10 border border-orange-500/20">
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex items-start gap-3">
+                <Warning size={20} weight="fill" className="text-orange-400 shrink-0 mt-0.5" />
+                <div>
+                  <p className="text-sm text-orange-400 font-medium">
+                    {integration.failed_events_count} Failed Event
+                    {integration.failed_events_count !== 1 ? 's' : ''}
+                  </p>
+                  <p className="text-sm text-orange-400/80 mt-1">
+                    Some events failed to process. Click "Retry Failed Events" to reprocess them.
+                  </p>
+                </div>
+              </div>
+              <Button
+                onClick={onReprocessFailed}
+                disabled={isReprocessing || isSyncing}
+                variant="outline"
+                size="sm"
+                className={cn(
+                  'shrink-0',
+                  'hover:bg-orange-500/10 hover:border-orange-500/30 hover:text-orange-400'
+                )}
+              >
+                {isReprocessing ? (
+                  <>
+                    <ArrowsClockwise size={14} weight="bold" className="mr-2 animate-spin" />
+                    Retrying...
+                  </>
+                ) : (
+                  <>
+                    <ArrowsClockwise size={14} weight="bold" className="mr-2" />
+                    Retry Failed Events
+                  </>
+                )}
+              </Button>
+            </div>
           </div>
         )}
 
@@ -408,29 +468,152 @@ function IntegrationCard({
             <Trash size={14} weight="bold" className="mr-2" />
             Remove
           </Button>
-          <Button
-            onClick={onSync}
-            disabled={isSyncActive}
-            className={cn(
-              'bg-gradient-to-r from-primary to-primary/90',
-              'hover:from-primary/90 hover:to-primary/80',
-              'shadow-lg shadow-primary/20'
+          <div className="flex items-center gap-2">
+            {/* Load Data button (normalization) - visible when data has been synced */}
+            {(integration.sync_status === 'completed' ||
+              (integration.stats &&
+                Object.values(integration.stats).reduce((a, b) => a + b, 0) > 0)) && (
+              <LoadDataButton
+                onLoadData={onLoadData}
+                disabled={isSyncActive || isNormalizing}
+                isNormalizing={isNormalizing}
+              />
             )}
-          >
-            {isSyncActive ? (
-              <>
-                <ArrowsClockwise size={16} weight="bold" className="mr-2 animate-spin" />
-                Syncing...
-              </>
-            ) : (
-              <>
-                <ArrowsClockwise size={16} weight="bold" className="mr-2" />
-                Sync All Data
-              </>
-            )}
-          </Button>
+            <Button
+              onClick={onSync}
+              disabled={isSyncActive}
+              className={cn(
+                'bg-gradient-to-r from-primary to-primary/90',
+                'hover:from-primary/90 hover:to-primary/80',
+                'shadow-lg shadow-primary/20'
+              )}
+            >
+              {isSyncActive ? (
+                <>
+                  <ArrowsClockwise size={16} weight="bold" className="mr-2 animate-spin" />
+                  Syncing...
+                </>
+              ) : (
+                <>
+                  <ArrowsClockwise size={16} weight="bold" className="mr-2" />
+                  Sync All Data
+                </>
+              )}
+            </Button>
+          </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+/**
+ * Load Data Button with hard/soft mode dropdown
+ *
+ * Appears on integration cards after data has been synced.
+ * Soft mode (default): Only processes new/pending events.
+ * Hard mode: Resets everything and reprocesses from scratch.
+ */
+function LoadDataButton({
+  onLoadData,
+  disabled,
+  isNormalizing,
+}: {
+  onLoadData: (mode: 'hard' | 'soft') => void;
+  disabled: boolean;
+  isNormalizing: boolean;
+}) {
+  const [showModeMenu, setShowModeMenu] = useState(false);
+
+  return (
+    <div className="relative">
+      <div className="flex items-center">
+        {/* Main button - soft mode by default */}
+        <Button
+          onClick={() => onLoadData('soft')}
+          disabled={disabled}
+          variant="outline"
+          className={cn(
+            'rounded-r-none border-r-0',
+            'hover:bg-purple-500/10 hover:border-purple-500/30 hover:text-purple-400',
+            isNormalizing && 'border-purple-500/30 bg-purple-500/10 text-purple-400'
+          )}
+        >
+          {isNormalizing ? (
+            <>
+              <Database size={16} weight="bold" className="mr-2 animate-pulse" />
+              Loading...
+            </>
+          ) : (
+            <>
+              <Database size={16} weight="bold" className="mr-2" />
+              Load Data
+            </>
+          )}
+        </Button>
+        {/* Mode dropdown toggle */}
+        <Button
+          variant="outline"
+          size="sm"
+          disabled={disabled}
+          className={cn(
+            'rounded-l-none px-2',
+            'hover:bg-purple-500/10 hover:border-purple-500/30 hover:text-purple-400'
+          )}
+          onClick={() => setShowModeMenu(!showModeMenu)}
+        >
+          <CaretDown size={14} />
+        </Button>
+      </div>
+
+      {/* Mode dropdown menu */}
+      {showModeMenu && (
+        <div
+          className={cn(
+            'absolute right-0 bottom-full mb-2 w-64 z-50',
+            'bg-card border border-border rounded-xl shadow-xl',
+            'animate-in fade-in slide-in-from-bottom-2 duration-150'
+          )}
+          onMouseLeave={() => setShowModeMenu(false)}
+        >
+          <div className="p-2">
+            <button
+              onClick={() => {
+                onLoadData('soft');
+                setShowModeMenu(false);
+              }}
+              className="w-full text-left p-3 rounded-lg hover:bg-accent transition-colors"
+            >
+              <div className="flex items-center gap-2 mb-1">
+                <span className="text-sm font-medium text-foreground">Soft Load</span>
+                <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-blue-500/10 text-blue-400">
+                  DEFAULT
+                </span>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Only processes new or pending events. Safe to re-run.
+              </p>
+            </button>
+            <button
+              onClick={() => {
+                onLoadData('hard');
+                setShowModeMenu(false);
+              }}
+              className="w-full text-left p-3 rounded-lg hover:bg-accent transition-colors"
+            >
+              <div className="flex items-center gap-2 mb-1">
+                <span className="text-sm font-medium text-foreground">Hard Load</span>
+                <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-orange-500/10 text-orange-400">
+                  RESET
+                </span>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Resets all events to pending and reprocesses everything from scratch.
+              </p>
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -652,10 +835,17 @@ export default function IntegrationsPage() {
   const [syncingIds, setSyncingIds] = useState<Set<string>>(new Set());
   const [syncingEndpoints, setSyncingEndpoints] = useState<Map<string, string>>(new Map());
   const [validatingIds, setValidatingIds] = useState<Set<string>>(new Set());
+  const [normalizingIds, setNormalizingIds] = useState<Set<string>>(new Set());
+  const [reprocessingIds, setReprocessingIds] = useState<Set<string>>(new Set());
   const [showAddForm, setShowAddForm] = useState(false);
   const [activeSyncSource, setActiveSyncSource] = useState<{
     id: string;
     name: string;
+  } | null>(null);
+  const [activeNormalizeSource, setActiveNormalizeSource] = useState<{
+    id: string;
+    name: string;
+    mode: 'hard' | 'soft';
   } | null>(null);
 
   // Fetch data
@@ -682,6 +872,41 @@ export default function IntegrationsPage() {
     setActiveSyncSource(null);
     // Refresh the list when closing
     fetchData();
+  };
+
+  // Close normalization progress dialog
+  const handleCloseNormalizeProgress = () => {
+    setActiveNormalizeSource(null);
+    fetchData();
+  };
+
+  // Handle load data (normalization)
+  const handleLoadData = async (sourceId: string, mode: 'hard' | 'soft') => {
+    setNormalizingIds(prev => new Set([...prev, sourceId]));
+
+    const integration = integrations.find(i => i.id === sourceId);
+    const name = integration?.display_name || integration?.provider || '';
+
+    setActiveNormalizeSource({ id: sourceId, name, mode });
+    toast.loading(`Loading data (${mode} mode)...`, { id: `normalize-${sourceId}` });
+
+    try {
+      const response = await triggerNormalization(sourceId, mode);
+      if (response?.status !== 'triggered') {
+        throw new Error('Normalization did not trigger successfully');
+      }
+      toast.success(`Data loading triggered (${mode} mode)`, { id: `normalize-${sourceId}` });
+    } catch (error) {
+      console.error('Failed to trigger normalization:', error);
+      toast.error('Failed to trigger data loading', { id: `normalize-${sourceId}` });
+      setActiveNormalizeSource(null);
+    } finally {
+      setNormalizingIds(prev => {
+        const next = new Set(prev);
+        next.delete(sourceId);
+        return next;
+      });
+    }
   };
 
   // Handle sync
@@ -748,6 +973,32 @@ export default function IntegrationsPage() {
       toast.error('Failed to validate API key', { id: `validate-${sourceId}` });
     } finally {
       setValidatingIds(prev => {
+        const next = new Set(prev);
+        next.delete(sourceId);
+        return next;
+      });
+    }
+  };
+
+  // Handle reprocessing failed events
+  const handleReprocessFailed = async (sourceId: string) => {
+    setReprocessingIds(prev => new Set([...prev, sourceId]));
+    toast.loading('Reprocessing failed events...', { id: `reprocess-${sourceId}` });
+
+    try {
+      const result = await reprocessFailedEvents(sourceId, 100);
+      if (result?.status === 'queued') {
+        toast.success('Failed events queued for reprocessing', { id: `reprocess-${sourceId}` });
+        // Refresh data after a short delay
+        setTimeout(() => fetchData(), 2000);
+      } else {
+        throw new Error('Failed to trigger reprocessing');
+      }
+    } catch (error) {
+      console.error('Failed to reprocess events:', error);
+      toast.error('Failed to reprocess events', { id: `reprocess-${sourceId}` });
+    } finally {
+      setReprocessingIds(prev => {
         const next = new Set(prev);
         next.delete(sourceId);
         return next;
@@ -838,9 +1089,13 @@ export default function IntegrationsPage() {
                 onSync={() => handleSync(integration.id)}
                 onSyncEndpoint={endpoint => handleSync(integration.id, endpoint)}
                 onValidateApiKey={() => handleValidateApiKey(integration.id)}
+                onLoadData={mode => handleLoadData(integration.id, mode)}
+                onReprocessFailed={() => handleReprocessFailed(integration.id)}
                 isSyncing={syncingIds.has(integration.id)}
                 syncingEndpoint={syncingEndpoints.get(integration.id) || null}
                 isValidatingApiKey={validatingIds.has(integration.id)}
+                isNormalizing={normalizingIds.has(integration.id)}
+                isReprocessing={reprocessingIds.has(integration.id)}
               />
             ))}
           </div>
@@ -852,6 +1107,19 @@ export default function IntegrationsPage() {
             sourceId={activeSyncSource.id}
             sourceName={activeSyncSource.name}
             onClose={handleCloseSyncProgress}
+            onComplete={() => {
+              fetchData();
+            }}
+          />
+        )}
+
+        {/* Normalization Progress Toast - Non-blocking */}
+        {activeNormalizeSource && (
+          <NormalizationProgressToast
+            sourceId={activeNormalizeSource.id}
+            sourceName={activeNormalizeSource.name}
+            mode={activeNormalizeSource.mode}
+            onClose={handleCloseNormalizeProgress}
             onComplete={() => {
               fetchData();
             }}

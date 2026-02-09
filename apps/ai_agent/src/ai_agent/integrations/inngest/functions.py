@@ -224,10 +224,14 @@ async def _cleanup_temporary_files() -> int:
 # Import sync functions
 from .sync_functions import SYNC_FUNCTIONS
 
+# Import normalization functions
+from ...normalization.inngest_functions import NORMALIZATION_FUNCTIONS
+
 # Export all functions for registration
 FUNCTIONS = [
     process_chat_message,
     process_document_embedding, 
     cleanup_old_threads,
     *SYNC_FUNCTIONS,  # Include external sync functions
+    *NORMALIZATION_FUNCTIONS,  # Include normalization functions
 ]
