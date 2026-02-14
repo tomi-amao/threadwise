@@ -49,6 +49,7 @@ class Settings(BaseSettings):
     supabase_url: Optional[str] = None
     supabase_key: Optional[str] = None
     supabase_anon_key: Optional[str] = None
+    supabase_access_token: Optional[str] = None  # PAT for MCP auth
     
     # Development settings
     inngest_dev: Optional[str] = None

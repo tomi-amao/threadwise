@@ -86,3 +86,67 @@ implement backend authentication
 reprocess button in integration page
 
 highlight raw events that are stuck in processing
+
+Adding Stripe endpoints to imrpove context
+Does Stripe Improve AI Context?
+
+Yes — significantly.
+
+It adds:
+
+Payment success rate metrics
+
+Fraud signals
+
+Risk exposure
+
+Dispute patterns
+
+Real liquidity data
+
+Settlement timing data
+
+Customer payment behaviour
+
+decision between database approach and mcp-only appraoch
+Database Approach
+
+You are building:
+
+A persistent, structured, versioned memory of the business.
+
+Your agent queries:
+
+Canonical objects
+
+Derived aggregates
+
+Ledger balances
+
+Reconciled data
+
+This enables:
+
+Forecasting
+
+Trend detection
+
+Risk scoring
+
+Stable financial statements
+
+MCP-Only Approach
+
+You are building:
+
+A live query synthesizer.
+
+The agent must:
+
+Pull raw data
+
+Normalize on the fly
+
+Reconcile on the fly
+
+Infer clearing logic on the fly

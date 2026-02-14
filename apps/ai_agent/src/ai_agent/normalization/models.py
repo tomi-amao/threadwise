@@ -260,6 +260,23 @@ class CanonicalOrder(CanonicalBase):
     metadata: Dict[str, Any] = Field(default_factory=dict, description="Provider-specific fields")
 
 
+class CanonicalPaymentFee(BaseModel):
+    """Canonical payment processing fee model.
+    
+    Represents a processing fee charged by a payment gateway.
+    """
+    
+    model_config = ConfigDict(frozen=True)
+    
+    external_fee_id: Optional[str] = None
+    gross_fee: Money
+    refunded_fee: Money
+    net_fee: Money
+    
+    # Provider-specific extras
+    metadata: Dict[str, Any] = Field(default_factory=dict, description="Provider-specific fields")
+
+
 class CanonicalPayment(CanonicalBase):
     """Canonical payment model.
     
@@ -275,13 +292,25 @@ class CanonicalPayment(CanonicalBase):
     
     # Payment details
     amount: Money
+    refunded_amount: Optional[Money] = None
+    net_amount: Optional[Money] = None
     status: PaymentStatus = PaymentStatus.PENDING
+    
+    # Payment gateway
+    gateway: Optional[str] = Field(default=None, description="Payment gateway/processor (e.g. STRIPE, SQUARE)")
+    external_payment_id: Optional[str] = Field(default=None, description="Payment transaction ID from the gateway")
     
     # Payment method
     payment_method: Optional[str] = None
     
-    # Transaction IDs
+    # Transaction IDs (legacy, kept for backward compatibility)
     transaction_id: Optional[str] = None
+    
+    # Timing
+    paid_on: Optional[datetime] = Field(default=None, description="When the payment was actually made")
+    
+    # Processing fees
+    fees: List[CanonicalPaymentFee] = Field(default_factory=list, description="Processing fees for this payment")
     
     # Provider-specific extras
     metadata: Dict[str, Any] = Field(default_factory=dict, description="Provider-specific fields")

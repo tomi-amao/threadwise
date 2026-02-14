@@ -5,6 +5,7 @@ and transforms them into canonical models.
 """
 
 import logging
+import re
 from decimal import Decimal
 from typing import Any, Dict, List, Optional, cast
 from uuid import UUID
@@ -17,6 +18,7 @@ from .models import (
     CanonicalLineItem,
     CanonicalOrder,
     CanonicalPayment,
+    CanonicalPaymentFee,
     CanonicalProduct,
     CanonicalProductVariant,
     FulfillmentStatus,
@@ -521,7 +523,6 @@ class SquarespaceNormalizer(BaseNormalizer):
         payments_data = payload.get("payments", [])
         
         if not payments_data:
-            # No payments in this transaction document
             warnings.append("Transaction document contains no payments")
             return NormalizationResult.failure_result(
                 entity_type="transaction",
@@ -534,24 +535,20 @@ class SquarespaceNormalizer(BaseNormalizer):
         order_external_id = payload.get("salesOrderId")
         customer_email = payload.get("customerEmail")
         
-        # Get document-level data for metadata
-        document_metadata = {
+        # Build document-level metadata (only truly supplementary info)
+        document_metadata: Dict[str, Any] = {
             "document_id": payload.get("id"),
             "customer_email": customer_email,
             "voided": payload.get("voided", False),
         }
         
-        # Add document-level totals to metadata
-        if payload.get("totalSales"):
-            document_metadata["document_total_sales"] = payload["totalSales"]
-        if payload.get("totalNetSales"):
-            document_metadata["document_total_net_sales"] = payload["totalNetSales"]
-        if payload.get("total"):
-            document_metadata["document_total"] = payload["total"]
-        if payload.get("totalNetPayment"):
-            document_metadata["document_total_net_payment"] = payload["totalNetPayment"]
+        # Document-level totals (useful for reconciliation)
+        for key in ("totalSales", "totalNetSales", "total", "totalNetPayment",
+                     "totalNetShipping", "totalTaxes"):
+            if payload.get(key):
+                document_metadata[f"document_{self._camel_to_snake(key)}"] = payload[key]
         
-        # Add line items, discounts, shipping to metadata
+        # Supplementary document data
         if payload.get("salesLineItems"):
             document_metadata["sales_line_items"] = payload["salesLineItems"]
         if payload.get("discounts"):
@@ -568,62 +565,56 @@ class SquarespaceNormalizer(BaseNormalizer):
         for idx, payment_data in enumerate(payments_data):
             payment_id = payment_data.get("id", f"{external_id}-payment-{idx}")
             
+            # Extract monetary values
+            amount_raw = payment_data.get("amount", {})
+            refunded_raw = payment_data.get("refundedAmount", {})
+            net_raw = payment_data.get("netAmount", {})
+            
+            amount_value = Decimal(str(amount_raw.get("value", "0")))
+            refunded_value = Decimal(str(refunded_raw.get("value", "0")))
+            net_value = Decimal(str(net_raw.get("value", "0")))
+            payment_currency = amount_raw.get("currency", "USD")
+            
             # Determine payment status
-            amount = payment_data.get("amount", {})
-            refunded_amount = payment_data.get("refundedAmount", {})
-            
-            refunded_value = Decimal(str(refunded_amount.get("value", "0")))
-            amount_value = Decimal(str(amount.get("value", "0")))
-            
             payment_status = PaymentStatus.CAPTURED
             if refunded_value > 0:
                 if refunded_value >= amount_value:
                     payment_status = PaymentStatus.REFUNDED
                 # Partial refunds still show as CAPTURED in our model
-            
-            # Check if voided
             if payload.get("voided"):
                 payment_status = PaymentStatus.FAILED
             
-            # Build payment-specific metadata
-            payment_metadata = dict(document_metadata)  # Copy document metadata
-            payment_metadata.update({
-                "net_amount": payment_data.get("netAmount"),
-                "refunded_amount": refunded_amount,
-                "credit_card_type": payment_data.get("creditCardType"),
-                "provider": payment_data.get("provider"),
-                "paid_on": payment_data.get("paidOn"),
-                "external_customer_id": payment_data.get("externalCustomerId"),
-            })
+            # Extract gateway and payment method
+            gateway = payment_data.get("provider")
+            credit_card_type = payment_data.get("creditCardType")
             
-            # Add refunds to metadata if present
-            if payment_data.get("refunds"):
-                payment_metadata["refunds"] = payment_data["refunds"]
-            
-            # Add processing fees to metadata if present
-            if payment_data.get("processingFees"):
-                payment_metadata["processing_fees"] = payment_data["processingFees"]
-            
-            # Add gift card info if present
-            if payment_data.get("giftCardId"):
-                payment_metadata["gift_card_id"] = payment_data["giftCardId"]
-            
-            # Add external transaction properties if present
-            if payment_data.get("externalTransactionProperties"):
-                payment_metadata["external_transaction_properties"] = payment_data["externalTransactionProperties"]
-            
-            # Determine payment method
-            payment_method = payment_data.get("creditCardType")
+            payment_method = credit_card_type
             if payment_data.get("giftCardId"):
                 payment_method = "GIFT_CARD"
             elif not payment_method:
-                payment_method = payment_data.get("provider", "UNKNOWN")
+                payment_method = gateway or "UNKNOWN"
             
             # Parse timestamps
             created_at = self._parse_datetime(payload.get("createdOn"))
             paid_on = self._parse_datetime(payment_data.get("paidOn"))
             
-            # Create canonical payment
+            # Normalize processing fees into dedicated models
+            fees = self._normalize_processing_fees(
+                payment_data.get("processingFees", []),
+                payment_currency
+            )
+            
+            # Build metadata (only supplementary info not in dedicated columns)
+            payment_metadata = dict(document_metadata)
+            if payment_data.get("externalCustomerId"):
+                payment_metadata["external_customer_id"] = payment_data["externalCustomerId"]
+            if payment_data.get("refunds"):
+                payment_metadata["refunds"] = payment_data["refunds"]
+            if payment_data.get("giftCardId"):
+                payment_metadata["gift_card_id"] = payment_data["giftCardId"]
+            if payment_data.get("externalTransactionProperties"):
+                payment_metadata["external_transaction_properties"] = payment_data["externalTransactionProperties"]
+            
             canonical_payment = CanonicalPayment(
                 # Provenance
                 provider=self.provider,
@@ -637,20 +628,29 @@ class SquarespaceNormalizer(BaseNormalizer):
                 # Order reference
                 order_external_id=order_external_id,
                 
-                # Payment details
-                amount=Money(
-                    amount=amount_value,
-                    currency=amount.get("currency", "USD")
-                ),
+                # Payment amounts (dedicated columns)
+                amount=Money(amount=amount_value, currency=payment_currency),
+                refunded_amount=Money(amount=refunded_value, currency=payment_currency),
+                net_amount=Money(amount=net_value, currency=payment_currency),
                 status=payment_status,
+                
+                # Gateway info (dedicated columns)
+                gateway=gateway,
+                external_payment_id=payment_data.get("externalTransactionId"),
                 
                 # Payment method
                 payment_method=payment_method,
                 
-                # Transaction ID from payment gateway
+                # Legacy field (kept for backward compat, mirrors external_payment_id)
                 transaction_id=payment_data.get("externalTransactionId"),
                 
-                # Provider-specific metadata
+                # Timing (dedicated column)
+                paid_on=paid_on,
+                
+                # Processing fees
+                fees=fees,
+                
+                # Only truly supplementary metadata
                 metadata=payment_metadata,
             )
             
@@ -660,7 +660,6 @@ class SquarespaceNormalizer(BaseNormalizer):
         if len(canonical_payments) == 1:
             canonical = canonical_payments[0]
         else:
-            # Cast to satisfy type checker (List[CanonicalPayment] -> List[CanonicalBase])
             canonical = cast(List[CanonicalBase], canonical_payments)
         
         return NormalizationResult.success_result(
@@ -670,6 +669,53 @@ class SquarespaceNormalizer(BaseNormalizer):
             raw_event_id=raw_event_id,
             warnings=warnings if warnings else None
         )
+    
+    def _normalize_processing_fees(
+        self,
+        fees_data: List[Dict[str, Any]],
+        default_currency: str
+    ) -> List[CanonicalPaymentFee]:
+        """Normalize Squarespace processing fees into canonical models."""
+        result = []
+        
+        for fee in fees_data:
+            gross = fee.get("amount", {})
+            refunded = fee.get("refundedAmount", {})
+            net = fee.get("netAmount", {})
+            fee_currency = gross.get("currency", default_currency)
+            
+            # Collect supplementary fee data into metadata
+            fee_metadata: Dict[str, Any] = {}
+            if fee.get("exchangeRate"):
+                fee_metadata["exchange_rate"] = fee["exchangeRate"]
+            if fee.get("amountGatewayCurrency"):
+                fee_metadata["amount_gateway_currency"] = fee["amountGatewayCurrency"]
+            if fee.get("refundedAmountGatewayCurrency"):
+                fee_metadata["refunded_amount_gateway_currency"] = fee["refundedAmountGatewayCurrency"]
+            if fee.get("netAmountGatewayCurrency"):
+                fee_metadata["net_amount_gateway_currency"] = fee["netAmountGatewayCurrency"]
+            if fee.get("feeRefunds"):
+                fee_metadata["fee_refunds"] = fee["feeRefunds"]
+            
+            canonical_fee = CanonicalPaymentFee(
+                external_fee_id=fee.get("id"),
+                gross_fee=Money(
+                    amount=Decimal(str(gross.get("value", "0"))),
+                    currency=fee_currency
+                ),
+                refunded_fee=Money(
+                    amount=Decimal(str(refunded.get("value", "0"))),
+                    currency=fee_currency
+                ),
+                net_fee=Money(
+                    amount=Decimal(str(net.get("value", "0"))),
+                    currency=fee_currency
+                ),
+                metadata=fee_metadata,
+            )
+            result.append(canonical_fee)
+        
+        return result
     
     # =========================================================================
     # HELPER METHODS
@@ -708,3 +754,8 @@ class SquarespaceNormalizer(BaseNormalizer):
             amount=Decimal(str(money_data.get("value", "0"))),
             currency=money_data.get("currency", default_currency)
         )
+    
+    @staticmethod
+    def _camel_to_snake(name: str) -> str:
+        """Convert camelCase to snake_case."""
+        return re.sub(r"(?<=[a-z0-9])([A-Z])", r"_\1", name).lower()

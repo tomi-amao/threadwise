@@ -169,7 +169,6 @@ The database follows a multi-tenant architecture with these core tables:
      shipping_total_amount, tax_total_amount, grand_total_amount, currency, created_at, updated_at
    - Links to: entities, customers, external_raw_events
    - Statuses: pending, confirmed, processing, shipped, delivered, cancelled, refunded
-   - **CRITICAL FOR REVENUE**: Use `subtotal_amount` for true revenue (product sales only, excluding discounts/shipping/tax). This is what appears in Squarespace and gets paid via Revolut. The `grand_total_amount` includes adjustments that may not represent actual payments.
    - Use when: Revenue analysis, order trends, fulfillment metrics, sales performance
 
 7. **order_line_items** - Individual items within orders
@@ -181,34 +180,52 @@ The database follows a multi-tenant architecture with these core tables:
    - Use when: Product-level revenue, SKU analysis, quantity trends, basket analysis
 
 8. **payments** - Payment transactions
-   - Contains: amount, currency, status, payment_method, transaction_id, created_at
-   - Links to: entities, orders, external_raw_events
+   - Contains: amount, refunded_amount, net_amount, currency, status, gateway, external_payment_id, 
+     payment_method, transaction_id, paid_on, created_at
+   - Links to: entities (entity_id), orders (order_id), external_raw_events (raw_event_id)
    - Statuses: pending, authorized, captured, refunded, failed
-   - Use when: Cash flow analysis, payment method trends, refund tracking
+   - **gateway**: The payment processor (e.g. STRIPE, SQUARE, PAYPAL)
+   - **external_payment_id**: Transaction ID from the payment gateway
+   - **refunded_amount**: Portion of the original amount that has been refunded
+   - **net_amount**: amount minus refunded_amount (actual money received)
+   - **paid_on**: When the payment was actually processed (may differ from created_at)
+   - Use when: Cash flow analysis, payment method trends, refund tracking, gateway performance,
+     net revenue calculations, payment timing analysis
 
-9. **inventory_items** - Product variant inventory levels
+9. **payment_fees** - Processing fees charged by payment gateways
+   - Contains: payment_id, external_fee_id, gross_fee, refunded_fee, net_fee, currency
+   - Links to: payments (payment_id, CASCADE delete)
+   - **gross_fee**: Total processing fee charged by the gateway
+   - **refunded_fee**: Portion of the processing fee that was refunded
+   - **net_fee**: gross_fee minus refunded_fee (actual fee cost)
+   - Use when: Payment processing cost analysis, fee optimization, true profit calculations,
+     gateway cost comparison, net revenue after fees
+
+10. **inventory_items** - Product variant inventory levels
    - Contains: variant_external_id, sku, quantity, is_unlimited
    - Links to: entities, products, external_raw_events
    - Use when: Stock level queries, inventory management, out-of-stock analysis
 
-10. **inventory_adjustments** - Inventory change history
+11. **inventory_adjustments** - Inventory change history
     - Contains: variant_external_id, quantity_change, quantity_after, reason, adjusted_at
     - Reasons: sale, return, restock, damage, shrinkage, adjustment, initial
     - Links to: entities, inventory_items, external_raw_events
     - Use when: Inventory audit trails, shrinkage analysis, restock patterns
 
-11. **normalization_processing_log** - ETL processing audit trail
+12. **normalization_processing_log** - ETL processing audit trail
     - Contains: raw_event_id, entity_type, status, canonical_id, error_message, needs_review
     - Purpose: Track normalization success/failures for debugging
     - Use when: Debugging data pipeline, monitoring ETL quality
 
 **TABLE SELECTION GUIDE:**
 
-Revenue Questions → orders, order_line_items, payments
+Revenue Questions → orders, order_line_items, payments, payment_fees
 - "Total revenue": orders.subtotal_amount (TRUE revenue from products, matches external systems like Squarespace & Revolut)
 - "Revenue breakdown": Use subtotal_amount with discount_total_amount, shipping_total_amount, tax_total_amount for full picture
 - "Revenue by product": JOIN orders → order_line_items
 - "Payment trends": payments table
+- "Net revenue after fees": payments.net_amount minus payment_fees.net_fee
+- "Processing costs": SUM(payment_fees.net_fee)
 
 Customer Questions → customers, orders
 - "Customer count": customers table
@@ -230,7 +247,8 @@ Integration/ETL Questions → external_sources, external_raw_events, normalizati
 - All normalized tables track their origin via raw_event_id → external_raw_events
 - Orders link to customers via customer_id
 - Order_line_items link to orders and products
-- Payments link to orders
+- Payments link to orders via order_id
+- Payment_fees link to payments via payment_id (CASCADE delete)
 - Inventory_items link to products
 
 **CAPABILITIES:**

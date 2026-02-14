@@ -1,10 +1,10 @@
 import React, { useState } from 'react';
 import type { Message } from '@langchain/langgraph-sdk';
 import { type UIMessage } from '@langchain/langgraph-sdk/react-ui';
-import { User, Robot, Wrench, File, Brain, CaretDown, CaretUp } from 'phosphor-react';
+import { User, Robot, Wrench, File, Brain, CaretDown, CaretUp, CloudArrowUp } from 'phosphor-react';
 import { cn } from '~/lib/utils';
 import { MarkdownText } from './MarkdownText';
-import { ToolCalls, ToolResult } from './ToolCalls';
+import { ToolCalls, ToolResult, isMCPTool } from './ToolCalls';
 import { useChat } from '~/providers/ChatProvider';
 import {
   BarChartViz,
@@ -326,17 +326,50 @@ export function MessageBubble({ message }: MessageBubbleProps) {
   // Tool messages get special rendering with clear type indicator
   // Charts from generate_graph tool are rendered in ToolResult component
   if (isTool) {
+    const toolName = 'name' in message && message.name ? String(message.name) : '';
+    const isMCP = isMCPTool(toolName);
+
     return (
       <div className="flex gap-2 md:gap-3">
-        <div className="w-7 h-7 md:w-8 md:h-8 rounded-full flex items-center justify-center text-white shrink-0 bg-amber-500">
-          <Wrench size={14} className="md:hidden" weight="duotone" />
-          <Wrench size={16} className="hidden md:block" weight="duotone" />
+        <div
+          className={cn(
+            'w-7 h-7 md:w-8 md:h-8 rounded-full flex items-center justify-center text-white shrink-0',
+            isMCP ? 'bg-teal-500' : 'bg-amber-500'
+          )}
+        >
+          {isMCP ? (
+            <>
+              <CloudArrowUp size={14} className="md:hidden" weight="duotone" />
+              <CloudArrowUp size={16} className="hidden md:block" weight="duotone" />
+            </>
+          ) : (
+            <>
+              <Wrench size={14} className="md:hidden" weight="duotone" />
+              <Wrench size={16} className="hidden md:block" weight="duotone" />
+            </>
+          )}
         </div>
         <div className="flex-1">
           <div className="flex items-center gap-2 mb-2">
-            <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-amber-500/20 border border-amber-500/30 text-xs font-semibold text-amber-700 dark:text-amber-300">
-              <Wrench size={12} weight="bold" />
-              TOOL EXECUTION
+            <span
+              className={cn(
+                'inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full border text-xs font-semibold',
+                isMCP
+                  ? 'bg-teal-500/20 border-teal-500/30 text-teal-700 dark:text-teal-300'
+                  : 'bg-amber-500/20 border-amber-500/30 text-amber-700 dark:text-amber-300'
+              )}
+            >
+              {isMCP ? (
+                <>
+                  <CloudArrowUp size={12} weight="bold" />
+                  MCP TOOL RESULT
+                </>
+              ) : (
+                <>
+                  <Wrench size={12} weight="bold" />
+                  TOOL EXECUTION
+                </>
+              )}
             </span>
           </div>
           <ToolResult message={message} />

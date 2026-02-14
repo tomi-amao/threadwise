@@ -9,7 +9,15 @@ import {
   SelectTrigger,
   SelectValue,
 } from '~/components/ui/select';
-import { PaperPlaneRight, Stop, Paperclip, Robot, Sparkle } from 'phosphor-react';
+import {
+  PaperPlaneRight,
+  Stop,
+  Paperclip,
+  Robot,
+  Sparkle,
+  Database,
+  CloudArrowUp,
+} from 'phosphor-react';
 import { cn } from '~/lib/utils';
 import { useFileUpload } from '~/hooks/use-file-upload';
 import { ContentBlocksPreview } from '../ContentBlocksPreview';
@@ -43,6 +51,9 @@ export function MessageInput() {
     stopGeneration,
     selectedModel,
     setSelectedModel,
+    selectedDataSource,
+    setSelectedDataSource,
+    availableDataSources,
   } = useChat();
   const [input, setInput] = useState('');
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -155,28 +166,66 @@ export function MessageInput() {
           {/* Attachment preview */}
           <ContentBlocksPreview blocks={contentBlocks} onRemove={removeBlock} size="md" />
 
-          {/* Model Selection Dropdown */}
-          <div className="flex items-center gap-2">
-            <label className="text-sm font-medium text-muted-foreground min-w-fit">Model:</label>
-            <Select value={selectedModel} onValueChange={setSelectedModel}>
-              <SelectTrigger className="w-32 h-8 text-xs">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="local">
-                  <div className="flex items-center gap-2">
-                    <Robot size={14} />
-                    <span>Local</span>
-                  </div>
-                </SelectItem>
-                <SelectItem value="gemini">
-                  <div className="flex items-center gap-2">
-                    <Sparkle size={14} />
-                    <span>Gemini</span>
-                  </div>
-                </SelectItem>
-              </SelectContent>
-            </Select>
+          {/* Model & Data Source Selection */}
+          <div className="flex items-center gap-4 flex-wrap">
+            {/* Model Selection */}
+            <div className="flex items-center gap-2">
+              <label className="text-sm font-medium text-muted-foreground min-w-fit">Model:</label>
+              <Select value={selectedModel} onValueChange={setSelectedModel}>
+                <SelectTrigger className="w-32 h-8 text-xs">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="local">
+                    <div className="flex items-center gap-2">
+                      <Robot size={14} />
+                      <span>Local</span>
+                    </div>
+                  </SelectItem>
+                  <SelectItem value="gemini">
+                    <div className="flex items-center gap-2">
+                      <Sparkle size={14} />
+                      <span>Gemini</span>
+                    </div>
+                  </SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            {/* Data Source Selection */}
+            <div className="flex items-center gap-2">
+              <label className="text-sm font-medium text-muted-foreground min-w-fit">
+                Data Source:
+              </label>
+              <Select value={selectedDataSource} onValueChange={setSelectedDataSource}>
+                <SelectTrigger className="w-44 h-8 text-xs">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {availableDataSources.map(source => (
+                    <SelectItem
+                      key={source.id}
+                      value={source.id}
+                      disabled={source.status !== 'available'}
+                    >
+                      <div className="flex items-center gap-2">
+                        {source.type === 'mcp' ? (
+                          <CloudArrowUp size={14} className="text-emerald-500" />
+                        ) : (
+                          <Database size={14} className="text-blue-500" />
+                        )}
+                        <span>{source.name}</span>
+                        {source.status === 'unconfigured' && (
+                          <span className="text-[10px] text-muted-foreground/60 ml-1">
+                            (setup needed)
+                          </span>
+                        )}
+                      </div>
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
           </div>
 
           <div className="relative">

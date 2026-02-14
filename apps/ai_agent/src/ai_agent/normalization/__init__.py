@@ -21,6 +21,7 @@ from .models import (
     CanonicalOrder,
     CanonicalLineItem,
     CanonicalPayment,
+    CanonicalPaymentFee,
     # Inventory Domain
     CanonicalProduct,
     CanonicalProductVariant,
@@ -56,6 +57,7 @@ __all__ = [
     "CanonicalOrder",
     "CanonicalLineItem",
     "CanonicalPayment",
+    "CanonicalPaymentFee",
     "CanonicalProduct",
     "CanonicalProductVariant",
     "CanonicalInventoryItem",

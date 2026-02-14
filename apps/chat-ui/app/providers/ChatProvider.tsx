@@ -25,6 +25,15 @@ import type { Base64ContentBlock } from '~/lib/multimodal-utils';
  */
 
 export type ModelType = 'local' | 'gemini';
+export type DataSourceType = 'sql_toolkit' | 'supabase_mcp';
+
+export interface DataSource {
+  id: DataSourceType;
+  name: string;
+  description: string;
+  type: 'builtin' | 'mcp';
+  status: 'available' | 'unavailable' | 'unconfigured';
+}
 
 // Type for stream state including UI messages
 export type StreamStateType = {
@@ -35,19 +44,15 @@ export type StreamStateType = {
 // Configuration from environment variables - no runtime changes allowed
 const API_URL = import.meta.env.VITE_LANGGRAPH_API_URL || 'http://localhost:2024';
 const ASSISTANT_ID = import.meta.env.VITE_LANGGRAPH_ASSISTANT_ID || 'threadwise-financial-agent';
+const AI_AGENT_API_URL = import.meta.env.VITE_AI_AGENT_API_URL || 'http://localhost:8000';
 
 interface ChatState {
   threads: Thread[];
   currentThread: Thread | null;
   error: string | null;
   selectedModel: ModelType;
-}
-
-interface ChatState {
-  threads: Thread[];
-  currentThread: Thread | null;
-  error: string | null;
-  selectedModel: ModelType;
+  selectedDataSource: DataSourceType;
+  availableDataSources: DataSource[];
 }
 
 // Type for the useStream hook return value
@@ -74,6 +79,7 @@ interface ChatContextType extends ChatState {
   stopGeneration: () => void;
   messages: Message[];
   setSelectedModel: (model: ModelType) => void;
+  setSelectedDataSource: (source: DataSourceType) => void;
   // Expose full stream for UI message rendering with for rendering generative UI
   stream: StreamType;
   // UI messages from generative UI
@@ -135,6 +141,36 @@ export function ChatProvider({ children }: ChatProviderProps) {
 
   // Model selection state
   const [selectedModel, setSelectedModel] = useState<ModelType>('local');
+
+  // Data source selection state
+  const [selectedDataSource, setSelectedDataSource] = useState<DataSourceType>('sql_toolkit');
+  const [availableDataSources, setAvailableDataSources] = useState<DataSource[]>([
+    {
+      id: 'sql_toolkit',
+      name: 'Direct SQL',
+      description: 'Connect directly to the database via SQLDatabaseToolkit',
+      type: 'builtin',
+      status: 'available',
+    },
+  ]);
+
+  // Fetch available data sources from AI Agent API
+  useEffect(() => {
+    async function fetchDataSources() {
+      try {
+        const response = await fetch(`${AI_AGENT_API_URL}/chat/data-sources`);
+        if (response.ok) {
+          const data = await response.json();
+          if (data.data_sources && data.data_sources.length > 0) {
+            setAvailableDataSources(data.data_sources);
+          }
+        }
+      } catch (error) {
+        console.warn('Failed to fetch data sources, using defaults:', error);
+      }
+    }
+    fetchDataSources();
+  }, []);
 
   // Fetch threads from LangGraph
   const fetchThreads = useCallback(async () => {
@@ -338,7 +374,7 @@ export function ChatProvider({ children }: ChatProviderProps) {
     // Submit to LangGraph with optimistic update
     try {
       await stream.submit(
-        { messages: [newHumanMessage], model: selectedModel },
+        { messages: [newHumanMessage], model: selectedModel, data_source: selectedDataSource },
         {
           streamMode: ['values'],
           streamSubgraphs: true,
@@ -367,6 +403,8 @@ export function ChatProvider({ children }: ChatProviderProps) {
     threads,
     currentThread,
     selectedModel,
+    selectedDataSource,
+    availableDataSources,
     error: stream.error ? String(stream.error) : null,
     createThread,
     selectThread,
@@ -377,6 +415,7 @@ export function ChatProvider({ children }: ChatProviderProps) {
     stopGeneration,
     messages: stream.messages,
     setSelectedModel,
+    setSelectedDataSource,
     // Expose stream for UI message rendering with for rendering generative UI
     stream,
     // Expose UI messages for filtering by message ID

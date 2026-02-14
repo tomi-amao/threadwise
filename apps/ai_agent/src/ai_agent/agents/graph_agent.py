@@ -57,6 +57,7 @@ from .prompts import (
 from ..core import get_local_llm, get_chat_model
 from ..tools import sql_tools, toolkit
 from ..services.embedding_service import embedding_service
+from ..services.mcp_client import load_mcp_tools, get_available_data_sources
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -70,6 +71,10 @@ logging.basicConfig(level=logging.INFO)
 
 # Use TypedDict for proper LangGraph compatibility
 from typing import TypedDict
+
+# Data source type for routing between SQL toolkit and MCP servers
+DataSourceType = Literal["sql_toolkit", "supabase_mcp"]
+
 
 class AgentState(TypedDict):
     """State schema for the ad-hoc analytics agent graph.
@@ -85,6 +90,8 @@ class AgentState(TypedDict):
     has_file_attachment: bool | None
     extracted_document: dict | None
     model: str | None
+    # Data source selection: "sql_toolkit" (default) or "supabase_mcp"
+    data_source: DataSourceType | None
     # Semantic search context
     retrieved_context: list[dict] | None
     # Context sufficiency evaluation
@@ -480,7 +487,11 @@ async def generic_response_node(state: AgentState) -> dict[str, Any]:
 
 
 async def analytics_agent_node(state: AgentState) -> dict[str, Any]:
-    """Handle data analytics queries with SQL tools.
+    """Handle data analytics queries with SQL tools or MCP tools.
+    
+    Dynamically selects the tool set based on the data_source state field:
+    - "sql_toolkit" (default): Uses local SQLDatabaseToolkit tools
+    - "supabase_mcp": Connects to Supabase MCP server for database access
     
     Uses create_agent internally for flexible data exploration queries.
     This node can execute SQL and generate visualizations. Enriches
@@ -489,6 +500,9 @@ async def analytics_agent_node(state: AgentState) -> dict[str, Any]:
     logger.info("=== ANALYTICS AGENT NODE ===")
     
     retrieved_context = state.get("retrieved_context")
+    data_source = state.get("data_source", "sql_toolkit")
+    
+    logger.info(f"Data source: {data_source}")
     
     # Build system prompt with optional context
     system_prompt = analytics_system_prompt
@@ -497,10 +511,37 @@ async def analytics_agent_node(state: AgentState) -> dict[str, Any]:
         system_prompt = f"{analytics_system_prompt}\n\n{context_str}\n\nUse the above context to inform your analysis when relevant."
         logger.info(f"Including {len(retrieved_context)} context documents in analytics")
     
-    # Create a sub-agent for analytics with SQL tools
+    # Select tools based on data source
+    if data_source == "supabase_mcp":
+        try:
+            agent_tools = await load_mcp_tools("supabase_mcp")
+            logger.info(f"Using Supabase MCP tools: {[t.name for t in agent_tools]}")
+            
+            # Enhance system prompt for MCP context
+            system_prompt += (
+                "\n\n## Data Source: Supabase MCP\n"
+                "You are connected to the database via Supabase MCP server. "
+                "Use the available MCP tools to query the database. "
+                "The tools include execute_sql for running queries and "
+                "list_tables for discovering the schema. "
+                "Always use execute_sql for data queries, not apply_migration."
+            )
+        except Exception as e:
+            logger.error(f"Failed to load MCP tools, falling back to SQL toolkit: {e}")
+            agent_tools = sql_tools
+            # Add a note about the fallback
+            system_prompt += (
+                "\n\nNote: MCP connection failed, using direct SQL toolkit instead. "
+                f"Error: {str(e)}"
+            )
+    else:
+        agent_tools = sql_tools
+        logger.info(f"Using SQL toolkit tools: {[t.name for t in agent_tools]}")
+    
+    # Create a sub-agent for analytics with the selected tools
     analytics_agent = create_agent(
         model,
-        tools=sql_tools,
+        tools=agent_tools,
         system_prompt=system_prompt,
     )
     

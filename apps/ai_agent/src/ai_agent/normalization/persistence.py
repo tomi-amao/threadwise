@@ -28,6 +28,7 @@ from .models import (
     CanonicalOrder,
     CanonicalProduct,
     CanonicalPayment,
+    CanonicalPaymentFee,
     ProcessingStatus,
 )
 from .normalizer import NormalizationResult
@@ -596,8 +597,14 @@ class PersistenceService:
     # =========================================================================
     
     async def persist_payment(self, payment: CanonicalPayment) -> UUID:
-        """Persist a canonical payment."""
-        # Try to link to order
+        """Persist a canonical payment with processing fees.
+        
+        Process:
+        1. Resolve order FK if order_external_id exists
+        2. Upsert payment with dedicated columns
+        3. Replace-all processing fees for this payment
+        """
+        # Step 1: Link to order if exists
         order_id = None
         if payment.order_external_id:
             order_id = await self._get_order_id(
@@ -606,6 +613,7 @@ class PersistenceService:
                 payment.order_external_id
             )
         
+        # Step 2: Upsert payment
         data = {
             "entity_id": str(payment.entity_id),
             "order_id": str(order_id) if order_id else None,
@@ -613,16 +621,35 @@ class PersistenceService:
             "external_id": payment.external_id,
             "raw_event_id": str(payment.raw_event_id),
             "order_external_id": payment.order_external_id,
+            # Dedicated financial columns
             "amount": float(payment.amount.amount),
+            "refunded_amount": (
+                float(payment.refunded_amount.amount)
+                if payment.refunded_amount else 0
+            ),
+            "net_amount": (
+                float(payment.net_amount.amount)
+                if payment.net_amount else float(payment.amount.amount)
+            ),
             "currency": payment.amount.currency,
             "status": payment.status.value,
+            # Gateway info
+            "gateway": payment.gateway,
+            "external_payment_id": payment.external_payment_id,
+            # Payment method
             "payment_method": payment.payment_method,
             "transaction_id": payment.transaction_id,
-            "metadata": payment.metadata,
+            # Timing
+            "paid_on": (
+                payment.paid_on.isoformat()
+                if payment.paid_on else None
+            ),
             "created_at": (
-                payment.created_at.isoformat() 
+                payment.created_at.isoformat()
                 if payment.created_at else None
             ),
+            # Only supplementary data in metadata
+            "metadata": payment.metadata,
         }
         
         result = await asyncio.to_thread(
@@ -639,7 +666,52 @@ class PersistenceService:
                 raw_event_id=payment.raw_event_id
             )
         
-        return _extract_id(result)
+        payment_id = _extract_id(result)
+        
+        # Step 3: Persist processing fees
+        if payment.fees:
+            await self._replace_payment_fees(payment_id, payment.fees)
+        
+        return payment_id
+    
+    async def _replace_payment_fees(
+        self,
+        payment_id: UUID,
+        fees: List[CanonicalPaymentFee],
+    ) -> None:
+        """Replace all processing fees for a payment.
+        
+        Uses delete-then-insert for idempotent child record handling.
+        """
+        # Delete existing fees
+        await asyncio.to_thread(
+            lambda: self.client.table("payment_fees")
+            .delete()
+            .eq("payment_id", str(payment_id))
+            .execute()
+        )
+        
+        if not fees:
+            return
+        
+        fees_data = [
+            {
+                "payment_id": str(payment_id),
+                "external_fee_id": fee.external_fee_id,
+                "gross_fee": float(fee.gross_fee.amount),
+                "refunded_fee": float(fee.refunded_fee.amount),
+                "net_fee": float(fee.net_fee.amount),
+                "currency": fee.gross_fee.currency,
+                "metadata": fee.metadata,
+            }
+            for fee in fees
+        ]
+        
+        await asyncio.to_thread(
+            lambda: self.client.table("payment_fees")
+            .insert(fees_data)
+            .execute()
+        )
     
     async def _get_order_id(
         self,
@@ -733,6 +805,7 @@ class PersistenceService:
             "product": "products",
             "inventory_item": "inventory_items",
             "payment": "payments",
+            "transaction": "payments",
         }
         return mapping.get(entity_type, entity_type)
     

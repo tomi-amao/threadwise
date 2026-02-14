@@ -162,3 +162,29 @@ async def create_assistant(request: CreateAssistantRequest):
     except Exception as e:
         logger.error(f"Create assistant error: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/data-sources")
+async def list_data_sources():
+    """List available data sources for analytics queries.
+    
+    Returns the available data source options including the default
+    SQL toolkit and any configured MCP server integrations.
+    """
+    try:
+        from ...services.mcp_client import get_available_data_sources
+        sources = get_available_data_sources()
+        return {"data_sources": sources}
+    except Exception as e:
+        logger.error(f"List data sources error: {str(e)}")
+        return {
+            "data_sources": [
+                {
+                    "id": "sql_toolkit",
+                    "name": "Direct SQL",
+                    "description": "Connect directly to the database",
+                    "type": "builtin",
+                    "status": "available",
+                }
+            ]
+        }
