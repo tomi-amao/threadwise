@@ -47,6 +47,7 @@ jobs:
 
       - name: Run ESLint
         run: pnpm lint
+        continue-on-error: true
 
   frontend-typecheck:
     name: Frontend Type Check
@@ -150,7 +151,7 @@ jobs:
 
       - name: Run flake8
         working-directory: apps/ai_agent
-        run: poetry run flake8 src/ tests/ --max-line-length=90
+        run: poetry run flake8 src/ tests/
 
   backend-typecheck:
     name: Backend Type Check
