@@ -6,7 +6,6 @@ Supports both sync operations and normalization pipelines.
 
 from typing import TypedDict
 
-
 # =============================================================================
 # SYNC CHANNELS
 # =============================================================================
@@ -14,7 +13,7 @@ from typing import TypedDict
 
 class SyncProgressData(TypedDict):
     """Progress update data for sync operations."""
-    
+
     endpoint: str
     status: str  # 'starting', 'syncing', 'completed', 'error'
     items_stored: int
@@ -26,7 +25,7 @@ class SyncProgressData(TypedDict):
 
 class SyncStatusData(TypedDict):
     """Status update for overall sync operation."""
-    
+
     status: str  # 'syncing', 'completed', 'error'
     endpoints_completed: int
     endpoints_total: int
@@ -37,10 +36,10 @@ class SyncStatusData(TypedDict):
 
 def get_sync_channel(source_id: str) -> str:
     """Get the channel name for a sync operation.
-    
+
     Args:
         source_id: The external source ID being synced
-        
+
     Returns:
         Channel name in format 'sync:{source_id}'
     """
@@ -58,7 +57,7 @@ SYNC_TOPICS = ["progress", "status"]
 
 class NormalizationProgressData(TypedDict):
     """Progress update data for normalization of a single entity type."""
-    
+
     entity_type: str  # 'profile', 'product', 'inventory_item', 'order'
     status: str  # 'starting', 'processing', 'completed', 'error'
     events_processed: int
@@ -71,7 +70,7 @@ class NormalizationProgressData(TypedDict):
 
 class NormalizationStatusData(TypedDict):
     """Status update for overall normalization operation."""
-    
+
     status: str  # 'starting', 'processing', 'completed', 'error'
     mode: str  # 'hard', 'soft'
     entity_types_completed: int
@@ -85,10 +84,10 @@ class NormalizationStatusData(TypedDict):
 
 def get_normalization_channel(source_id: str) -> str:
     """Get the channel name for a normalization operation.
-    
+
     Args:
         source_id: The external source ID being normalized
-        
+
     Returns:
         Channel name in format 'normalize:{source_id}'
     """

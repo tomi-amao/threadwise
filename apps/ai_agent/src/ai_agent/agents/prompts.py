@@ -3,8 +3,7 @@
 Contains all system prompts for different agent modes and report types.
 """
 
-from langchain.agents.middleware import dynamic_prompt, ModelRequest
-
+from langchain.agents.middleware import ModelRequest, dynamic_prompt
 
 # =============================================================================
 # CORE SYSTEM PROMPTS
@@ -814,7 +813,7 @@ Extract all structured information from this invoice document.
 
 # Export available prompts for dynamic selection
 available_prompts = {
-    "sql": sql_system_prompt, 
+    "sql": sql_system_prompt,
     "generic": generic_system_prompt,
     "analytics": analytics_system_prompt,
 }
@@ -824,12 +823,14 @@ available_prompts = {
 # DYNAMIC PROMPTS
 # =============================================================================
 
+
 @dynamic_prompt
 def dynamic_system_prompt(request: ModelRequest) -> str:
     """Generate dynamic system prompt with user context."""
     user_name = request.runtime.context.user_id
     system_prompt = (
-        sql_system_prompt + f"\n You are a helpful assistant. Address the user as {user_name}."
+        sql_system_prompt
+        + f"\n You are a helpful assistant. Address the user as {user_name}."
     )
     return system_prompt
 

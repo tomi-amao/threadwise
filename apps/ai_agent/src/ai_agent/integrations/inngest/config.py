@@ -2,7 +2,7 @@
 
 import logging
 import os
-from typing import Dict, Any
+from typing import Any, Dict
 
 import inngest
 from inngest.experimental import realtime
@@ -33,11 +33,11 @@ def get_client() -> inngest.Inngest:
 
 async def get_subscription_token(channel: str, topics: list[str]) -> dict[str, Any]:
     """Generate a subscription token for realtime updates.
-    
+
     Args:
         channel: The channel name to subscribe to (e.g., 'sync:source_id')
         topics: List of topics to subscribe to (e.g., ['progress', 'status'])
-        
+
     Returns:
         A dictionary containing the subscription token and metadata
     """
@@ -57,12 +57,16 @@ def validate_config() -> Dict[str, Any]:
         "signing_key_configured": bool(INNGEST_SIGNING_KEY),
         "client_initialized": client is not None,
     }
-    
+
     # Log configuration warnings
     if not INNGEST_EVENT_KEY:
-        logger.warning("INNGEST_EVENT_KEY not configured - some features may be limited")
-    
+        logger.warning(
+            "INNGEST_EVENT_KEY not configured - some features may be limited"
+        )
+
     if not INNGEST_SIGNING_KEY:
-        logger.warning("INNGEST_SIGNING_KEY not configured - webhook signature verification disabled")
-    
+        logger.warning(
+            "INNGEST_SIGNING_KEY not configured - webhook signature verification disabled"
+        )
+
     return config_status

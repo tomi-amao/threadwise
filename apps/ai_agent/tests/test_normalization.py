@@ -6,19 +6,20 @@ Tests cover:
 - Persistence layer operations
 """
 
-import pytest
 from datetime import datetime
 from decimal import Decimal
 from uuid import uuid4
 
+import pytest
+
 from ai_agent.normalization.models import (
     Address,
     CanonicalCustomer,
+    CanonicalInventoryItem,
     CanonicalLineItem,
     CanonicalOrder,
     CanonicalProduct,
     CanonicalProductVariant,
-    CanonicalInventoryItem,
     FulfillmentStatus,
     Money,
     OrderStatus,
@@ -27,10 +28,10 @@ from ai_agent.normalization.models import (
 from ai_agent.normalization.normalizer import NormalizationResult
 from ai_agent.normalization.squarespace_normalizer import SquarespaceNormalizer
 
-
 # =============================================================================
 # FIXTURES
 # =============================================================================
+
 
 @pytest.fixture
 def entity_id():
@@ -79,7 +80,7 @@ def sample_order_payload():
                 "shipDate": "2023-10-07T12:17:23Z",
                 "carrierName": "UPS",
                 "trackingUrl": "https://www.track.com/12345",
-                "trackingNumber": "1ZE53C926837580760"
+                "trackingNumber": "1ZE53C926837580760",
             }
         ],
         "customerEmail": "test@example.com",
@@ -100,7 +101,7 @@ def sample_order_payload():
             "lastName": "Doe",
             "firstName": "John",
             "postalCode": "SW1A 1AA",
-            "countryCode": "GB"
+            "countryCode": "GB",
         },
         "shippingAddress": {
             "city": "London",
@@ -111,7 +112,7 @@ def sample_order_payload():
             "lastName": "Doe",
             "firstName": "John",
             "postalCode": "SW1A 1AA",
-            "countryCode": "GB"
+            "countryCode": "GB",
         },
         "fulfillmentStatus": "FULFILLED",
     }
@@ -132,7 +133,7 @@ def sample_profile_payload():
             "lastName": "Smith",
             "firstName": "Jane",
             "postalCode": "M1 1AB",
-            "countryCode": "GB"
+            "countryCode": "GB",
         },
         "lastName": "Smith",
         "createdOn": "2023-05-02T19:25:07.935Z",
@@ -147,7 +148,7 @@ def sample_profile_payload():
             "totalRefundAmount": {"value": "0.00", "currency": "GBP"},
             "lastOrderSubmittedOn": "2024-04-05T15:21:15.955Z",
             "firstOrderSubmittedOn": "2023-05-02T19:25:07.949Z",
-        }
+        },
     }
 
 
@@ -165,7 +166,7 @@ def sample_product_payload():
                 "id": "67a8c10d51efce572cd291c5",
                 "url": "https://example.com/image.jpg",
                 "altText": "",
-                "orderIndex": 0
+                "orderIndex": 0,
             }
         ],
         "urlSlug": "test-t-shirt",
@@ -177,13 +178,18 @@ def sample_product_payload():
                 "pricing": {
                     "onSale": False,
                     "basePrice": {"value": "50.00", "currency": "GBP"},
-                    "salePrice": {"value": "0.00", "currency": "GBP"}
+                    "salePrice": {"value": "0.00", "currency": "GBP"},
                 },
                 "attributes": {"Size": "XS"},
                 "shippingMeasurements": {
                     "weight": {"unit": "KILOGRAM", "value": 0.5},
-                    "dimensions": {"unit": "CENTIMETER", "width": 0, "height": 0, "length": 0}
-                }
+                    "dimensions": {
+                        "unit": "CENTIMETER",
+                        "width": 0,
+                        "height": 0,
+                        "length": 0,
+                    },
+                },
             },
             {
                 "id": "79514088-1032-4139-a1b0-b05e08c2544e",
@@ -192,16 +198,16 @@ def sample_product_payload():
                 "pricing": {
                     "onSale": True,
                     "basePrice": {"value": "50.00", "currency": "GBP"},
-                    "salePrice": {"value": "40.00", "currency": "GBP"}
+                    "salePrice": {"value": "40.00", "currency": "GBP"},
                 },
                 "attributes": {"Size": "S"},
-            }
+            },
         ],
         "createdOn": "2025-02-09T14:50:28.040Z",
         "isVisible": True,
         "modifiedOn": "2025-08-21T18:15:41.285Z",
         "description": "<p>A great test product</p>",
-        "variantAttributes": ["Size"]
+        "variantAttributes": ["Size"],
     }
 
 
@@ -213,7 +219,7 @@ def sample_inventory_payload():
         "quantity": 25,
         "variantId": "9a2e1955-c515-46df-81e7-71d621241f52",
         "descriptor": "D2D FLOCK HOODIE [L]",
-        "isUnlimited": False
+        "isUnlimited": False,
     }
 
 
@@ -221,20 +227,21 @@ def sample_inventory_payload():
 # MODEL TESTS
 # =============================================================================
 
+
 class TestMoneyModel:
     """Tests for Money model."""
-    
+
     def test_money_from_dict(self):
         """Test parsing money from Squarespace format."""
         money = Money(amount={"value": "50.00", "currency": "GBP"}, currency="GBP")  # type: ignore[arg-type]
         assert money.amount == Decimal("50.00")
         assert money.currency == "GBP"
-    
+
     def test_money_from_string(self):
         """Test parsing money from string."""
         money = Money(amount="99.99", currency="USD")  # type: ignore[arg-type]
         assert money.amount == Decimal("99.99")
-    
+
     def test_money_from_decimal(self):
         """Test money with Decimal."""
         money = Money(amount=Decimal("123.45"), currency="EUR")
@@ -243,7 +250,7 @@ class TestMoneyModel:
 
 class TestAddressModel:
     """Tests for Address model."""
-    
+
     def test_address_creation(self):
         """Test address model creation."""
         address = Address(
@@ -252,7 +259,7 @@ class TestAddressModel:
             address_line_1="123 Test St",
             city="London",
             postal_code="SW1A 1AA",
-            country_code="GB"
+            country_code="GB",
         )
         assert address.first_name == "John"
         assert address.country_code == "GB"
@@ -262,16 +269,17 @@ class TestAddressModel:
 # NORMALIZER TESTS
 # =============================================================================
 
+
 class TestSquarespaceNormalizer:
     """Tests for Squarespace normalizer."""
-    
+
     def test_normalizer_init(self, entity_id):
         """Test normalizer initialization."""
         normalizer = SquarespaceNormalizer(entity_id)
         assert normalizer.provider == "squarespace"
         assert normalizer.entity_id == entity_id
         assert "order" in normalizer.supported_entity_types
-    
+
     def test_normalize_order(self, entity_id, raw_event_id, sample_order_payload):
         """Test order normalization."""
         normalizer = SquarespaceNormalizer(entity_id)
@@ -279,13 +287,13 @@ class TestSquarespaceNormalizer:
             entity_type="order",
             external_id=sample_order_payload["id"],
             payload=sample_order_payload,
-            raw_event_id=raw_event_id
+            raw_event_id=raw_event_id,
         )
-        
+
         assert result.success is True
         assert result.status == ProcessingStatus.COMPLETED
         assert isinstance(result.canonical, CanonicalOrder)
-        
+
         order = result.canonical
         assert order.provider == "squarespace"
         assert order.external_id == "6519c77186b1297c666e4f58"
@@ -297,7 +305,7 @@ class TestSquarespaceNormalizer:
         assert len(order.line_items) == 1
         assert order.line_items[0].quantity == 1
         assert order.line_items[0].sku == "TBAXTYCOONE_GREEN_CAP"
-    
+
     def test_normalize_profile(self, entity_id, raw_event_id, sample_profile_payload):
         """Test profile/customer normalization."""
         normalizer = SquarespaceNormalizer(entity_id)
@@ -305,12 +313,12 @@ class TestSquarespaceNormalizer:
             entity_type="profile",
             external_id=sample_profile_payload["id"],
             payload=sample_profile_payload,
-            raw_event_id=raw_event_id
+            raw_event_id=raw_event_id,
         )
-        
+
         assert result.success is True
         assert isinstance(result.canonical, CanonicalCustomer)
-        
+
         customer = result.canonical
         assert customer.email == "customer@example.com"
         assert customer.first_name == "Jane"
@@ -319,7 +327,7 @@ class TestSquarespaceNormalizer:
         assert customer.metadata["accepts_marketing"] is False
         assert customer.metadata["total_orders"] == 5
         assert customer.metadata["total_spent"]["amount"] == "250.00"
-    
+
     def test_normalize_product(self, entity_id, raw_event_id, sample_product_payload):
         """Test product normalization."""
         normalizer = SquarespaceNormalizer(entity_id)
@@ -327,12 +335,12 @@ class TestSquarespaceNormalizer:
             entity_type="product",
             external_id=sample_product_payload["id"],
             payload=sample_product_payload,
-            raw_event_id=raw_event_id
+            raw_event_id=raw_event_id,
         )
-        
+
         assert result.success is True
         assert isinstance(result.canonical, CanonicalProduct)
-        
+
         product = result.canonical
         assert product.name == "Test T-Shirt"
         assert len(product.variants) == 2
@@ -340,27 +348,29 @@ class TestSquarespaceNormalizer:
         assert product.variants[0].quantity == 10
         assert product.variants[1].on_sale is True
         assert product.tags == ["apparel", "summer"]
-    
-    def test_normalize_inventory_item(self, entity_id, raw_event_id, sample_inventory_payload):
+
+    def test_normalize_inventory_item(
+        self, entity_id, raw_event_id, sample_inventory_payload
+    ):
         """Test inventory item normalization."""
         normalizer = SquarespaceNormalizer(entity_id)
         result = normalizer.normalize(
             entity_type="inventory_item",
             external_id=sample_inventory_payload["variantId"],
             payload=sample_inventory_payload,
-            raw_event_id=raw_event_id
+            raw_event_id=raw_event_id,
         )
-        
+
         assert result.success is True
         assert isinstance(result.canonical, CanonicalInventoryItem)
-        
+
         item = result.canonical
         assert item.sku == "D2DHL"
         assert item.quantity == 25
         assert item.is_unlimited is False
         # Provider-specific fields moved to metadata
         assert item.metadata["descriptor"] == "D2D FLOCK HOODIE [L]"
-    
+
     def test_normalize_unsupported_type(self, entity_id, raw_event_id):
         """Test normalization of unsupported entity type."""
         normalizer = SquarespaceNormalizer(entity_id)
@@ -368,9 +378,9 @@ class TestSquarespaceNormalizer:
             entity_type="unknown_type",
             external_id="test-id",
             payload={},
-            raw_event_id=raw_event_id
+            raw_event_id=raw_event_id,
         )
-        
+
         assert result.success is False
         assert result.status == ProcessingStatus.FAILED
         assert result.error_message is not None
@@ -379,7 +389,7 @@ class TestSquarespaceNormalizer:
 
 class TestNormalizationResult:
     """Tests for NormalizationResult."""
-    
+
     def test_success_result(self, entity_id, raw_event_id):
         """Test creating a success result."""
         customer = CanonicalCustomer(
@@ -387,20 +397,20 @@ class TestNormalizationResult:
             external_id="test-123",
             raw_event_id=raw_event_id,
             entity_id=entity_id,
-            email="test@example.com"
+            email="test@example.com",
         )
-        
+
         result = NormalizationResult.success_result(
             canonical=customer,
             entity_type="profile",
             external_id="test-123",
-            raw_event_id=raw_event_id
+            raw_event_id=raw_event_id,
         )
-        
+
         assert result.success is True
         assert result.status == ProcessingStatus.COMPLETED
         assert result.canonical == customer
-    
+
     def test_failure_result(self, raw_event_id):
         """Test creating a failure result."""
         result = NormalizationResult.failure_result(
@@ -408,14 +418,14 @@ class TestNormalizationResult:
             external_id="bad-order",
             raw_event_id=raw_event_id,
             error_message="Invalid data",
-            error_details={"field": "amount", "reason": "negative value"}
+            error_details={"field": "amount", "reason": "negative value"},
         )
-        
+
         assert result.success is False
         assert result.status == ProcessingStatus.FAILED
         assert result.error_message is not None
         assert "Invalid data" in result.error_message
-    
+
     def test_needs_review_result(self, entity_id, raw_event_id):
         """Test creating a needs-review result."""
         customer = CanonicalCustomer(
@@ -424,15 +434,15 @@ class TestNormalizationResult:
             raw_event_id=raw_event_id,
             entity_id=entity_id,
         )
-        
+
         result = NormalizationResult.needs_review_result(
             canonical=customer,
             entity_type="profile",
             external_id="suspicious-123",
             raw_event_id=raw_event_id,
-            review_reason="Missing required fields"
+            review_reason="Missing required fields",
         )
-        
+
         assert result.success is True
         assert result.status == ProcessingStatus.NEEDS_REVIEW
         assert result.needs_review is True
@@ -442,25 +452,26 @@ class TestNormalizationResult:
 # EDGE CASES
 # =============================================================================
 
+
 class TestEdgeCases:
     """Tests for edge cases and error handling."""
-    
+
     def test_empty_line_items(self, entity_id, raw_event_id, sample_order_payload):
         """Test order with no line items."""
         sample_order_payload["lineItems"] = []
-        
+
         normalizer = SquarespaceNormalizer(entity_id)
         result = normalizer.normalize(
             entity_type="order",
             external_id=sample_order_payload["id"],
             payload=sample_order_payload,
-            raw_event_id=raw_event_id
+            raw_event_id=raw_event_id,
         )
-        
+
         assert result.success is True
         assert isinstance(result.canonical, CanonicalOrder)
         assert len(result.canonical.line_items) == 0
-    
+
     def test_missing_optional_fields(self, entity_id, raw_event_id):
         """Test with minimal required fields."""
         minimal_order = {
@@ -472,36 +483,36 @@ class TestEdgeCases:
             "discountTotal": {"value": "0.00", "currency": "GBP"},
             "shippingTotal": {"value": "0.00", "currency": "GBP"},
         }
-        
+
         normalizer = SquarespaceNormalizer(entity_id)
         result = normalizer.normalize(
             entity_type="order",
             external_id="minimal-order",
             payload=minimal_order,
-            raw_event_id=raw_event_id
+            raw_event_id=raw_event_id,
         )
-        
+
         assert result.success is True
         assert isinstance(result.canonical, CanonicalOrder)
         assert result.canonical.order_number == "1"
-    
+
     def test_datetime_parsing(self, entity_id, raw_event_id):
         """Test various datetime formats."""
         normalizer = SquarespaceNormalizer(entity_id)
-        
+
         # ISO format with Z
         dt1 = normalizer._parse_datetime("2023-10-01T19:24:31.654Z")
         assert dt1 is not None
         assert dt1.year == 2023
-        
+
         # ISO format with timezone
         dt2 = normalizer._parse_datetime("2023-10-01T19:24:31+00:00")
         assert dt2 is not None
-        
+
         # None value
         dt3 = normalizer._parse_datetime(None)
         assert dt3 is None
-        
+
         # Invalid format
         dt4 = normalizer._parse_datetime("invalid-date")
         assert dt4 is None
@@ -511,30 +522,33 @@ class TestEdgeCases:
 # IDEMPOTENCY TESTS
 # =============================================================================
 
+
 class TestIdempotency:
     """Tests for normalization idempotency."""
-    
-    def test_same_input_same_output(self, entity_id, raw_event_id, sample_order_payload):
+
+    def test_same_input_same_output(
+        self, entity_id, raw_event_id, sample_order_payload
+    ):
         """Test that same input always produces same output."""
         normalizer = SquarespaceNormalizer(entity_id)
-        
+
         result1 = normalizer.normalize(
             entity_type="order",
             external_id=sample_order_payload["id"],
             payload=sample_order_payload,
-            raw_event_id=raw_event_id
+            raw_event_id=raw_event_id,
         )
-        
+
         result2 = normalizer.normalize(
             entity_type="order",
             external_id=sample_order_payload["id"],
             payload=sample_order_payload,
-            raw_event_id=raw_event_id
+            raw_event_id=raw_event_id,
         )
-        
+
         assert isinstance(result1.canonical, CanonicalOrder)
         assert isinstance(result2.canonical, CanonicalOrder)
-        
+
         assert result1.canonical.external_id == result2.canonical.external_id
         assert result1.canonical.order_number == result2.canonical.order_number
         assert result1.canonical.grand_total == result2.canonical.grand_total

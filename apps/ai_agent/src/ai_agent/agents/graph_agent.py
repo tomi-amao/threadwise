@@ -49,16 +49,17 @@ from langgraph.graph.ui import AnyUIMessage, push_ui_message, ui_message_reducer
 from langgraph.prebuilt import ToolNode
 from pydantic import BaseModel, Field
 
+from ..core import get_chat_model, get_local_llm
+from ..services.embedding_service import get_embedding_service
+from ..services.mcp_client import get_available_data_sources, load_mcp_tools
+from ..tools.sql_tools import get_sql_tools
+
 # Import from package modules (relative imports)
 from .prompts import (
     analytics_system_prompt,
     generic_system_prompt,
     invoice_extraction_prompt,
 )
-from ..core import get_local_llm, get_chat_model
-from ..tools.sql_tools import get_sql_tools
-from ..services.embedding_service import get_embedding_service
-from ..services.mcp_client import load_mcp_tools, get_available_data_sources
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -83,6 +84,7 @@ class AgentState(TypedDict):
     This TypedDict defines all state fields that flow through the graph.
     Simplified to focus on analytics queries and document extraction.
     """
+
     messages: Annotated[Sequence[BaseMessage], add_messages]
     ui: Annotated[Sequence[AnyUIMessage], ui_message_reducer]
     query_type: Literal["analytics", "generic", "document_extraction"] | None
@@ -113,6 +115,7 @@ class QueryClassification(BaseModel):
     - generic: Conversational, explanations, advice, non-database queries
     - document_extraction: File attachments that need parsing
     """
+
     query_type: Literal["analytics", "generic", "document_extraction"] = Field(
         description="Type of query: analytics (data exploration), generic (conversational), or document_extraction (file uploads)"
     )
@@ -126,26 +129,32 @@ class ContextSufficiency(BaseModel):
     The LLM evaluates whether the retrieved documents provide enough information
     to answer the user's question directly, or if additional processing is needed.
     """
+
     is_sufficient: bool = Field(
         description="True if the retrieved context fully answers the user's query, False if more processing is needed"
     )
     confidence: float = Field(
-        ge=0.0, le=1.0,
-        description="Confidence in the sufficiency assessment"
+        ge=0.0, le=1.0, description="Confidence in the sufficiency assessment"
     )
     reasoning: str = Field(
         description="Brief explanation of why context is or isn't sufficient"
     )
     suggested_response: str | None = Field(
         default=None,
-        description="If sufficient, a draft response based on the context. None if not sufficient."
+        description="If sufficient, a draft response based on the context. None if not sufficient.",
     )
 
 
 # Document category type for filtering - must match categories stored in vector DB
 DocumentCategoryType = Literal[
-    "invoice", "receipt", "credit_memo", "purchase_order",
-    "bank_statement", "expense_report", "contract", "other"
+    "invoice",
+    "receipt",
+    "credit_memo",
+    "purchase_order",
+    "bank_statement",
+    "expense_report",
+    "contract",
+    "other",
 ]
 
 
@@ -155,13 +164,13 @@ class DocumentCategoryInference(BaseModel):
     Used to filter hybrid search results by document_category metadata,
     improving search relevance by focusing on the right type of documents.
     """
+
     category: DocumentCategoryType | None = Field(
         default=None,
-        description="The document category to filter by, or None if the query doesn't target a specific document type"
+        description="The document category to filter by, or None if the query doesn't target a specific document type",
     )
     confidence: float = Field(
-        ge=0.0, le=1.0,
-        description="Confidence in the category inference"
+        ge=0.0, le=1.0, description="Confidence in the category inference"
     )
     reasoning: str = Field(
         description="Brief explanation of why this category was selected or why no filter applies"
@@ -170,6 +179,7 @@ class DocumentCategoryInference(BaseModel):
 
 class ExtractedLineItem(BaseModel):
     """A single line item from an invoice or receipt."""
+
     description: str = Field(description="Product or service description")
     quantity: float | None = Field(default=None, description="Number of units")
     unit_price: float | None = Field(default=None, description="Price per unit")
@@ -181,8 +191,14 @@ class ExtractedDocumentData(BaseModel):
 
     # Document classification
     document_category: Literal[
-        "invoice", "receipt", "credit_memo", "purchase_order",
-        "bank_statement", "expense_report", "contract", "other"
+        "invoice",
+        "receipt",
+        "credit_memo",
+        "purchase_order",
+        "bank_statement",
+        "expense_report",
+        "contract",
+        "other",
     ] = Field(description="Type of financial document")
 
     # Vendor/Merchant information
@@ -191,14 +207,26 @@ class ExtractedDocumentData(BaseModel):
     vendor_tax_id: str | None = Field(default=None, description="Vendor VAT/Tax ID")
 
     # Document identifiers
-    invoice_number: str | None = Field(default=None, description="Invoice or document number")
-    purchase_order_number: str | None = Field(default=None, description="Related PO number")
-    reference_notes: str | None = Field(default=None, description="Additional references")
+    invoice_number: str | None = Field(
+        default=None, description="Invoice or document number"
+    )
+    purchase_order_number: str | None = Field(
+        default=None, description="Related PO number"
+    )
+    reference_notes: str | None = Field(
+        default=None, description="Additional references"
+    )
 
     # Dates
-    invoice_date: str | None = Field(default=None, description="Document date (YYYY-MM-DD)")
-    due_date: str | None = Field(default=None, description="Payment due date (YYYY-MM-DD)")
-    payment_terms: str | None = Field(default=None, description="Payment terms (e.g., Net 30)")
+    invoice_date: str | None = Field(
+        default=None, description="Document date (YYYY-MM-DD)"
+    )
+    due_date: str | None = Field(
+        default=None, description="Payment due date (YYYY-MM-DD)"
+    )
+    payment_terms: str | None = Field(
+        default=None, description="Payment terms (e.g., Net 30)"
+    )
 
     # Financial amounts
     currency: str = Field(default="USD", description="3-letter currency code")
@@ -209,18 +237,15 @@ class ExtractedDocumentData(BaseModel):
 
     # Line items
     line_items: list[ExtractedLineItem] = Field(
-        default_factory=list,
-        description="Individual line items from the document"
+        default_factory=list, description="Individual line items from the document"
     )
 
     # Extraction metadata
     confidence_score: float = Field(
-        ge=0.0, le=1.0,
-        description="Overall confidence in extraction accuracy"
+        ge=0.0, le=1.0, description="Overall confidence in extraction accuracy"
     )
     extraction_notes: str | None = Field(
-        default=None,
-        description="Notes about extraction quality or issues"
+        default=None, description="Notes about extraction quality or issues"
     )
 
 
@@ -288,6 +313,7 @@ def is_tool_continuation(messages: Sequence[BaseMessage]) -> bool:
     if not messages:
         return False
     from langchain_core.messages import ToolMessage
+
     return isinstance(messages[-1], (ToolMessage, AIMessage))
 
 
@@ -337,7 +363,9 @@ def extract_file_data(human_msg: HumanMessage) -> dict | None:
                         "type": "base64",
                         "data": block.get("data", ""),
                         "mime_type": block.get("mime_type", "application/pdf"),
-                        "filename": block.get("extras", {}).get("filename", "document.pdf"),
+                        "filename": block.get("extras", {}).get(
+                            "filename", "document.pdf"
+                        ),
                     }
                 elif source_type == "url":
                     return {
@@ -442,16 +470,21 @@ Query: "{user_query}"
 
     try:
         classifier = _get_classifier()
-        result = await classifier.ainvoke([
-            {"role": "system", "content": "Classify queries precisely into analytics or generic."},
-            {"role": "user", "content": classification_prompt},
-        ])
+        result = await classifier.ainvoke(
+            [
+                {
+                    "role": "system",
+                    "content": "Classify queries precisely into analytics or generic.",
+                },
+                {"role": "user", "content": classification_prompt},
+            ]
+        )
 
         # Handle both Pydantic model and dict responses
         if isinstance(result, dict):
-            query_type = result.get('query_type', 'generic')
+            query_type = result.get("query_type", "generic")
         else:
-            query_type = getattr(result, 'query_type', 'generic')
+            query_type = getattr(result, "query_type", "generic")
 
         logger.info(f"Query classified as: {query_type}")
 
@@ -479,14 +512,23 @@ async def generic_response_node(state: AgentState) -> dict[str, Any]:
     if retrieved_context:
         context_str = format_retrieved_context(retrieved_context)
         system_content = f"{generic_system_prompt}\n\n{context_str}\n\nUse the above context to inform your response when relevant."
-        logger.info(f"Including {len(retrieved_context)} context documents in generic response")
+        logger.info(
+            f"Including {len(retrieved_context)} context documents in generic response"
+        )
 
     model = _get_local_model()
-    response = await model.ainvoke([
-        {"role": "system", "content": system_content},
-        *[{"role": "user" if isinstance(m, HumanMessage) else "assistant",
-           "content": m.content} for m in messages[-5:]]  # Last 5 messages for context
-    ])
+    response = await model.ainvoke(
+        [
+            {"role": "system", "content": system_content},
+            *[
+                {
+                    "role": "user" if isinstance(m, HumanMessage) else "assistant",
+                    "content": m.content,
+                }
+                for m in messages[-5:]
+            ],  # Last 5 messages for context
+        ]
+    )
 
     ai_message = AIMessage(content=response.content, id=str(uuid.uuid4()))
 
@@ -516,7 +558,9 @@ async def analytics_agent_node(state: AgentState) -> dict[str, Any]:
     if retrieved_context:
         context_str = format_retrieved_context(retrieved_context)
         system_prompt = f"{analytics_system_prompt}\n\n{context_str}\n\nUse the above context to inform your analysis when relevant."
-        logger.info(f"Including {len(retrieved_context)} context documents in analytics")
+        logger.info(
+            f"Including {len(retrieved_context)} context documents in analytics"
+        )
 
     # Select tools based on data source
     sql_tools = get_sql_tools()
@@ -617,20 +661,25 @@ Query: "{user_query}"
 
     try:
         category_inferrer = _get_category_inferrer()
-        result = await category_inferrer.ainvoke([
-            {"role": "system", "content": "Infer the document category for search filtering. Be precise."},
-            {"role": "user", "content": inference_prompt},
-        ])
+        result = await category_inferrer.ainvoke(
+            [
+                {
+                    "role": "system",
+                    "content": "Infer the document category for search filtering. Be precise.",
+                },
+                {"role": "user", "content": inference_prompt},
+            ]
+        )
 
         # Handle both Pydantic model and dict responses
         if isinstance(result, dict):
-            category = result.get('category')
-            confidence = result.get('confidence', 0.0)
-            reasoning = result.get('reasoning', '')
+            category = result.get("category")
+            confidence = result.get("confidence", 0.0)
+            reasoning = result.get("reasoning", "")
         else:
-            category = getattr(result, 'category', None)
-            confidence = getattr(result, 'confidence', 0.0)
-            reasoning = getattr(result, 'reasoning', '')
+            category = getattr(result, "category", None)
+            confidence = getattr(result, "confidence", 0.0)
+            reasoning = getattr(result, "reasoning", "")
 
         logger.info(f"Category inference: {category} (confidence: {confidence:.2f})")
         logger.info(f"Reasoning: {reasoning}")
@@ -681,7 +730,9 @@ async def retrieve_context_node(state: AgentState) -> dict[str, Any]:
     try:
         embedding_service = get_embedding_service()
         if embedding_service is None:
-            logger.warning("Embedding service not available - skipping context retrieval")
+            logger.warning(
+                "Embedding service not available - skipping context retrieval"
+            )
             return {"retrieved_context": None}
 
         # Infer document category filter from the query
@@ -706,7 +757,9 @@ async def retrieve_context_node(state: AgentState) -> dict[str, Any]:
 
         if valid_results:
             reranked_count = sum(1 for r in valid_results if r.get("reranked", False))
-            logger.info(f"Retrieved {len(valid_results)} context documents ({reranked_count} reranked)")
+            logger.info(
+                f"Retrieved {len(valid_results)} context documents ({reranked_count} reranked)"
+            )
         else:
             logger.info("No relevant context found in vector store")
 
@@ -804,24 +857,31 @@ If not sufficient, set suggested_response to null."""
 
     try:
         context_evaluator = _get_context_evaluator()
-        result = await context_evaluator.ainvoke([
-            {"role": "system", "content": "You evaluate whether retrieved context answers user queries. Be conservative - if in doubt, say it's not sufficient."},
-            {"role": "user", "content": evaluation_prompt},
-        ])
+        result = await context_evaluator.ainvoke(
+            [
+                {
+                    "role": "system",
+                    "content": "You evaluate whether retrieved context answers user queries. Be conservative - if in doubt, say it's not sufficient.",
+                },
+                {"role": "user", "content": evaluation_prompt},
+            ]
+        )
 
         # Handle both Pydantic model and dict responses
         if isinstance(result, dict):
-            is_sufficient = result.get('is_sufficient', False)
-            confidence = result.get('confidence', 0.0)
-            reasoning = result.get('reasoning', '')
-            suggested_response = result.get('suggested_response')
+            is_sufficient = result.get("is_sufficient", False)
+            confidence = result.get("confidence", 0.0)
+            reasoning = result.get("reasoning", "")
+            suggested_response = result.get("suggested_response")
         else:
-            is_sufficient = getattr(result, 'is_sufficient', False)
-            confidence = getattr(result, 'confidence', 0.0)
-            reasoning = getattr(result, 'reasoning', '')
-            suggested_response = getattr(result, 'suggested_response', None)
+            is_sufficient = getattr(result, "is_sufficient", False)
+            confidence = getattr(result, "confidence", 0.0)
+            reasoning = getattr(result, "reasoning", "")
+            suggested_response = getattr(result, "suggested_response", None)
 
-        logger.info(f"Context sufficiency: {is_sufficient} (confidence: {confidence:.2f})")
+        logger.info(
+            f"Context sufficiency: {is_sufficient} (confidence: {confidence:.2f})"
+        )
         logger.info(f"Reasoning: {reasoning}")
 
         # Only mark as sufficient if confidence is high enough
@@ -866,14 +926,19 @@ async def context_response_node(state: AgentState) -> dict[str, Any]:
         context_str = format_retrieved_context(retrieved_context)
 
         model = _get_local_model()
-        response = await model.ainvoke([
-            {"role": "system", "content": f"""You are a helpful assistant. Answer the user's question based on the provided context.
+        response = await model.ainvoke(
+            [
+                {
+                    "role": "system",
+                    "content": f"""You are a helpful assistant. Answer the user's question based on the provided context.
 
 {context_str}
 
-Provide a clear, comprehensive answer based on this context. If the context doesn't fully answer the question, acknowledge any limitations."""},
-            {"role": "user", "content": user_query},
-        ])
+Provide a clear, comprehensive answer based on this context. If the context doesn't fully answer the question, acknowledge any limitations.""",
+                },
+                {"role": "user", "content": user_query},
+            ]
+        )
         response_content = response.content
 
     ai_message = AIMessage(content=response_content, id=str(uuid.uuid4()))
@@ -898,16 +963,17 @@ async def extract_document_node(state: AgentState) -> dict[str, Any]:
     logger.info("Current state: " + str(state))
     logger.info(f"Model selected: {state.get('model', 'default')}")
 
-
     messages = state.get("messages", [])
     human_msg = get_last_human_message(messages)
 
     if not human_msg:
         return {
-            "messages": [AIMessage(
-                content="I couldn't find a document to process. Please upload a PDF or image file.",
-                id=str(uuid.uuid4())
-            )]
+            "messages": [
+                AIMessage(
+                    content="I couldn't find a document to process. Please upload a PDF or image file.",
+                    id=str(uuid.uuid4()),
+                )
+            ]
         }
 
     # Extract file data from the message
@@ -915,55 +981,70 @@ async def extract_document_node(state: AgentState) -> dict[str, Any]:
 
     if not file_data:
         return {
-            "messages": [AIMessage(
-                content="I couldn't extract the file from your message. Please try uploading the document again.",
-                id=str(uuid.uuid4())
-            )]
+            "messages": [
+                AIMessage(
+                    content="I couldn't extract the file from your message. Please try uploading the document again.",
+                    id=str(uuid.uuid4()),
+                )
+            ]
         }
 
     # Build multimodal message for the LLM
     # The content format follows LangChain's multimodal message structure
     content_blocks: list[dict[str, Any]] = [
-        {"type": "text", "text": "Please analyze this document and extract all structured information."},
+        {
+            "type": "text",
+            "text": "Please analyze this document and extract all structured information.",
+        },
     ]
 
     # Add the file content based on type
     if file_data["type"] == "base64":
         if file_data["mime_type"] == "application/pdf":
             # PDF as file type
-            content_blocks.append({
-                "type": "file",
-                "source_type": "base64",
-                "data": file_data["data"],
-                "mime_type": "application/pdf",
-            })
+            content_blocks.append(
+                {
+                    "type": "file",
+                    "source_type": "base64",
+                    "data": file_data["data"],
+                    "mime_type": "application/pdf",
+                }
+            )
         else:
             # Image as image_url
             data_url = f"data:{file_data['mime_type']};base64,{file_data['data']}"
-            content_blocks.append({
-                "type": "image_url",
-                "image_url": {"url": data_url},
-            })
+            content_blocks.append(
+                {
+                    "type": "image_url",
+                    "image_url": {"url": data_url},
+                }
+            )
     else:
         # URL-based file
-        content_blocks.append({
-            "type": "file",
-            "source_type": "url",
-            "url": file_data["data"],
-            "mime_type": file_data["mime_type"],
-        })
+        content_blocks.append(
+            {
+                "type": "file",
+                "source_type": "url",
+                "url": file_data["data"],
+                "mime_type": file_data["mime_type"],
+            }
+        )
 
     try:
         model = _get_local_model()
         gemini = _get_gemini()
-        document_extractor = model.with_structured_output(ExtractedDocumentData) if state.get("model") == "local" else gemini.with_structured_output(ExtractedDocumentData)
+        document_extractor = (
+            model.with_structured_output(ExtractedDocumentData)
+            if state.get("model") == "local"
+            else gemini.with_structured_output(ExtractedDocumentData)
+        )
         # Use the document extractor with structured output
-        extraction_result = await document_extractor.ainvoke([
-            {"role": "system", "content": invoice_extraction_prompt},
-            {"role": "user", "content": content_blocks},
-        ])
-
-
+        extraction_result = await document_extractor.ainvoke(
+            [
+                {"role": "system", "content": invoice_extraction_prompt},
+                {"role": "user", "content": content_blocks},
+            ]
+        )
 
         # Convert result to dict for storage
         # The result should be an ExtractedDocumentData Pydantic model
@@ -975,9 +1056,11 @@ async def extract_document_node(state: AgentState) -> dict[str, Any]:
         elif isinstance(extraction_result, dict):
             extracted_data = extraction_result
 
-        logger.info(f"Extraction complete: category={extracted_data.get('document_category')}, "
-                   f"vendor={extracted_data.get('vendor_name')}, "
-                   f"total={extracted_data.get('total_amount')}")
+        logger.info(
+            f"Extraction complete: category={extracted_data.get('document_category')}, "
+            f"vendor={extracted_data.get('vendor_name')}, "
+            f"total={extracted_data.get('total_amount')}"
+        )
 
         # Generate a human-readable summary
         summary = _format_extraction_summary(extracted_data)
@@ -992,11 +1075,13 @@ async def extract_document_node(state: AgentState) -> dict[str, Any]:
     except Exception as e:
         logger.error(f"Document extraction error: {e}")
         return {
-            "messages": [AIMessage(
-                content=f"I encountered an error while processing the document: {str(e)}. "
-                       "Please ensure the file is a valid PDF or image and try again.",
-                id=str(uuid.uuid4())
-            )],
+            "messages": [
+                AIMessage(
+                    content=f"I encountered an error while processing the document: {str(e)}. "
+                    "Please ensure the file is a valid PDF or image and try again.",
+                    id=str(uuid.uuid4()),
+                )
+            ],
             "extracted_document": None,
         }
 
@@ -1136,10 +1221,18 @@ Return ONLY valid JSON, no explanation."""
 
     try:
         model = _get_local_model()
-        viz_response = await model.ainvoke([
-            {"role": "system", "content": "You are a data visualization expert. Extract chart data from responses."},
-            {"role": "user", "content": viz_analysis_prompt.format(content=content_str[:2000])},
-        ])
+        viz_response = await model.ainvoke(
+            [
+                {
+                    "role": "system",
+                    "content": "You are a data visualization expert. Extract chart data from responses.",
+                },
+                {
+                    "role": "user",
+                    "content": viz_analysis_prompt.format(content=content_str[:2000]),
+                },
+            ]
+        )
 
         # Parse the visualization response
         viz_content = viz_response.content
@@ -1150,7 +1243,8 @@ Return ONLY valid JSON, no explanation."""
 
         # Try to extract JSON from the response
         import re
-        json_match = re.search(r'\{.*\}', viz_text, re.DOTALL)
+
+        json_match = re.search(r"\{.*\}", viz_text, re.DOTALL)
         if not json_match:
             logger.info("No JSON found in visualization analysis")
             return {}
@@ -1244,7 +1338,9 @@ Return ONLY valid JSON, no explanation."""
 # =============================================================================
 
 
-def route_by_context_sufficiency(state: AgentState) -> Literal["context_response", "route_by_type"]:
+def route_by_context_sufficiency(
+    state: AgentState,
+) -> Literal["context_response", "route_by_type"]:
     """Route based on whether retrieved context is sufficient to answer the query.
 
     Routes:
@@ -1267,7 +1363,9 @@ def route_by_context_sufficiency(state: AgentState) -> Literal["context_response
         return "route_by_type"
 
 
-def route_by_query_type(state: AgentState) -> Literal["generic_response", "analytics_agent", "extract_document"]:
+def route_by_query_type(
+    state: AgentState,
+) -> Literal["generic_response", "analytics_agent", "extract_document"]:
     """Route to appropriate handler based on query classification.
 
     Routes:
@@ -1338,7 +1436,7 @@ def create_analytics_agent_graph() -> StateGraph:
         {
             "context_response": "context_response",
             "route_by_type": "route_by_type_node",
-        }
+        },
     )
 
     # Add a pass-through node for query type routing
@@ -1357,7 +1455,7 @@ def create_analytics_agent_graph() -> StateGraph:
             "extract_document": "extract_document",
             "generic_response": "generic_response",
             "analytics_agent": "analytics_agent",
-        }
+        },
     )
 
     # Context-based response goes straight to END

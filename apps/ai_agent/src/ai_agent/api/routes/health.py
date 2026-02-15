@@ -1,7 +1,7 @@
 """Health check endpoints for ThreadWise AI Agent."""
 
-from datetime import datetime
 import logging
+from datetime import datetime
 
 from fastapi import APIRouter
 
@@ -14,19 +14,21 @@ def get_services():
     try:
         from ...services.embedding_service import get_embedding_service
         from ...services.langgraph_service import LangGraphService
+
         embedding_service = get_embedding_service()
         langgraph_service = LangGraphService()
     except ImportError:
         embedding_service = None
         langgraph_service = None
-    
+
     try:
         from ...integrations.inngest import get_inngest_client, validate_inngest_config
+
         inngest_client = get_inngest_client()
     except ImportError:
         inngest_client = None
         validate_inngest_config = None
-    
+
     return embedding_service, langgraph_service, inngest_client, validate_inngest_config
 
 
@@ -34,7 +36,7 @@ def get_services():
 def read_root():
     """Welcome endpoint."""
     embedding_service, langgraph_service, inngest_client, _ = get_services()
-    
+
     return {
         "message": "Welcome to ThreadWise AI Agent API",
         "version": "0.1.0",
@@ -42,23 +44,25 @@ def read_root():
         "services": {
             "chat": "enabled" if langgraph_service else "disabled",
             "embeddings": "enabled" if embedding_service else "disabled",
-            "inngest": "enabled" if inngest_client else "disabled"
-        }
+            "inngest": "enabled" if inngest_client else "disabled",
+        },
     }
 
 
 @router.get("/health")
 def health_check():
     """Health check endpoint."""
-    embedding_service, langgraph_service, inngest_client, validate_inngest_config = get_services()
-    
+    embedding_service, langgraph_service, inngest_client, validate_inngest_config = (
+        get_services()
+    )
+
     inngest_status = "disabled"
     inngest_config = {}
-    
+
     if inngest_client and validate_inngest_config:
         inngest_status = "enabled"
         inngest_config = validate_inngest_config()
-    
+
     return {
         "status": "ok",
         "timestamp": datetime.now().isoformat(),
@@ -66,7 +70,7 @@ def health_check():
         "chat_service": "enabled" if langgraph_service else "disabled",
         "embedding_service": "enabled" if embedding_service else "disabled",
         "inngest_service": inngest_status,
-        "inngest_config": inngest_config
+        "inngest_config": inngest_config,
     }
 
 

@@ -1,10 +1,9 @@
 """Pydantic schemas for ThreadWise AI Agent API."""
 
 from datetime import datetime
-from typing import List, Optional, Dict, Any
+from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel
-
 
 # =============================================================================
 # CHAT SCHEMAS
@@ -13,6 +12,7 @@ from pydantic import BaseModel
 
 class ChatMessage(BaseModel):
     """Pydantic model for chat message data."""
+
     content: str
     thread_id: Optional[str] = None
     assistant_id: Optional[str] = None
@@ -21,6 +21,7 @@ class ChatMessage(BaseModel):
 
 class ChatResponse(BaseModel):
     """Pydantic model for chat response."""
+
     content: str
     thread_id: str
     assistant_id: str
@@ -30,6 +31,7 @@ class ChatResponse(BaseModel):
 
 class ThreadCreateResponse(BaseModel):
     """Response model for thread creation."""
+
     thread_id: str
     assistant_id: str
     status: str
@@ -37,6 +39,7 @@ class ThreadCreateResponse(BaseModel):
 
 class CreateAssistantRequest(BaseModel):
     """Request model for creating an assistant."""
+
     graph_name: str
     model_name: str
     assistant_name: str
@@ -50,6 +53,7 @@ class CreateAssistantRequest(BaseModel):
 
 class EmbedFileRequest(BaseModel):
     """Request model for file embedding from storage."""
+
     file_type: str
     file_url: str
     entity_id: Optional[str] = None  # Optional tenant/entity scoping
@@ -57,6 +61,7 @@ class EmbedFileRequest(BaseModel):
 
 class EmbedFileResponse(BaseModel):
     """Response model for file embedding."""
+
     success: bool
     documentId: Optional[str] = None
     chunks: Optional[int] = None
@@ -72,6 +77,7 @@ class EmbedFileResponse(BaseModel):
 
 class SearchRequest(BaseModel):
     """Request model for document search."""
+
     query: str
     limit: Optional[int] = 5
     namespace: Optional[str] = None  # Pinecone namespace for multi-tenancy
@@ -81,6 +87,7 @@ class SearchRequest(BaseModel):
 
 class HybridSearchRequest(BaseModel):
     """Request model for hybrid document search (semantic + lexical)."""
+
     query: str
     limit: Optional[int] = 5
     namespace: Optional[str] = None
@@ -88,11 +95,14 @@ class HybridSearchRequest(BaseModel):
     alpha: Optional[float] = 0.7  # Balance: 1.0=pure semantic, 0.0=pure lexical
     similarity_threshold: Optional[float] = 0.0  # Lower threshold for hybrid
     rerank: Optional[bool] = True  # Enable reranking for improved relevance
-    rerank_candidates_multiplier: Optional[int] = 3  # Retrieve N×limit candidates for reranking
+    rerank_candidates_multiplier: Optional[int] = (
+        3  # Retrieve N×limit candidates for reranking
+    )
 
 
 class SearchResponse(BaseModel):
     """Response model for document search."""
+
     results: List[dict]
     query: str
     namespace: Optional[str] = None
@@ -103,6 +113,7 @@ class SearchResponse(BaseModel):
 
 class DeleteEmbeddingsRequest(BaseModel):
     """Request model for deleting embeddings."""
+
     filename: Optional[str] = None
     document_id: Optional[str] = None  # More precise deletion by document_id
     namespace: Optional[str] = None  # Namespace to delete from
@@ -110,6 +121,7 @@ class DeleteEmbeddingsRequest(BaseModel):
 
 class DeleteNamespaceRequest(BaseModel):
     """Request model for deleting an entire namespace."""
+
     namespace: str
 
 
@@ -120,6 +132,7 @@ class DeleteNamespaceRequest(BaseModel):
 
 class Message(BaseModel):
     """Pydantic model for incoming message data."""
+
     id: Optional[int] = None
     content: str
     timestamp: Optional[datetime] = None
@@ -127,6 +140,7 @@ class Message(BaseModel):
 
 class MessageResponse(BaseModel):
     """Pydantic model for API message responses."""
+
     id: int
     content: str
     timestamp: datetime

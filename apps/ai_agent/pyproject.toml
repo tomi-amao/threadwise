@@ -65,6 +65,8 @@ pytest = "^8.3.5"
 watchfiles = "^1.0.5"
 pre-commit = "^4.2.0"
 flake8-isort = "^6.1.2"
+bandit = "^1.8.0"
+pytest-cov = "^6.0.0"
 
 [build-system]
 requires = ["poetry-core>=2.0.0,<3.0.0"]

@@ -35,29 +35,32 @@ def get_services():
     inngest_client = None
     inngest_functions = []
     validate_inngest_config = None
-    
+
     # Import services
     try:
         from .services.embedding_service import get_embedding_service
         from .services.langgraph_service import LangGraphService
+
         embedding_service = get_embedding_service()
         langgraph_service = LangGraphService()
     except ImportError:
         try:
             from ai_agent.services.embedding_service import get_embedding_service
             from ai_agent.services.langgraph_service import LangGraphService
+
             embedding_service = get_embedding_service()
             langgraph_service = LangGraphService()
         except ImportError:
             logger.warning("Services not available")
-    
+
     # Import Inngest configuration
     try:
         from .integrations.inngest import (
             get_inngest_client,
-            validate_inngest_config as validate_config,
-            inngest_functions as functions,
         )
+        from .integrations.inngest import inngest_functions as functions
+        from .integrations.inngest import validate_inngest_config as validate_config
+
         inngest_client = get_inngest_client()
         validate_inngest_config = validate_config
         inngest_functions = functions
@@ -65,20 +68,35 @@ def get_services():
         try:
             from ai_agent.integrations.inngest import (
                 get_inngest_client,
-                validate_inngest_config as validate_config,
-                inngest_functions as functions,
             )
+            from ai_agent.integrations.inngest import inngest_functions as functions
+            from ai_agent.integrations.inngest import (
+                validate_inngest_config as validate_config,
+            )
+
             inngest_client = get_inngest_client()
             validate_inngest_config = validate_config
             inngest_functions = functions
         except ImportError:
             logger.warning("Inngest modules not available")
-    
-    return langgraph_service, embedding_service, inngest_client, inngest_functions, validate_inngest_config
+
+    return (
+        langgraph_service,
+        embedding_service,
+        inngest_client,
+        inngest_functions,
+        validate_inngest_config,
+    )
 
 
 # Get service instances
-langgraph_service, embedding_service, inngest_client, inngest_functions, validate_inngest_config = get_services()
+(
+    langgraph_service,
+    embedding_service,
+    inngest_client,
+    inngest_functions,
+    validate_inngest_config,
+) = get_services()
 
 
 @asynccontextmanager
@@ -88,16 +106,16 @@ async def lifespan(app: FastAPI):
     if langgraph_service:
         await langgraph_service.initialize()
         logger.info("LangGraph service initialized")
-    
+
     if embedding_service:
         logger.info("Embedding service available")
-    
+
     if inngest_client and validate_inngest_config:
         config_status = validate_inngest_config()
         logger.info(f"Inngest initialized: {config_status}")
-    
+
     yield
-    
+
     # Shutdown
     logger.info("Application shutting down")
 
@@ -122,11 +140,13 @@ app.add_middleware(
 # Setup Inngest endpoint
 if inngest_client and inngest_functions:
     from inngest.fast_api import serve as inngest_serve
+
     inngest_serve(app, inngest_client, inngest_functions)
     logger.info(f"Inngest endpoint configured with {len(inngest_functions)} functions")
 
 # Include API routers
 from .api.routes import router as api_router
+
 app.include_router(api_router)
 
 logger.info("ThreadWise AI Agent API initialized")

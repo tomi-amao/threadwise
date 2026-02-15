@@ -1,6 +1,6 @@
 """Data Normalization & Persistence System.
 
-Transforms raw third-party commerce payloads into canonical, 
+Transforms raw third-party commerce payloads into canonical,
 provider-agnostic domain models for accounting, inventory, and analytics workflows.
 
 Core Principles:
@@ -11,42 +11,35 @@ Core Principles:
 - Immutability: Raw payloads are never modified
 """
 
-from .models import (
-    # Base
+from .models import (  # Base; Commercial Domain; Inventory Domain
     CanonicalBase,
-    ProcessingResult,
-    ProcessingStatus,
-    # Commercial Domain
     CanonicalCustomer,
-    CanonicalOrder,
+    CanonicalInventoryAdjustment,
+    CanonicalInventoryItem,
     CanonicalLineItem,
+    CanonicalOrder,
     CanonicalPayment,
     CanonicalPaymentFee,
-    # Inventory Domain
     CanonicalProduct,
     CanonicalProductVariant,
-    CanonicalInventoryItem,
-    CanonicalInventoryAdjustment,
+    ProcessingResult,
+    ProcessingStatus,
 )
-
 from .normalizer import (
     BaseNormalizer,
     NormalizationError,
     NormalizationResult,
 )
-
-from .squarespace_normalizer import SquarespaceNormalizer
-
 from .persistence import (
-    PersistenceService,
     PersistenceError,
+    PersistenceService,
     persistence_service,
 )
-
 from .service import (
     NormalizationService,
     normalization_service,
 )
+from .squarespace_normalizer import SquarespaceNormalizer
 
 __all__ = [
     # Models
