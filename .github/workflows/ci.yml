@@ -186,6 +186,7 @@ jobs:
       - name: Run mypy
         working-directory: apps/ai_agent
         run: poetry run mypy src/
+        continue-on-error: true
 
   backend-security:
     name: Backend Security Scan

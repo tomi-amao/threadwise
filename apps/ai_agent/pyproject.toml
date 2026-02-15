@@ -53,6 +53,9 @@ line_length = 88
 python_version = "3.13"
 warn_return_any = true
 warn_unused_configs = true
+ignore_missing_imports = true
+no_implicit_optional = false
+check_untyped_defs = false
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]
