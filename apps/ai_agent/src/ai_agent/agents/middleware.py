@@ -29,6 +29,8 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langgraph.runtime import Runtime
 from pydantic import BaseModel, Field
 
+from ..core.config import get_local_llm
+from ..tools.sql_tools import get_sql_tools
 from .prompts import (
     analytics_system_prompt,
     check_financial_prompt,
@@ -36,8 +38,6 @@ from .prompts import (
     sql_system_prompt,
     validate_financial_prompt_against_database,
 )
-from ..core.config import get_local_llm
-from ..tools.sql_tools import get_sql_tools
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -77,7 +77,8 @@ class FinancialQueryValidation(BaseModel):
         default_factory=list, description="Clarification questions to ask the user"
     )
     suggestions: List[str] = Field(
-        default_factory=list, description="Suggested alternative queries based on available data"
+        default_factory=list,
+        description="Suggested alternative queries based on available data",
     )
 
 
@@ -88,7 +89,8 @@ class Suggestion(BaseModel):
         ..., description="Human-readable explanation of a suggested alternative query"
     )
     example_query: str = Field(
-        ..., description="An example of a rewritten user query grounded in available data"
+        ...,
+        description="An example of a rewritten user query grounded in available data",
     )
 
 
@@ -235,7 +237,7 @@ async def classify_query(state: QueryState, runtime: Runtime) -> dict[str, Any] 
             logger.info("Financial report detected - running quality validation...")
             quality_result = await _validate_financial_query(user_query)
             logger.info(f"Quality validation result: {quality_result.get('status')}")
-            
+
             return {
                 "query_type": "financial_report",
                 "is_query_quality_passed": quality_result["status"],
@@ -312,13 +314,15 @@ Return:
 - confidence: 0.0 to 1.0
 - reasoning: Brief explanation of why you chose this category"""
 
-    result = await _get_type_classifier().ainvoke([
-        {
-            "role": "system",
-            "content": "You classify queries into financial reports, data analytics, or generic conversation. Be precise and consider the user's intent.",
-        },
-        {"role": "user", "content": classification_prompt},
-    ])
+    result = await _get_type_classifier().ainvoke(
+        [
+            {
+                "role": "system",
+                "content": "You classify queries into financial reports, data analytics, or generic conversation. Be precise and consider the user's intent.",
+            },
+            {"role": "user", "content": classification_prompt},
+        ]
+    )
 
     # Handle both structured output and dict responses
     if isinstance(result, dict):
@@ -327,7 +331,7 @@ Return:
             "confidence": result.get("confidence", 0.5),
             "reasoning": result.get("reasoning", ""),
         }
-    
+
     return {
         "query_type": getattr(result, "query_type", "generic"),
         "confidence": getattr(result, "confidence", 0.5),
@@ -352,9 +356,9 @@ async def _validate_financial_query(user_query: str) -> dict[str, Any]:
     logger.info("Running initial validation check")
 
     # Step 1: Basic validation without database context
-    initial_validation = await _get_validation_agent().ainvoke({
-        "messages": [{"role": "user", "content": user_query}]
-    })
+    initial_validation = await _get_validation_agent().ainvoke(
+        {"messages": [{"role": "user", "content": user_query}]}
+    )
 
     validation_result = initial_validation["structured_response"]
     logger.info(f"Initial validation completed: status={validation_result.status}")
@@ -370,7 +374,7 @@ async def _validate_financial_query(user_query: str) -> dict[str, Any]:
 
     # Step 2: Query has issues - get database-grounded suggestions
     logger.info("Query requires clarification - fetching database-grounded suggestions")
-    
+
     validation_prompt = (
         f"Help me improve this query by addressing the problems with it:\n"
         f"{user_query}\n\n"
@@ -379,13 +383,13 @@ async def _validate_financial_query(user_query: str) -> dict[str, Any]:
         f"Provide suggestions based on actual data in the database by querying it."
     )
 
-    database_validation = await _get_validation_agent_with_tools().ainvoke({
-        "messages": [{"role": "user", "content": validation_prompt}]
-    })
+    database_validation = await _get_validation_agent_with_tools().ainvoke(
+        {"messages": [{"role": "user", "content": validation_prompt}]}
+    )
 
     # Parse the last message content
     last_message_content = database_validation["messages"][-1].content
-    
+
     try:
         validation_data = json.loads(last_message_content)
     except json.JSONDecodeError:
@@ -399,13 +403,17 @@ async def _validate_financial_query(user_query: str) -> dict[str, Any]:
     # Extract and format suggestions
     suggestions = []
     for item in validation_data.get("suggestions", []):
-        suggestions.append({
-            "description": item.get("description", ""),
-            "example_query": item.get("example_query", ""),
-        })
+        suggestions.append(
+            {
+                "description": item.get("description", ""),
+                "example_query": item.get("example_query", ""),
+            }
+        )
 
-    logger.info(f"Validation complete: status={validation_data.get('status')}, "
-                f"{len(suggestions)} suggestions generated")
+    logger.info(
+        f"Validation complete: status={validation_data.get('status')}, "
+        f"{len(suggestions)} suggestions generated"
+    )
 
     return {
         "status": validation_data.get("status", "fail"),

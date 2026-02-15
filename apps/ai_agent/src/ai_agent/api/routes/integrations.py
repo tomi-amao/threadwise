@@ -7,15 +7,13 @@ import asyncio
 import logging
 from typing import List, Optional
 
+import inngest
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, Field
 
-import inngest
-
-
-from ...services.external_sync_service import sync_service
 from ...integrations.inngest import get_client
 from ...normalization.inngest_functions import trigger_source_normalization
+from ...services.external_sync_service import sync_service
 
 logger = logging.getLogger(__name__)
 
@@ -29,16 +27,18 @@ router = APIRouter()
 
 class CreateEntityRequest(BaseModel):
     """Request to create an entity."""
-    
+
     name: str = Field(..., description="Entity name")
-    currency: str = Field(..., min_length=3, max_length=3, description="3-letter currency code")
+    currency: str = Field(
+        ..., min_length=3, max_length=3, description="3-letter currency code"
+    )
     legal_name: Optional[str] = Field(None, description="Legal name")
     country: Optional[str] = Field(None, description="Country code")
 
 
 class EntityResponse(BaseModel):
     """Entity response."""
-    
+
     id: str
     name: str
     currency: str
@@ -49,17 +49,19 @@ class EntityResponse(BaseModel):
 
 class CreateExternalSourceRequest(BaseModel):
     """Request to create an external source connection."""
-    
+
     entity_id: str = Field(..., description="Parent entity ID")
     provider: str = Field(..., description="Provider name (e.g., 'squarespace')")
-    external_account_id: str = Field(..., description="External account ID (e.g., site ID)")
+    external_account_id: str = Field(
+        ..., description="External account ID (e.g., site ID)"
+    )
     display_name: Optional[str] = Field(None, description="Display name")
     api_key: str = Field(..., description="API key for the provider")
 
 
 class ExternalSourceResponse(BaseModel):
     """External source response."""
-    
+
     id: str
     entity_id: Optional[str]
     provider: str
@@ -75,16 +77,16 @@ class ExternalSourceResponse(BaseModel):
 
 class TriggerSyncRequest(BaseModel):
     """Request to trigger a sync."""
-    
+
     endpoint: Optional[str] = Field(
         None,
-        description="Specific endpoint to sync (products, orders, etc.). If not provided, syncs all."
+        description="Specific endpoint to sync (products, orders, etc.). If not provided, syncs all.",
     )
 
 
 class TriggerSyncResponse(BaseModel):
     """Response from triggering a sync."""
-    
+
     source_id: str
     status: str
     message: str
@@ -93,7 +95,7 @@ class TriggerSyncResponse(BaseModel):
 
 class SyncStatsResponse(BaseModel):
     """Sync statistics response."""
-    
+
     source_id: str
     provider: str
     stats: dict
@@ -101,7 +103,7 @@ class SyncStatsResponse(BaseModel):
 
 class IntegrationSummary(BaseModel):
     """Summary of an integration for UI display."""
-    
+
     id: str
     provider: str
     display_name: Optional[str]
@@ -119,7 +121,7 @@ class IntegrationSummary(BaseModel):
 
 class ValidateApiKeyResponse(BaseModel):
     """Response from API key validation."""
-    
+
     source_id: str
     status: str
     message: str
@@ -128,17 +130,17 @@ class ValidateApiKeyResponse(BaseModel):
 
 class TriggerNormalizeRequest(BaseModel):
     """Request to trigger normalization for a source."""
-    
+
     mode: str = Field(
         default="soft",
-        description="'hard' resets all to pending; 'soft' only processes pending"
+        description="'hard' resets all to pending; 'soft' only processes pending",
     )
     batch_size: int = Field(default=100, ge=1, le=500, description="Events per batch")
 
 
 class TriggerNormalizeResponse(BaseModel):
     """Response from triggering normalization."""
-    
+
     source_id: str
     status: str
     mode: str
@@ -151,7 +153,9 @@ class TriggerNormalizeResponse(BaseModel):
 # =============================================================================
 
 
-@router.post("/entities", response_model=EntityResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/entities", response_model=EntityResponse, status_code=status.HTTP_201_CREATED
+)
 async def create_entity(request: CreateEntityRequest):
     """Create a new entity."""
     try:
@@ -159,22 +163,21 @@ async def create_entity(request: CreateEntityRequest):
             name=request.name,
             currency=request.currency,
             legal_name=request.legal_name,
-            country=request.country
+            country=request.country,
         )
-        
+
         if not result:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Failed to create entity"
+                detail="Failed to create entity",
             )
-        
+
         return result
-    
+
     except Exception as e:
         logger.error(f"Error creating entity: {e}")
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=str(e)
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)
         )
 
 
@@ -186,8 +189,7 @@ async def list_entities():
     except Exception as e:
         logger.error(f"Error listing entities: {e}")
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=str(e)
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)
         )
 
 
@@ -196,53 +198,53 @@ async def list_entities():
 # =============================================================================
 
 
-@router.post("/sources", response_model=ExternalSourceResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/sources",
+    response_model=ExternalSourceResponse,
+    status_code=status.HTTP_201_CREATED,
+)
 async def create_external_source(request: CreateExternalSourceRequest):
     """Create a new external source connection."""
     try:
         # Store credentials securely (API key)
         credentials = {"api_key": request.api_key}
-        
+
         result = await sync_service.create_external_source(
             entity_id=request.entity_id,
             provider=request.provider,
             external_account_id=request.external_account_id,
             credentials=credentials,
-            display_name=request.display_name
+            display_name=request.display_name,
         )
-        
+
         if not result:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Failed to create external source"
+                detail="Failed to create external source",
             )
-        
+
         return result
-    
+
     except Exception as e:
         logger.error(f"Error creating external source: {e}")
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=str(e)
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)
         )
 
 
 @router.get("/sources", response_model=List[ExternalSourceResponse])
 async def list_external_sources(
-    entity_id: Optional[str] = None,
-    provider: Optional[str] = None
+    entity_id: Optional[str] = None, provider: Optional[str] = None
 ):
     """List external sources with optional filtering."""
     try:
         return await sync_service.list_external_sources(
-            entity_id=entity_id,
-            provider=provider
+            entity_id=entity_id, provider=provider
         )
     except Exception as e:
         logger.error(f"Error listing external sources: {e}")
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=str(e)
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)
         )
 
 
@@ -251,22 +253,21 @@ async def get_external_source(source_id: str):
     """Get an external source by ID."""
     try:
         result = await sync_service.get_external_source(source_id)
-        
+
         if not result:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"External source not found: {source_id}"
+                detail=f"External source not found: {source_id}",
             )
-        
+
         return result
-    
+
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Error getting external source: {e}")
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=str(e)
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)
         )
 
 
@@ -278,30 +279,29 @@ async def get_external_source(source_id: str):
 @router.post("/sources/{source_id}/sync", response_model=TriggerSyncResponse)
 async def trigger_sync(source_id: str, request: Optional[TriggerSyncRequest] = None):
     """Trigger a sync for an external source.
-    
+
     If endpoint is specified, syncs only that endpoint.
     Otherwise, syncs all endpoints.
     """
     try:
         # Verify source exists
         source = await sync_service.get_external_source(source_id)
-        
+
         if not source:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"External source not found: {source_id}"
+                detail=f"External source not found: {source_id}",
             )
-        
+
         # Check if already syncing
         if source.get("sync_status") == "syncing":
             raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="Sync already in progress"
+                status_code=status.HTTP_409_CONFLICT, detail="Sync already in progress"
             )
-        
+
         # Get Inngest client
         inngest_client = get_client()
-        
+
         print("Inngest client obtained:", inngest_client)
         # Trigger appropriate sync event
         if request and request.endpoint:
@@ -309,85 +309,80 @@ async def trigger_sync(source_id: str, request: Optional[TriggerSyncRequest] = N
             event_ids = await inngest_client.send(
                 inngest.Event(
                     name="squarespace/sync.endpoint",
-                    data={
-                    "source_id": source_id,
-                    "endpoint": request.endpoint
-                    }
+                    data={"source_id": source_id, "endpoint": request.endpoint},
                 )
-                )
+            )
 
             message = f"Triggered sync for {request.endpoint}"
         else:
             # Full sync
-            event_ids = await inngest_client.send({
-                "name": "squarespace/sync.requested",
-                "data": {
-                    "source_id": source_id
-                }
-            })
+            event_ids = await inngest_client.send(
+                {"name": "squarespace/sync.requested", "data": {"source_id": source_id}}
+            )
             message = "Triggered full sync for all endpoints"
-        
+
         logger.info(f"{message} for source {source_id}")
-        
+
         return TriggerSyncResponse(
             source_id=source_id,
             status="triggered",
             message=message,
-            event_ids=event_ids if event_ids else []
+            event_ids=event_ids if event_ids else [],
         )
-    
+
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Error triggering sync: {e}")
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=str(e)
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)
         )
 
 
 @router.post("/sources/{source_id}/validate", response_model=ValidateApiKeyResponse)
 async def validate_api_key(source_id: str):
     """Validate the API key for an external source.
-    
+
     Tests the API key by making a simple request to the provider's API.
     Updates the api_key_status based on the result.
     """
     try:
         # Get the source
         source = await sync_service.get_external_source(source_id)
-        
+
         if not source:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"External source not found: {source_id}"
+                detail=f"External source not found: {source_id}",
             )
-        
+
         provider = source.get("provider", "unknown")
-        
+
         # Get the API key from Vault
         api_key = await sync_service.get_api_key(source_id)
-        
+
         if not api_key:
-            await sync_service.update_api_key_status(source_id, "invalid", "No API key configured")
+            await sync_service.update_api_key_status(
+                source_id, "invalid", "No API key configured"
+            )
             return ValidateApiKeyResponse(
                 source_id=source_id,
                 status="invalid",
                 message="No API key configured",
-                provider=provider
+                provider=provider,
             )
-        
+
         # Validate based on provider
         is_valid = False
         error_message = None
-        
+
         if provider == "squarespace":
             is_valid, error_message = await _validate_squarespace_api_key(api_key)
         elif provider == "revolut":
             is_valid, error_message = await _validate_revolut_api_key(api_key)
         else:
             error_message = f"Unknown provider: {provider}"
-        
+
         # Update status
         if is_valid:
             await sync_service.update_api_key_status(source_id, "valid")
@@ -395,44 +390,45 @@ async def validate_api_key(source_id: str):
                 source_id=source_id,
                 status="valid",
                 message="API key is valid and working",
-                provider=provider
+                provider=provider,
             )
         else:
-            await sync_service.update_api_key_status(source_id, "invalid", error_message)
+            await sync_service.update_api_key_status(
+                source_id, "invalid", error_message
+            )
             return ValidateApiKeyResponse(
                 source_id=source_id,
                 status="invalid",
                 message=error_message or "API key validation failed",
-                provider=provider
+                provider=provider,
             )
-    
+
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Error validating API key: {e}")
         await sync_service.update_api_key_status(source_id, "invalid", str(e))
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=str(e)
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)
         )
 
 
 async def _validate_squarespace_api_key(api_key: str) -> tuple[bool, Optional[str]]:
     """Validate a Squarespace API key by making a test request."""
     import httpx
-    
+
     try:
         async with httpx.AsyncClient() as client:
             response = await client.get(
                 "https://api.squarespace.com/1.0/commerce/inventory",
                 headers={
                     "Authorization": f"Bearer {api_key}",
-                    "User-Agent": "ThreadWise/1.0"
+                    "User-Agent": "ThreadWise/1.0",
                 },
                 params={"limit": 1},
-                timeout=10.0
+                timeout=10.0,
             )
-            
+
             if response.status_code == 200:
                 return True, None
             elif response.status_code == 401:
@@ -450,18 +446,18 @@ async def _validate_squarespace_api_key(api_key: str) -> tuple[bool, Optional[st
 async def _validate_revolut_api_key(api_key: str) -> tuple[bool, Optional[str]]:
     """Validate a Revolut API key by making a test request."""
     import httpx
-    
+
     try:
         async with httpx.AsyncClient() as client:
             response = await client.get(
                 "https://b2b.revolut.com/api/1.0/accounts",
                 headers={
                     "Authorization": f"Bearer {api_key}",
-                    "User-Agent": "ThreadWise/1.0"
+                    "User-Agent": "ThreadWise/1.0",
                 },
-                timeout=10.0
+                timeout=10.0,
             )
-            
+
             if response.status_code == 200:
                 return True, None
             elif response.status_code == 401:
@@ -481,28 +477,25 @@ async def get_sync_stats(source_id: str):
     """Get sync statistics for an external source."""
     try:
         source = await sync_service.get_external_source(source_id)
-        
+
         if not source:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"External source not found: {source_id}"
+                detail=f"External source not found: {source_id}",
             )
-        
+
         stats = await sync_service.get_sync_stats(source_id)
-        
+
         return SyncStatsResponse(
-            source_id=source_id,
-            provider=source.get("provider", "unknown"),
-            stats=stats
+            source_id=source_id, provider=source.get("provider", "unknown"), stats=stats
         )
-    
+
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Error getting sync stats: {e}")
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=str(e)
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)
         )
 
 
@@ -526,7 +519,7 @@ async def get_sync_stats(source_id: str):
     - `hard`: Resets ALL events to 'pending' and reprocesses everything from scratch.
     
     Progress is streamed via Inngest Realtime on the normalization channel.
-    """
+    """,
 )
 async def trigger_normalize(
     source_id: str,
@@ -536,53 +529,48 @@ async def trigger_normalize(
     try:
         # Verify source exists
         source = await sync_service.get_external_source(source_id)
-        
+
         if not source:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"External source not found: {source_id}"
+                detail=f"External source not found: {source_id}",
             )
-        
+
         mode = request.mode if request else "soft"
         batch_size = request.batch_size if request else 100
-        
+
         if mode not in ("hard", "soft"):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="mode must be 'hard' or 'soft'"
+                detail="mode must be 'hard' or 'soft'",
             )
-        
+
         event_ids = await trigger_source_normalization(
-            source_id=source_id,
-            mode=mode,
-            batch_size=batch_size
+            source_id=source_id, mode=mode, batch_size=batch_size
         )
-        
+
         if event_ids is None:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Failed to trigger normalization"
+                detail="Failed to trigger normalization",
             )
-        
-        logger.info(
-            f"Triggered {mode} normalization for source {source_id}"
-        )
-        
+
+        logger.info(f"Triggered {mode} normalization for source {source_id}")
+
         return TriggerNormalizeResponse(
             source_id=source_id,
             status="triggered",
             mode=mode,
             message=f"Normalization triggered ({mode} mode)",
-            event_ids=event_ids
+            event_ids=event_ids,
         )
-    
+
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Error triggering normalization: {e}")
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=str(e)
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)
         )
 
 
@@ -594,13 +582,13 @@ async def trigger_normalize(
 @router.get("/summary", response_model=List[IntegrationSummary])
 async def get_integrations_summary(entity_id: Optional[str] = None):
     """Get a summary of all integrations for UI display.
-    
+
     Args:
         entity_id: Optional entity ID to filter by (for user's entity)
     """
     try:
         sources = await sync_service.list_external_sources(entity_id=entity_id)
-        
+
         summaries = []
         for source in sources:
             # Get stats for each source
@@ -608,7 +596,7 @@ async def get_integrations_summary(entity_id: Optional[str] = None):
                 stats = await sync_service.get_sync_stats(source["id"])
             except Exception:
                 stats = None
-            
+
             # Get failed events count
             failed_count = 0
             try:
@@ -621,34 +609,37 @@ async def get_integrations_summary(entity_id: Optional[str] = None):
                 )
                 failed_count = result.count or 0
             except Exception as e:
-                logger.warning(f"Failed to get failed events count for {source['id']}: {e}")
-            
+                logger.warning(
+                    f"Failed to get failed events count for {source['id']}: {e}"
+                )
+
             # Extract entity name from joined data
             entity_name = None
             if source.get("entities"):
                 entity_name = source["entities"].get("name")
-            
-            summaries.append(IntegrationSummary(
-                id=source["id"],
-                provider=source["provider"],
-                display_name=source.get("display_name"),
-                external_account_id=source["external_account_id"],
-                sync_status=source.get("sync_status", "unknown"),
-                sync_error=source.get("sync_error"),
-                last_synced_at=source.get("last_synced_at"),
-                entity_name=entity_name,
-                stats=stats,
-                api_key_status=source.get("api_key_status", "pending"),
-                api_key_last_validated_at=source.get("api_key_last_validated_at"),
-                api_key_error=source.get("api_key_error"),
-                failed_events_count=failed_count
-            ))
-        
+
+            summaries.append(
+                IntegrationSummary(
+                    id=source["id"],
+                    provider=source["provider"],
+                    display_name=source.get("display_name"),
+                    external_account_id=source["external_account_id"],
+                    sync_status=source.get("sync_status", "unknown"),
+                    sync_error=source.get("sync_error"),
+                    last_synced_at=source.get("last_synced_at"),
+                    entity_name=entity_name,
+                    stats=stats,
+                    api_key_status=source.get("api_key_status", "pending"),
+                    api_key_last_validated_at=source.get("api_key_last_validated_at"),
+                    api_key_error=source.get("api_key_error"),
+                    failed_events_count=failed_count,
+                )
+            )
+
         return summaries
-    
+
     except Exception as e:
         logger.error(f"Error getting integrations summary: {e}")
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=str(e)
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)
         )

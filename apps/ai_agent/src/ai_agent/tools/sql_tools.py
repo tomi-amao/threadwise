@@ -24,6 +24,7 @@ logger = logging.getLogger(__name__)
 
 class State(TypedDict):
     """State schema for SQL agent."""
+
     question: str
     query: str
     result: str

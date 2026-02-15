@@ -9,17 +9,17 @@ from uuid import UUID
 
 def extract_id(result: Any, field: str = "id") -> UUID:
     """Extract UUID from Supabase response data.
-    
+
     Supabase client returns complex types. This helper safely
     extracts the ID from upsert/query results.
-    
+
     Args:
         result: The APIResponse from Supabase execute()
         field: The field name containing the UUID (default: "id")
-        
+
     Returns:
         UUID from the first row
-        
+
     Raises:
         ValueError: If no data returned or unexpected format
     """
@@ -34,10 +34,10 @@ def extract_id(result: Any, field: str = "id") -> UUID:
 
 def extract_row(result: Any) -> Optional[Dict[str, Any]]:
     """Extract first row from Supabase response as a dict.
-    
+
     Args:
         result: The APIResponse from Supabase execute()
-        
+
     Returns:
         Dict of the first row or None if no data
     """
@@ -52,10 +52,10 @@ def extract_row(result: Any) -> Optional[Dict[str, Any]]:
 
 def extract_rows(result: Any) -> List[Dict[str, Any]]:
     """Extract all rows from Supabase response as list of dicts.
-    
+
     Args:
         result: The APIResponse from Supabase execute()
-        
+
     Returns:
         List of dicts (empty list if no data)
     """

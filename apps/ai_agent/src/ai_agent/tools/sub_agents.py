@@ -7,12 +7,11 @@ All agent creation is deferred to first use to avoid blocking startup.
 from functools import lru_cache
 from typing import Literal
 
-from langchain.tools import tool, ToolRuntime
 from langchain.agents import create_agent
+from langchain.tools import ToolRuntime, tool
 from pydantic import BaseModel, Field
 
 from ..core.config import get_chat_model
-
 
 # =============================================================================
 # PYDANTIC MODELS
@@ -21,11 +20,8 @@ from ..core.config import get_chat_model
 
 class QueryEvaluation(BaseModel):
     """Evaluate the quality of the query."""
-    rating: int | None = Field(
-        description="The rating of the product",
-        ge=1,
-        le=5
-    )
+
+    rating: int | None = Field(description="The rating of the product", ge=1, le=5)
     result: Literal["pass", "fail"] = Field(
         description="The result of whether the query is detailed or not."
     )
@@ -78,8 +74,8 @@ def qualify_query(query: str, request, runtime: ToolRuntime):
         Query qualification result with suggestions
     """
     qualify_query_agent = _get_qualify_query_agent()
-    result = qualify_query_agent.invoke({
-        "messages": [{"role": "user", "content": query}]
-    })
+    result = qualify_query_agent.invoke(
+        {"messages": [{"role": "user", "content": query}]}
+    )
     print("Query Qualification Result:", result["messages"][-1].content)
     return result["messages"][-1].content
