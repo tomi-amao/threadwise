@@ -1,0 +1,50 @@
+# Set to true to add reviewers to pull requests
+addReviewers: true
+
+# Set to true to add assignees to pull requests
+addAssignees: false
+
+# A list of reviewers to be added to pull requests (GitHub user name)
+reviewers:
+  - trendstomi
+
+# A number of reviewers added to the pull request
+# Set 0 to add all the reviewers (default: 0)
+numberOfReviewers: 0
+
+# A list of assignees, overrides reviewers if set
+# assignees:
+#   - trendstomi
+
+# A number of assignees to add to the pull request
+# Set to 0 to add all of the assignees.
+# Uses numberOfReviewers if unset.
+# numberOfAssignees: 0
+
+# A list of keywords to be skipped for reviewer assignment
+skipKeywords:
+  - wip
+  - WIP
+  - draft
+
+# File path patterns for reviewer assignment
+# When files matching a pattern are modified, the corresponding reviewers will be assigned
+useReviewGroups: true
+reviewGroups:
+  frontend:
+    - 'apps/chat-ui/**/*.{ts,tsx,jsx,js,css}'
+    - 'apps/chat-ui/**/*.json'
+  backend:
+    - 'apps/ai_agent/**/*.py'
+    - 'apps/ai_agent/pyproject.toml'
+  infrastructure:
+    - 'infrastructure/**/*'
+    - 'docker-compose*.yml'
+    - '**/Dockerfile'
+  ci:
+    - '.github/workflows/**/*'
+    - '.github/*.yml'
+
+# Assign reviewers based on the author
+# If the author is in the list, assign the corresponding reviewers
+useAssigneeGroups: false
