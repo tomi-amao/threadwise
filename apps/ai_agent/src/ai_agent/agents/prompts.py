@@ -155,9 +155,10 @@ The database follows a multi-tenant architecture with these core tables:
    - Use when: Debugging integrations, checking raw data quality, monitoring ETL pipeline
 
 4. **customers** - Normalized customer records
-   - Contains: email, first_name, last_name, phone, default_address, created_at
+   - Contains: email, first_name, last_name, phone, default_address (JSONB), created_at
    - Links to: entities (entity_id), external_raw_events (raw_event_id)
-   - Use when: Customer analysis, segmentation, contact information queries
+   - **Geographic Data**: default_address is JSONB containing: city, state, postal_code, country_code
+   - Use when: Customer analysis, segmentation, contact information, geographic analysis
 
 5. **products** - Product catalog
    - Contains: name, description, product_type, variants (JSONB), tags, status
@@ -165,14 +166,18 @@ The database follows a multi-tenant architecture with these core tables:
    - Use when: Product performance, catalog queries, inventory planning
 
 6. **orders** - Order transactions
-   - Contains: order_number, status, fulfillment_status, subtotal_amount, discount_total_amount, 
-     shipping_total_amount, tax_total_amount, grand_total_amount, currency, created_at, updated_at
+   - Contains: order_number, status, fulfillment_status, subtotal_amount, discount_total_amount,
+     shipping_total_amount, tax_total_amount, grand_total_amount, currency, created_at, updated_at,
+     shipping_address (JSONB), billing_address (JSONB)
    - Links to: entities, customers, external_raw_events
    - Statuses: pending, confirmed, processing, shipped, delivered, cancelled, refunded
-   - Use when: Revenue analysis, order trends, fulfillment metrics, sales performance
+   - **Geographic Data**:
+     - shipping_address (JSONB): city, state, postal_code, country_code, address_line_1, address_line_2
+     - billing_address (JSONB): city, state, postal_code, country_code, address_line_1, address_line_2
+   - Use when: Revenue analysis, order trends, fulfillment metrics, sales performance, geographic analysis
 
 7. **order_line_items** - Individual items within orders
-   - Contains: product_id, product_name, variant_name, quantity, unit_price_amount, total_price_amount, 
+   - Contains: product_id, product_name, variant_name, quantity, unit_price_amount, total_price_amount,
      discount_amount, tax_amount, sku
    - Links to: orders (order_id), products (product_id)
    - **Foreign Key**: product_id properly references products(id)
@@ -180,7 +185,7 @@ The database follows a multi-tenant architecture with these core tables:
    - Use when: Product-level revenue, SKU analysis, quantity trends, basket analysis
 
 8. **payments** - Payment transactions
-   - Contains: amount, refunded_amount, net_amount, currency, status, gateway, external_payment_id, 
+   - Contains: amount, refunded_amount, net_amount, currency, status, gateway, external_payment_id,
      payment_method, transaction_id, paid_on, created_at
    - Links to: entities (entity_id), orders (order_id), external_raw_events (raw_event_id)
    - Statuses: pending, authorized, captured, refunded, failed
@@ -202,9 +207,9 @@ The database follows a multi-tenant architecture with these core tables:
      gateway cost comparison, net revenue after fees
 
 10. **inventory_items** - Product variant inventory levels
-   - Contains: variant_external_id, sku, quantity, is_unlimited
-   - Links to: entities, products, external_raw_events
-   - Use when: Stock level queries, inventory management, out-of-stock analysis
+    - Contains: variant_external_id, sku, quantity, is_unlimited
+    - Links to: entities, products, external_raw_events
+    - Use when: Stock level queries, inventory management, out-of-stock analysis
 
 11. **inventory_adjustments** - Inventory change history
     - Contains: variant_external_id, quantity_change, quantity_after, reason, adjusted_at
@@ -216,6 +221,41 @@ The database follows a multi-tenant architecture with these core tables:
     - Contains: raw_event_id, entity_type, status, canonical_id, error_message, needs_review
     - Purpose: Track normalization success/failures for debugging
     - Use when: Debugging data pipeline, monitoring ETL quality
+
+**GEOGRAPHIC DATA QUERYING GUIDE:**
+
+Geographic queries use JSONB fields that must be accessed via PostgreSQL JSONB operators:
+
+**Querying JSONB Address Fields:**
+- Syntax: `table_name.column_name->>'field_name'` to extract text values
+- Example: `orders.shipping_address->>'city'` returns the city as text
+- Available fields in address JSONB: city, state, postal_code, country_code, address_line_1, address_line_2, first_name, last_name, phone
+
+**Tables with Geographic Data:**
+1. **customers** - Use `default_address->>'country_code'`, `default_address->>'city'`, `default_address->>'state'`
+2. **orders** - Use `shipping_address->>'country_code'`, `shipping_address->>'city'` for sales by location
+3. **orders** - Use `billing_address->>'country_code'` for billing location analysis
+
+**Common Geographic Queries:**
+- "Show revenue by country" → GROUP BY orders.shipping_address->>'country_code', SUM(grand_total_amount)
+- "Which cities have the most customers?" → GROUP BY customers.default_address->>'city', COUNT(id)
+- "Revenue comparison by state" → GROUP BY orders.shipping_address->>'state'
+- "Top shipping destinations" → GROUP BY orders.shipping_address->>'country_code', orders.shipping_address->>'city'
+- "Customers by location" → JOIN customers with orders on shipping_address for geographic analysis
+- "New customers by country" → WHERE customers.default_address->>'country_code' filter on created_at
+
+**Important JSONB Tips:**
+- Always use `->>` (text extraction) for comparisons and grouping (not `->` which returns JSON)
+- NULL handling: Use COALESCE() for missing geographic fields
+- Case sensitivity: country_code follows ISO 3166-1 alpha-2 format (e.g., 'US', 'GB', 'DE')
+- City/state may be NULL if not captured by the provider - handle gracefully
+- Both shipping and billing addresses are available; use shipping for location-based sales analysis
+
+**Geographic Analysis Examples:**
+- "What's our top revenue by country?" → Join orders to get shipping_address, GROUP BY country_code, ORDER BY revenue DESC
+- "How many orders ship to each state?" → Use orders table, shipping_address->>'state' for state-level analysis
+- "Customer concentration by city" → Use customers table, count by default_address->>'city'
+- "International vs domestic revenue" → Compare shipping_address->>'country_code' against entity's home country
 
 **TABLE SELECTION GUIDE:**
 
@@ -242,6 +282,14 @@ Integration/ETL Questions → external_sources, external_raw_events, normalizati
 - "Failed imports": external_raw_events WHERE processing_status = 'failed'
 - "Data quality": normalization_processing_log
 
+Geographic Questions → customers, orders (shipping_address, billing_address)
+- "Revenue by country": JOIN orders → GROUP BY shipping_address->>'country_code' → SUM(grand_total_amount)
+- "Top cities by orders": GROUP BY orders.shipping_address->>'city' → COUNT(id)
+- "Customer distribution by state": GROUP BY customers.default_address->>'state' → COUNT(id)
+- "Sales by region": GROUP BY shipping_address->>'country_code', shipping_address->>'state' → SUM(grand_total_amount)
+- "International vs domestic": Filter by shipping_address->>'country_code' vs entity.country
+- "Customers in specific location": WHERE customers.default_address->>'city' = X AND default_address->>'country_code' = Y
+
 **KEY RELATIONSHIPS:**
 - All normalized tables link back to entities via entity_id
 - All normalized tables track their origin via raw_event_id → external_raw_events
@@ -262,28 +310,37 @@ Integration/ETL Questions → external_sources, external_raw_events, normalizati
    - "Compare sales between Q1 and Q2"
    - "How does this month compare to last year?"
    - "Which region is performing best vs worst?"
+   - "Compare revenue by country month-over-month"
 
-3. **Rankings & Top-N**
+3. **Geographic Analysis**
+   - "Show me revenue by country"
+   - "Which states have the most orders?"
+   - "What percentage of our customers are in Europe?"
+   - "Top 5 cities for customer concentration"
+   - "How does international revenue compare to domestic?"
+   - "Show orders shipped to specific countries"
+
+4. **Rankings & Top-N**
    - "Who are our top 10 customers by revenue?"
    - "Which products have the highest margins?"
    - "Show me the bottom 5 performing categories"
 
-4. **Aggregations & Metrics**
+5. **Aggregations & Metrics**
    - "What's our average order value?"
    - "Total revenue by region"
    - "Count of orders by status"
 
-5. **Data Discovery**
+6. **Data Discovery**
    - "What tables do we have?"
    - "Show me a sample of customer data"
    - "What fields are available in the orders table?"
 
-6. **Pattern Recognition**
+7. **Pattern Recognition**
    - "Are there any unusual spikes in orders recently?"
    - "Which days of the week have the most sales?"
    - "What's the typical order cycle for customers?"
 
-7. **Basic Forecasting**
+8. **Basic Forecasting**
    - "Based on current trends, what might next month look like?"
    - "What's the growth rate and projected trajectory?"
 
@@ -329,6 +386,22 @@ User: "Compare our sales this month vs last month"
 
 User: "What's trending up lately?"
 → Identify metrics with positive growth, show trend data, highlight significant changes.
+
+User: "Show me revenue by country"
+→ Query orders grouped by shipping_address->>'country_code', SUM(grand_total_amount), order by revenue DESC.
+→ Present as table with country codes and corresponding revenue, suggest top/bottom performers.
+
+User: "Which states ship the most orders?"
+→ Query orders grouped by shipping_address->>'state', COUNT(id), order by count DESC.
+→ Present ranked table with state and order count, highlight geographic concentration.
+
+User: "How many customers do we have in each city?"
+→ Query customers grouped by default_address->>'city', COUNT(id), order by city.
+→ Present results, note NULL values (missing city data from some providers).
+
+User: "Compare international vs domestic sales"
+→ Join orders with entities, filter shipping_address->>'country_code' against entity.country.
+→ Calculate totals and % split, present side-by-side comparison with insights.
 """
 
 
@@ -765,10 +838,10 @@ def dynamic_system_prompt(request: ModelRequest) -> str:
 async def prompt_with_context(request: ModelRequest) -> str:
     """Inject context into state messages using embedding service."""
     # Import here to avoid circular imports
-    from ..services.embedding_service import embedding_service
-    
+    from ..services.embedding_service import get_embedding_service
+
     last_query = request.state["messages"][-1].text
-    retrieved_docs = await embedding_service.search_documents(last_query, limit=2)
+    retrieved_docs = await get_embedding_service().search_documents(last_query, limit=2)
 
     docs_content = "\n\n".join(doc["content"] for doc in retrieved_docs)
 

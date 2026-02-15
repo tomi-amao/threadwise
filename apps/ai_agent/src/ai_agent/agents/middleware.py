@@ -14,6 +14,7 @@ This module implements a middleware chain that:
 
 import json
 import logging
+from functools import lru_cache
 from typing import Any, Callable, List, Literal, Optional
 
 from langchain.agents import create_agent
@@ -36,7 +37,7 @@ from .prompts import (
     validate_financial_prompt_against_database,
 )
 from ..core.config import get_local_llm
-from ..tools.sql_tools import sql_tools
+from ..tools.sql_tools import get_sql_tools
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -105,21 +106,40 @@ class QueryState(AgentState):
 
 
 # =============================================================================
-# MODEL INITIALIZATION
+# LAZY MODEL INITIALIZATION
 # =============================================================================
 
-_classification_model = get_local_llm("qwen/qwen3-vl-4b")
-_type_classifier = _classification_model.with_structured_output(QueryTypeClassification)
-_validation_agent = create_agent(
-    _classification_model,
-    system_prompt=check_financial_prompt,
-    response_format=FinancialQueryValidation,
-)
-_validation_agent_with_tools = create_agent(
-    _classification_model,
-    tools=sql_tools,
-    system_prompt=validate_financial_prompt_against_database,
-)
+
+@lru_cache(maxsize=1)
+def _get_classification_model():
+    """Get or create the classification model (lazy singleton)."""
+    return get_local_llm("qwen/qwen3-vl-4b")
+
+
+@lru_cache(maxsize=1)
+def _get_type_classifier():
+    """Get or create the type classifier with structured output (lazy singleton)."""
+    return _get_classification_model().with_structured_output(QueryTypeClassification)
+
+
+@lru_cache(maxsize=1)
+def _get_validation_agent():
+    """Get or create the validation agent (lazy singleton)."""
+    return create_agent(
+        _get_classification_model(),
+        system_prompt=check_financial_prompt,
+        response_format=FinancialQueryValidation,
+    )
+
+
+@lru_cache(maxsize=1)
+def _get_validation_agent_with_tools():
+    """Get or create the validation agent with SQL tools (lazy singleton)."""
+    return create_agent(
+        _get_classification_model(),
+        tools=get_sql_tools(),
+        system_prompt=validate_financial_prompt_against_database,
+    )
 
 
 # =============================================================================
@@ -292,7 +312,7 @@ Return:
 - confidence: 0.0 to 1.0
 - reasoning: Brief explanation of why you chose this category"""
 
-    result = await _type_classifier.ainvoke([
+    result = await _get_type_classifier().ainvoke([
         {
             "role": "system",
             "content": "You classify queries into financial reports, data analytics, or generic conversation. Be precise and consider the user's intent.",
@@ -332,7 +352,7 @@ async def _validate_financial_query(user_query: str) -> dict[str, Any]:
     logger.info("Running initial validation check")
 
     # Step 1: Basic validation without database context
-    initial_validation = await _validation_agent.ainvoke({
+    initial_validation = await _get_validation_agent().ainvoke({
         "messages": [{"role": "user", "content": user_query}]
     })
 
@@ -359,7 +379,7 @@ async def _validate_financial_query(user_query: str) -> dict[str, Any]:
         f"Provide suggestions based on actual data in the database by querying it."
     )
 
-    database_validation = await _validation_agent_with_tools.ainvoke({
+    database_validation = await _get_validation_agent_with_tools().ainvoke({
         "messages": [{"role": "user", "content": validation_prompt}]
     })
 
@@ -464,7 +484,7 @@ async def route_and_configure(
         return await handler(
             request.override(
                 system_prompt=analytics_system_prompt,
-                tools=sql_tools,
+                tools=get_sql_tools(),
             )
         )
 
@@ -474,7 +494,7 @@ async def route_and_configure(
         return await handler(
             request.override(
                 system_prompt=sql_system_prompt,
-                tools=sql_tools,
+                tools=get_sql_tools(),
             )
         )
 

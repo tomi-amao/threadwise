@@ -12,8 +12,9 @@ logger = logging.getLogger(__name__)
 def get_services():
     """Get service instances (lazy import to avoid circular deps)."""
     try:
-        from ...services.embedding_service import embedding_service
+        from ...services.embedding_service import get_embedding_service
         from ...services.langgraph_service import LangGraphService
+        embedding_service = get_embedding_service()
         langgraph_service = LangGraphService()
     except ImportError:
         embedding_service = None

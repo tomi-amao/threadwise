@@ -75,6 +75,7 @@ Further improvements including adding semantic search for memories, caching requ
 Changed to pinecone vector store as it enables hybrid search capability, lexical and semantic search
 Additionally it includes reranking to improve document relevantcy
 
+TO DOs
 Check if an uploaded documents has been successfully embeded, if not add functionality to retry embed
 
 add memories with semantic search, based on logged in user
@@ -87,7 +88,7 @@ reprocess button in integration page
 
 highlight raw events that are stuck in processing
 
-Adding Stripe endpoints to imrpove context
+Adding Stripe endpoints to improve context
 Does Stripe Improve AI Context?
 
 Yes — significantly.
@@ -150,3 +151,5 @@ Normalize on the fly
 Reconcile on the fly
 
 Infer clearing logic on the fly
+
+Add marketing context to understand how marketing translates to purchase orders

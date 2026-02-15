@@ -35,7 +35,3 @@ def get_supabase_client() -> Optional[Client]:
     except Exception as e:
         logger.error(f"Failed to initialize Supabase client: {e}")
         return None
-
-
-# Convenience alias
-supabase = get_supabase_client()

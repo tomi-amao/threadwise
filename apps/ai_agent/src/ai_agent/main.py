@@ -38,15 +38,15 @@ def get_services():
     
     # Import services
     try:
-        from .services.embedding_service import embedding_service as emb_svc
+        from .services.embedding_service import get_embedding_service
         from .services.langgraph_service import LangGraphService
-        embedding_service = emb_svc
+        embedding_service = get_embedding_service()
         langgraph_service = LangGraphService()
     except ImportError:
         try:
-            from ai_agent.services.embedding_service import embedding_service as emb_svc
+            from ai_agent.services.embedding_service import get_embedding_service
             from ai_agent.services.langgraph_service import LangGraphService
-            embedding_service = emb_svc
+            embedding_service = get_embedding_service()
             langgraph_service = LangGraphService()
         except ImportError:
             logger.warning("Services not available")

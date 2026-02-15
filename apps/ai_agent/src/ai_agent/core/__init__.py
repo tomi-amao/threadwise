@@ -10,7 +10,7 @@ from .config import (
     CustomContext,
     Settings,
 )
-from .database import db, database_url
+from .database import get_db
 from .state import State, Context
 
 __all__ = [
@@ -19,8 +19,7 @@ __all__ = [
     "CustomState",
     "CustomContext",
     "Settings",
-    "db",
-    "database_url",
+    "get_db",
     "State",
     "Context",
 ]

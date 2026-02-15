@@ -1371,11 +1371,3 @@ def get_embedding_service() -> EmbeddingService:
     return _embedding_service
 
 
-# For backwards compatibility with existing code
-embedding_service = None
-
-try:
-    embedding_service = get_embedding_service()
-except Exception as e:
-    logger.warning(f"Failed to initialize embedding service: {e}")
-    logger.warning("Embedding service will not be available until properly configured")

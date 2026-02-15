@@ -37,6 +37,7 @@ Capabilities:
 import json
 import logging
 import uuid
+from functools import lru_cache
 from typing import Annotated, Any, Literal, Sequence
 
 from langchain.agents import create_agent
@@ -55,8 +56,8 @@ from .prompts import (
     invoice_extraction_prompt,
 )
 from ..core import get_local_llm, get_chat_model
-from ..tools import sql_tools, toolkit
-from ..services.embedding_service import embedding_service
+from ..tools.sql_tools import get_sql_tools
+from ..services.embedding_service import get_embedding_service
 from ..services.mcp_client import load_mcp_tools, get_available_data_sources
 
 # Configure logging
@@ -78,7 +79,7 @@ DataSourceType = Literal["sql_toolkit", "supabase_mcp"]
 
 class AgentState(TypedDict):
     """State schema for the ad-hoc analytics agent graph.
-    
+
     This TypedDict defines all state fields that flow through the graph.
     Simplified to focus on analytics queries and document extraction.
     """
@@ -106,7 +107,7 @@ class AgentState(TypedDict):
 
 class QueryClassification(BaseModel):
     """Structured output for query classification.
-    
+
     Classifies user queries into:
     - analytics: Data exploration, insights, trends, comparisons, aggregations
     - generic: Conversational, explanations, advice, non-database queries
@@ -121,7 +122,7 @@ class QueryClassification(BaseModel):
 
 class ContextSufficiency(BaseModel):
     """Structured output for evaluating if retrieved context sufficiently answers the query.
-    
+
     The LLM evaluates whether the retrieved documents provide enough information
     to answer the user's question directly, or if additional processing is needed.
     """
@@ -129,7 +130,7 @@ class ContextSufficiency(BaseModel):
         description="True if the retrieved context fully answers the user's query, False if more processing is needed"
     )
     confidence: float = Field(
-        ge=0.0, le=1.0, 
+        ge=0.0, le=1.0,
         description="Confidence in the sufficiency assessment"
     )
     reasoning: str = Field(
@@ -150,7 +151,7 @@ DocumentCategoryType = Literal[
 
 class DocumentCategoryInference(BaseModel):
     """Structured output for inferring document category from user query.
-    
+
     Used to filter hybrid search results by document_category metadata,
     improving search relevance by focusing on the right type of documents.
     """
@@ -177,72 +178,85 @@ class ExtractedLineItem(BaseModel):
 
 class ExtractedDocumentData(BaseModel):
     """Structured output for document extraction from PDFs/images."""
-    
+
     # Document classification
     document_category: Literal[
-        "invoice", "receipt", "credit_memo", "purchase_order", 
+        "invoice", "receipt", "credit_memo", "purchase_order",
         "bank_statement", "expense_report", "contract", "other"
     ] = Field(description="Type of financial document")
-    
+
     # Vendor/Merchant information
     vendor_name: str | None = Field(default=None, description="Vendor or merchant name")
     vendor_address: str | None = Field(default=None, description="Vendor address")
     vendor_tax_id: str | None = Field(default=None, description="Vendor VAT/Tax ID")
-    
+
     # Document identifiers
     invoice_number: str | None = Field(default=None, description="Invoice or document number")
     purchase_order_number: str | None = Field(default=None, description="Related PO number")
     reference_notes: str | None = Field(default=None, description="Additional references")
-    
+
     # Dates
     invoice_date: str | None = Field(default=None, description="Document date (YYYY-MM-DD)")
     due_date: str | None = Field(default=None, description="Payment due date (YYYY-MM-DD)")
     payment_terms: str | None = Field(default=None, description="Payment terms (e.g., Net 30)")
-    
+
     # Financial amounts
     currency: str = Field(default="USD", description="3-letter currency code")
     subtotal: float | None = Field(default=None, description="Amount before tax")
     tax_amount: float | None = Field(default=None, description="Tax/VAT amount")
     tax_rate: float | None = Field(default=None, description="Tax rate percentage")
     total_amount: float | None = Field(default=None, description="Final total amount")
-    
+
     # Line items
     line_items: list[ExtractedLineItem] = Field(
-        default_factory=list, 
+        default_factory=list,
         description="Individual line items from the document"
     )
-    
+
     # Extraction metadata
     confidence_score: float = Field(
-        ge=0.0, le=1.0, 
+        ge=0.0, le=1.0,
         description="Overall confidence in extraction accuracy"
     )
     extraction_notes: str | None = Field(
-        default=None, 
+        default=None,
         description="Notes about extraction quality or issues"
     )
 
 
 # =============================================================================
-# LLM INITIALIZATION
+# LAZY LLM INITIALIZATION
 # =============================================================================
 
 
-# Use the same model configuration as the original agent
-local_model = get_local_llm("qwen/qwen3-vl-4b")
-gemini = get_chat_model("google_genai:gemini-2.5-flash-lite")
-model = local_model  # Default model
+@lru_cache(maxsize=1)
+def _get_local_model():
+    """Get or create the local LLM instance (lazy singleton)."""
+    return get_local_llm("qwen/qwen3-vl-4b")
 
-# Classifier with structured output for query routing
-classifier = local_model.with_structured_output(QueryClassification)
 
-# Context sufficiency evaluator - decides if retrieved context answers the query
-context_evaluator = local_model.with_structured_output(ContextSufficiency)
+@lru_cache(maxsize=1)
+def _get_gemini():
+    """Get or create the Gemini model instance (lazy singleton)."""
+    return get_chat_model("google_genai:gemini-2.5-flash-lite")
 
-# Document category inferrer - determines which category to filter by in search
-category_inferrer = local_model.with_structured_output(DocumentCategoryInference)
 
-# Document extractor uses multimodal-capable model for PDF/image processing
+@lru_cache(maxsize=1)
+def _get_classifier():
+    """Get or create the query classifier with structured output (lazy singleton)."""
+    return _get_local_model().with_structured_output(QueryClassification)
+
+
+@lru_cache(maxsize=1)
+def _get_context_evaluator():
+    """Get or create the context evaluator with structured output (lazy singleton)."""
+    return _get_local_model().with_structured_output(ContextSufficiency)
+
+
+@lru_cache(maxsize=1)
+def _get_category_inferrer():
+    """Get or create the category inferrer with structured output (lazy singleton)."""
+    return _get_local_model().with_structured_output(DocumentCategoryInference)
 
 
 # =============================================================================
@@ -252,7 +266,7 @@ category_inferrer = local_model.with_structured_output(DocumentCategoryInference
 
 def get_last_human_message(messages: Sequence[BaseMessage]) -> HumanMessage | None:
     """Extract the last human message from the message list."""
-    for msg in reversed(messages):   
+    for msg in reversed(messages):
         if isinstance(msg, HumanMessage):
             return msg
     return None
@@ -282,7 +296,7 @@ def has_file_attachment(human_msg: HumanMessage) -> bool:
     content = human_msg.content
     if not isinstance(content, list):
         return False
-    
+
     for block in content:
         if isinstance(block, dict):
             # Check for file type content blocks (LangChain multimodal format)
@@ -300,7 +314,7 @@ def has_file_attachment(human_msg: HumanMessage) -> bool:
 
 def extract_file_data(human_msg: HumanMessage) -> dict | None:
     """Extract file data from a HumanMessage for document processing.
-    
+
     Returns a dict with file information:
     - type: "base64" or "url"
     - data: base64 string or URL
@@ -310,15 +324,11 @@ def extract_file_data(human_msg: HumanMessage) -> dict | None:
     content = human_msg.content
     if not isinstance(content, list):
         return None
-    
+
     for block in content:
         if isinstance(block, dict) and block.get("type") != "text":
             block_type = block.get("type", "")
-            # with open("message", "a" ) as f:
-            #     f.write(f"The block type: {block_type}\n The mime type: {block.get('mime_type')}\n The data: {block.get('data')}\n")
 
-
-            
             # Handle file type blocks
             if block_type == "file":
                 source_type = block.get("source_type", "")
@@ -336,16 +346,11 @@ def extract_file_data(human_msg: HumanMessage) -> dict | None:
                         "mime_type": block.get("mime_type", "application/pdf"),
                         "filename": block.get("extras", {}).get("filename"),
                     }
-             
+
             # Handle image_url format (for images or converted PDF pages)
             elif block_type == "image":
                 print(f"The block type: {block_type}")
-            # if url.startswith("data:"):
-                # Parse data URL
-                # Format: data:mime_type;base64,data
                 try:
-                    # header, data = url.split(",", 1)
-                    # mime_type = header.split(":")[1].split(";")[0]
                     return {
                         "type": "base64",
                         "url": f"data:{block.get('mime_type')};base64,{block.get('data')}",
@@ -363,7 +368,7 @@ def extract_file_data(human_msg: HumanMessage) -> dict | None:
                     "mime_type": "image/png",
                     "filename": None,
                 }
-    
+
     return None
 
 
@@ -374,28 +379,28 @@ def extract_file_data(human_msg: HumanMessage) -> dict | None:
 
 async def classify_query_node(state: AgentState) -> dict[str, Any]:
     """Classify the user query into one of three categories.
-    
+
     Categories:
     - document_extraction: File attachments (PDFs, images) that need parsing
     - analytics: Data exploration, insights, trends, comparisons, forecasting
     - generic: Conversational, explanations, advice, non-database queries
-    
+
     Returns updated state with query_type set.
     """
     logger.info("=== CLASSIFY QUERY NODE ===")
-    
+
     messages = state.get("messages", [])
-    
+
     # Skip classification on tool continuations
     if is_tool_continuation(messages):
         logger.info("Tool continuation detected - skipping classification")
         return {}
-    
+
     human_msg = get_last_human_message(messages)
     if not human_msg:
         logger.warning("No human message found")
         return {"query_type": "generic", "has_file_attachment": False}
-    
+
     # Check for file attachments FIRST - route directly to document extraction
     if has_file_attachment(human_msg):
         logger.info("File attachment detected - routing to document extraction")
@@ -403,10 +408,10 @@ async def classify_query_node(state: AgentState) -> dict[str, Any]:
             "query_type": "document_extraction",
             "has_file_attachment": True,
         }
-    
+
     user_query = extract_query_text(human_msg)
     logger.info(f"Classifying query: {user_query[:100]}...")
-    
+
     classification_prompt = f"""Analyze this query and classify it into ONE of two categories:
 
 Query: "{user_query}"
@@ -436,21 +441,22 @@ Query: "{user_query}"
 - When in doubt, prefer analytics (we can always explain if no data is found)"""
 
     try:
+        classifier = _get_classifier()
         result = await classifier.ainvoke([
             {"role": "system", "content": "Classify queries precisely into analytics or generic."},
             {"role": "user", "content": classification_prompt},
         ])
-        
+
         # Handle both Pydantic model and dict responses
         if isinstance(result, dict):
             query_type = result.get('query_type', 'generic')
         else:
             query_type = getattr(result, 'query_type', 'generic')
-        
+
         logger.info(f"Query classified as: {query_type}")
-        
+
         return {"query_type": query_type}
-        
+
     except Exception as e:
         logger.error(f"Classification error: {e}")
         return {"query_type": "analytics"}  # Safe fallback to analytics
@@ -458,65 +464,67 @@ Query: "{user_query}"
 
 async def generic_response_node(state: AgentState) -> dict[str, Any]:
     """Handle generic/conversational queries without database access.
-    
+
     Uses a general-purpose prompt to provide helpful responses about
     financial concepts, advice, or system usage. Enriches response with
     relevant context from the vector store if available.
     """
     logger.info("=== GENERIC RESPONSE NODE ===")
-    
+
     messages = state.get("messages", [])
     retrieved_context = state.get("retrieved_context")
-    
+
     # Build system prompt with optional context
     system_content = generic_system_prompt
     if retrieved_context:
         context_str = format_retrieved_context(retrieved_context)
         system_content = f"{generic_system_prompt}\n\n{context_str}\n\nUse the above context to inform your response when relevant."
         logger.info(f"Including {len(retrieved_context)} context documents in generic response")
-    
+
+    model = _get_local_model()
     response = await model.ainvoke([
         {"role": "system", "content": system_content},
-        *[{"role": "user" if isinstance(m, HumanMessage) else "assistant", 
+        *[{"role": "user" if isinstance(m, HumanMessage) else "assistant",
            "content": m.content} for m in messages[-5:]]  # Last 5 messages for context
     ])
-    
+
     ai_message = AIMessage(content=response.content, id=str(uuid.uuid4()))
-    
+
     return {"messages": [ai_message]}
 
 
 async def analytics_agent_node(state: AgentState) -> dict[str, Any]:
     """Handle data analytics queries with SQL tools or MCP tools.
-    
+
     Dynamically selects the tool set based on the data_source state field:
     - "sql_toolkit" (default): Uses local SQLDatabaseToolkit tools
     - "supabase_mcp": Connects to Supabase MCP server for database access
-    
+
     Uses create_agent internally for flexible data exploration queries.
     This node can execute SQL and generate visualizations. Enriches
     queries with relevant context from the vector store.
     """
     logger.info("=== ANALYTICS AGENT NODE ===")
-    
+
     retrieved_context = state.get("retrieved_context")
     data_source = state.get("data_source", "sql_toolkit")
-    
+
     logger.info(f"Data source: {data_source}")
-    
+
     # Build system prompt with optional context
     system_prompt = analytics_system_prompt
     if retrieved_context:
         context_str = format_retrieved_context(retrieved_context)
         system_prompt = f"{analytics_system_prompt}\n\n{context_str}\n\nUse the above context to inform your analysis when relevant."
         logger.info(f"Including {len(retrieved_context)} context documents in analytics")
-    
+
     # Select tools based on data source
+    sql_tools = get_sql_tools()
     if data_source == "supabase_mcp":
         try:
             agent_tools = await load_mcp_tools("supabase_mcp")
             logger.info(f"Using Supabase MCP tools: {[t.name for t in agent_tools]}")
-            
+
             # Enhance system prompt for MCP context
             system_prompt += (
                 "\n\n## Data Source: Supabase MCP\n"
@@ -537,42 +545,44 @@ async def analytics_agent_node(state: AgentState) -> dict[str, Any]:
     else:
         agent_tools = sql_tools
         logger.info(f"Using SQL toolkit tools: {[t.name for t in agent_tools]}")
-    
+
+    model = _get_local_model()
+
     # Create a sub-agent for analytics with the selected tools
     analytics_agent = create_agent(
         model,
         tools=agent_tools,
         system_prompt=system_prompt,
     )
-    
+
     messages = state.get("messages", [])
-    
+
     # Run the analytics agent - cast to list for compatibility
     result = await analytics_agent.ainvoke({"messages": list(messages)})  # type: ignore
-    
+
     # Extract the response
     new_messages = result.get("messages", [])
-    
+
     # Get the last AI message for potential visualization
     last_ai_msg = None
     for msg in reversed(new_messages):
         if isinstance(msg, AIMessage):
             last_ai_msg = msg
             break
-    
+
     return {"messages": new_messages}
 
 
 async def infer_document_category_filter(user_query: str) -> dict[str, Any] | None:
     """Infer the document category to filter by based on the user's query.
-    
+
     Uses an LLM to analyze the query and determine if it targets a specific
     type of document (invoice, receipt, contract, etc.). Returns a Pinecone
     filter dict if a category is identified with high confidence.
-    
+
     Args:
         user_query: The user's search query
-        
+
     Returns:
         Pinecone filter dict like {"document_category": {"$eq": "invoice"}}
         or None if no specific category is identified
@@ -606,11 +616,12 @@ Query: "{user_query}"
 - "What's the total I owe?" → invoice (0.7)"""
 
     try:
+        category_inferrer = _get_category_inferrer()
         result = await category_inferrer.ainvoke([
             {"role": "system", "content": "Infer the document category for search filtering. Be precise."},
             {"role": "user", "content": inference_prompt},
         ])
-        
+
         # Handle both Pydantic model and dict responses
         if isinstance(result, dict):
             category = result.get('category')
@@ -620,16 +631,16 @@ Query: "{user_query}"
             category = getattr(result, 'category', None)
             confidence = getattr(result, 'confidence', 0.0)
             reasoning = getattr(result, 'reasoning', '')
-        
+
         logger.info(f"Category inference: {category} (confidence: {confidence:.2f})")
         logger.info(f"Reasoning: {reasoning}")
-        
+
         # Only apply filter if confidence is high enough
         if category and confidence >= 0.6:
             return {"document_category": {"$eq": category}}
-        
+
         return None
-        
+
     except Exception as e:
         logger.error(f"Category inference error: {e}")
         return None
@@ -637,44 +648,49 @@ Query: "{user_query}"
 
 async def retrieve_context_node(state: AgentState) -> dict[str, Any]:
     """Retrieve relevant context from the vector store using semantic search.
-    
+
     This node runs after query classification and before processing nodes.
     It searches the document store for relevant context that can help
     answer the user's query more accurately.
-    
+
     The node first infers if the query targets a specific document category
     (invoice, contract, receipt, etc.) and applies a metadata filter to
     improve search relevance.
-    
+
     Returns updated state with retrieved_context populated.
     """
     logger.info("=== RETRIEVE CONTEXT NODE ===")
-    
+
     messages = state.get("messages", [])
     query_type = state.get("query_type")
-    
+
     # Skip context retrieval for document extraction (the document IS the context)
     if query_type == "document_extraction":
         logger.info("Skipping context retrieval for document extraction")
         return {"retrieved_context": None}
-    
+
     # Get the user's query
     human_msg = get_last_human_message(messages)
     if not human_msg:
         logger.warning("No human message found for context retrieval")
         return {"retrieved_context": None}
-    
+
     user_query = extract_query_text(human_msg)
     logger.info(f"Retrieving context for query: {user_query[:100]}...")
-    
+
     try:
+        embedding_service = get_embedding_service()
+        if embedding_service is None:
+            logger.warning("Embedding service not available - skipping context retrieval")
+            return {"retrieved_context": None}
+
         # Infer document category filter from the query
         filter_metadata = await infer_document_category_filter(user_query)
         if filter_metadata:
             logger.info(f"Applying document category filter: {filter_metadata}")
         else:
             logger.info("No category filter applied - searching all documents")
-        
+
         # Perform hybrid search with reranking for improved relevance
         # Two-stage retrieval: 1) Hybrid search retrieves candidates, 2) Reranker re-scores for accuracy
         search_results = await embedding_service.hybrid_search_with_rerank(
@@ -684,18 +700,18 @@ async def retrieve_context_node(state: AgentState) -> dict[str, Any]:
             filter_metadata=filter_metadata,
             rerank=True,  # Enable reranking for better relevance
         )
-        
+
         # Filter out error results
         valid_results = [r for r in search_results if "error" not in r]
-        
+
         if valid_results:
             reranked_count = sum(1 for r in valid_results if r.get("reranked", False))
             logger.info(f"Retrieved {len(valid_results)} context documents ({reranked_count} reranked)")
         else:
             logger.info("No relevant context found in vector store")
-        
+
         return {"retrieved_context": valid_results if valid_results else None}
-        
+
     except Exception as e:
         logger.error(f"Error retrieving context: {e}")
         return {"retrieved_context": None}
@@ -705,56 +721,56 @@ def format_retrieved_context(context: list[dict] | None) -> str:
     """Format retrieved context documents into a string for LLM consumption."""
     if not context:
         return ""
-    
+
     formatted_parts = ["## Relevant Context from Knowledge Base:\n"]
-    
+
     for i, doc in enumerate(context, 1):
         content = doc.get("content", "")
         metadata = doc.get("metadata", {})
         source = metadata.get("source", "Unknown source")
-        
+
         formatted_parts.append(f"### Document {i} (Source: {source})\n{content}\n")
-    
+
     return "\n".join(formatted_parts)
 
 
 async def evaluate_context_sufficiency_node(state: AgentState) -> dict[str, Any]:
     """Evaluate if the retrieved context is sufficient to answer the user's query.
-    
+
     This node uses an LLM to determine whether the retrieved documents contain
     enough information to directly answer the user's question, or if additional
     processing (analytics, database queries, etc.) is needed.
-    
+
     Decision criteria:
     - SUFFICIENT: The context directly answers the question with clear, complete info
     - NOT SUFFICIENT: The question requires computation, database access, or info not in context
-    
+
     Returns updated state with context_sufficient and optionally context_response.
     """
     logger.info("=== EVALUATE CONTEXT SUFFICIENCY NODE ===")
-    
+
     messages = state.get("messages", [])
     query_type = state.get("query_type")
     retrieved_context = state.get("retrieved_context")
-    
+
     # Skip evaluation for document extraction - always needs processing
     if query_type == "document_extraction":
         logger.info("Skipping sufficiency check for document extraction")
         return {"context_sufficient": False, "context_response": None}
-    
+
     # If no context was retrieved, definitely not sufficient
     if not retrieved_context:
         logger.info("No context retrieved - marking as not sufficient")
         return {"context_sufficient": False, "context_response": None}
-    
+
     # Get the user's query
     human_msg = get_last_human_message(messages)
     if not human_msg:
         return {"context_sufficient": False, "context_response": None}
-    
+
     user_query = extract_query_text(human_msg)
     context_str = format_retrieved_context(retrieved_context)
-    
+
     evaluation_prompt = f"""Evaluate whether the provided context is sufficient to fully answer the user's question.
 
 ## User's Question:
@@ -787,11 +803,12 @@ If sufficient, provide a complete, helpful response in suggested_response.
 If not sufficient, set suggested_response to null."""
 
     try:
+        context_evaluator = _get_context_evaluator()
         result = await context_evaluator.ainvoke([
             {"role": "system", "content": "You evaluate whether retrieved context answers user queries. Be conservative - if in doubt, say it's not sufficient."},
             {"role": "user", "content": evaluation_prompt},
         ])
-        
+
         # Handle both Pydantic model and dict responses
         if isinstance(result, dict):
             is_sufficient = result.get('is_sufficient', False)
@@ -803,21 +820,21 @@ If not sufficient, set suggested_response to null."""
             confidence = getattr(result, 'confidence', 0.0)
             reasoning = getattr(result, 'reasoning', '')
             suggested_response = getattr(result, 'suggested_response', None)
-        
+
         logger.info(f"Context sufficiency: {is_sufficient} (confidence: {confidence:.2f})")
         logger.info(f"Reasoning: {reasoning}")
-        
+
         # Only mark as sufficient if confidence is high enough
         if is_sufficient and confidence < 0.7:
             logger.info("Low confidence - proceeding with full processing")
             is_sufficient = False
             suggested_response = None
-        
+
         return {
             "context_sufficient": is_sufficient,
             "context_response": suggested_response if is_sufficient else None,
         }
-        
+
     except Exception as e:
         logger.error(f"Context evaluation error: {e}")
         # On error, proceed with full processing
@@ -826,17 +843,17 @@ If not sufficient, set suggested_response to null."""
 
 async def context_response_node(state: AgentState) -> dict[str, Any]:
     """Generate a response directly from the evaluated context.
-    
+
     This node is called when the context sufficiency evaluation determined
     that the retrieved context fully answers the user's question.
     Uses the pre-generated response from the evaluation or generates a new one.
     """
     logger.info("=== CONTEXT RESPONSE NODE ===")
-    
+
     context_response = state.get("context_response")
     retrieved_context = state.get("retrieved_context")
     messages = state.get("messages", [])
-    
+
     # Use pre-generated response if available
     if context_response:
         logger.info("Using pre-generated context response")
@@ -847,25 +864,26 @@ async def context_response_node(state: AgentState) -> dict[str, Any]:
         human_msg = get_last_human_message(messages)
         user_query = extract_query_text(human_msg) if human_msg else ""
         context_str = format_retrieved_context(retrieved_context)
-        
+
+        model = _get_local_model()
         response = await model.ainvoke([
             {"role": "system", "content": f"""You are a helpful assistant. Answer the user's question based on the provided context.
-            
+
 {context_str}
 
 Provide a clear, comprehensive answer based on this context. If the context doesn't fully answer the question, acknowledge any limitations."""},
             {"role": "user", "content": user_query},
         ])
         response_content = response.content
-    
+
     ai_message = AIMessage(content=response_content, id=str(uuid.uuid4()))
-    
+
     return {"messages": [ai_message]}
 
 
 async def extract_document_node(state: AgentState) -> dict[str, Any]:
     """Extract structured data from uploaded documents (PDFs, images).
-    
+
     Uses a multimodal LLM to analyze the document and extract:
     - Document category (invoice, receipt, credit memo, etc.)
     - Vendor/merchant information
@@ -873,17 +891,17 @@ async def extract_document_node(state: AgentState) -> dict[str, Any]:
     - Dates and payment terms
     - Line items with descriptions, quantities, prices
     - Financial totals (subtotal, tax, total)
-    
+
     Returns extracted data and a human-readable summary.
     """
     logger.info("=== EXTRACT DOCUMENT NODE ===")
     logger.info("Current state: " + str(state))
     logger.info(f"Model selected: {state.get('model', 'default')}")
 
-    
+
     messages = state.get("messages", [])
     human_msg = get_last_human_message(messages)
-    
+
     if not human_msg:
         return {
             "messages": [AIMessage(
@@ -891,10 +909,10 @@ async def extract_document_node(state: AgentState) -> dict[str, Any]:
                 id=str(uuid.uuid4())
             )]
         }
-    
+
     # Extract file data from the message
     file_data = extract_file_data(human_msg)
-    
+
     if not file_data:
         return {
             "messages": [AIMessage(
@@ -902,15 +920,13 @@ async def extract_document_node(state: AgentState) -> dict[str, Any]:
                 id=str(uuid.uuid4())
             )]
         }
-    
-    # logger.info(f"Processing document: type={file_data['type']}, mime={file_data['mime_type']}")
-    
+
     # Build multimodal message for the LLM
     # The content format follows LangChain's multimodal message structure
     content_blocks: list[dict[str, Any]] = [
         {"type": "text", "text": "Please analyze this document and extract all structured information."},
     ]
-    
+
     # Add the file content based on type
     if file_data["type"] == "base64":
         if file_data["mime_type"] == "application/pdf":
@@ -936,8 +952,10 @@ async def extract_document_node(state: AgentState) -> dict[str, Any]:
             "url": file_data["data"],
             "mime_type": file_data["mime_type"],
         })
-    
+
     try:
+        model = _get_local_model()
+        gemini = _get_gemini()
         document_extractor = model.with_structured_output(ExtractedDocumentData) if state.get("model") == "local" else gemini.with_structured_output(ExtractedDocumentData)
         # Use the document extractor with structured output
         extraction_result = await document_extractor.ainvoke([
@@ -946,7 +964,7 @@ async def extract_document_node(state: AgentState) -> dict[str, Any]:
         ])
 
 
-        
+
         # Convert result to dict for storage
         # The result should be an ExtractedDocumentData Pydantic model
         extracted_data: dict[str, Any] = {}
@@ -956,21 +974,21 @@ async def extract_document_node(state: AgentState) -> dict[str, Any]:
             extracted_data = extraction_result.model_dump()  # type: ignore
         elif isinstance(extraction_result, dict):
             extracted_data = extraction_result
-        
+
         logger.info(f"Extraction complete: category={extracted_data.get('document_category')}, "
                    f"vendor={extracted_data.get('vendor_name')}, "
                    f"total={extracted_data.get('total_amount')}")
-        
+
         # Generate a human-readable summary
         summary = _format_extraction_summary(extracted_data)
-        
+
         ai_message = AIMessage(content=summary, id=str(uuid.uuid4()))
-        
+
         return {
             "messages": [ai_message],
             "extracted_document": extracted_data,
         }
-        
+
     except Exception as e:
         logger.error(f"Document extraction error: {e}")
         return {
@@ -985,7 +1003,7 @@ async def extract_document_node(state: AgentState) -> dict[str, Any]:
 
 def _format_extraction_summary(data: dict) -> str:
     """Format extracted document data into a readable summary."""
-    
+
     category = data.get("document_category", "document").replace("_", " ").title()
     vendor = data.get("vendor_name", "Unknown Vendor")
     invoice_num = data.get("invoice_number", "N/A")
@@ -996,28 +1014,28 @@ def _format_extraction_summary(data: dict) -> str:
     subtotal = data.get("subtotal")
     tax = data.get("tax_amount")
     confidence = data.get("confidence_score", 0)
-    
+
     # Format currency amounts
     def fmt_currency(amt):
         if amt is None:
             return "N/A"
         return f"{currency} {amt:,.2f}"
-    
+
     summary_parts = [
         f"## 📄 {category} Extracted\n",
         f"**Vendor:** {vendor}",
         f"**Invoice Number:** {invoice_num}",
         f"**Date:** {invoice_date}",
     ]
-    
+
     if due_date and due_date != "N/A":
         summary_parts.append(f"**Due Date:** {due_date}")
-    
+
     if data.get("payment_terms"):
         summary_parts.append(f"**Payment Terms:** {data['payment_terms']}")
-    
+
     summary_parts.append("")  # Empty line
-    
+
     # Financial summary
     summary_parts.append("### 💰 Financial Summary")
     if subtotal:
@@ -1029,7 +1047,7 @@ def _format_extraction_summary(data: dict) -> str:
             tax_str += f" ({tax_rate}%)"
         summary_parts.append(f"- **Tax:** {tax_str}")
     summary_parts.append(f"- **Total:** {fmt_currency(total)}")
-    
+
     # Line items
     line_items = data.get("line_items", [])
     if line_items:
@@ -1047,48 +1065,48 @@ def _format_extraction_summary(data: dict) -> str:
             )
         if len(line_items) > 10:
             summary_parts.append(f"| ... and {len(line_items) - 10} more items | | | |")
-    
+
     # Extraction metadata
     summary_parts.append("")
     conf_emoji = "✅" if confidence > 0.8 else "⚠️" if confidence > 0.5 else "❌"
     summary_parts.append(f"*Extraction confidence: {conf_emoji} {confidence:.0%}*")
-    
+
     if data.get("extraction_notes"):
         summary_parts.append(f"\n*Note: {data['extraction_notes']}*")
-    
+
     return "\n".join(summary_parts)
 
 
 async def push_visualization_node(state: AgentState) -> dict[str, Any]:
     """Push UI visualization components based on SQL results.
-    
+
     Analyzes the last response and pushes appropriate charts/tables
     using LangGraph's generative UI system via push_ui_message.
-    
+
     This node uses the LLM to decide what visualization to create based
     on the data returned from analytics or report queries.
     """
     logger.info("=== PUSH VISUALIZATION NODE ===")
-    
+
     messages = state.get("messages", [])
-    
+
     # Find the last AI message with content
     last_ai_msg = None
     for msg in reversed(messages):
         if isinstance(msg, AIMessage) and msg.content:
             last_ai_msg = msg
             break
-    
+
     if not last_ai_msg:
         return {}
-    
+
     # Extract content as string
     content = last_ai_msg.content
     if isinstance(content, list):
         content_str = " ".join(str(c) for c in content)
     else:
         content_str = str(content)
-    
+
     # Use LLM to analyze response and extract visualization data
     viz_analysis_prompt = """Analyze the following AI response and determine if it contains data that should be visualized.
 
@@ -1097,7 +1115,7 @@ Response:
 
 If the response contains:
 1. Numerical data comparisons (bar chart)
-2. Distribution/percentage data (pie chart)  
+2. Distribution/percentage data (pie chart)
 3. Key metrics/totals (metric card)
 4. Time series data (line chart)
 5. Tabular data (table)
@@ -1117,44 +1135,45 @@ If no visualization is appropriate, return {{"should_visualize": false}}.
 Return ONLY valid JSON, no explanation."""
 
     try:
+        model = _get_local_model()
         viz_response = await model.ainvoke([
             {"role": "system", "content": "You are a data visualization expert. Extract chart data from responses."},
             {"role": "user", "content": viz_analysis_prompt.format(content=content_str[:2000])},
         ])
-        
+
         # Parse the visualization response
         viz_content = viz_response.content
         if isinstance(viz_content, list):
             viz_text = " ".join(str(c) for c in viz_content)
         else:
             viz_text = str(viz_content)
-        
+
         # Try to extract JSON from the response
         import re
         json_match = re.search(r'\{.*\}', viz_text, re.DOTALL)
         if not json_match:
             logger.info("No JSON found in visualization analysis")
             return {}
-        
+
         viz_config = json.loads(json_match.group())
-        
+
         if not viz_config.get("should_visualize", False):
             logger.info("No visualization needed for this response")
             return {}
-        
+
         chart_type = viz_config.get("chart_type", "bar")
         title = viz_config.get("title", "Data Visualization")
         data = viz_config.get("data", [])
         format_type = viz_config.get("format", "number")
-        
+
         if not data:
             logger.info("No data extracted for visualization")
             return {}
-        
+
         # Push the UI message for the appropriate chart type
         # Use the message parameter to associate UI with the AI message
         logger.info(f"Pushing {chart_type} visualization: {title}")
-        
+
         if chart_type == "metric":
             # For metric cards, use the first data item
             item = data[0] if data else {"label": "Value", "value": 0}
@@ -1208,10 +1227,10 @@ Return ONLY valid JSON, no explanation."""
                 },
                 message=last_ai_msg,
             )
-        
+
         logger.info(f"Successfully pushed {chart_type} UI message")
         return {}
-        
+
     except json.JSONDecodeError as e:
         logger.warning(f"Failed to parse visualization JSON: {e}")
         return {}
@@ -1227,19 +1246,19 @@ Return ONLY valid JSON, no explanation."""
 
 def route_by_context_sufficiency(state: AgentState) -> Literal["context_response", "route_by_type"]:
     """Route based on whether retrieved context is sufficient to answer the query.
-    
+
     Routes:
     - context_sufficient=True → context_response (direct answer from context)
     - context_sufficient=False → route_by_type (continue to appropriate handler)
     """
     context_sufficient = state.get("context_sufficient", False)
     query_type = state.get("query_type")
-    
+
     # Document extraction always needs processing
     if query_type == "document_extraction":
         logger.info("Document extraction - skipping context response")
         return "route_by_type"
-    
+
     if context_sufficient:
         logger.info("Context is sufficient - routing to direct response")
         return "context_response"
@@ -1250,16 +1269,16 @@ def route_by_context_sufficiency(state: AgentState) -> Literal["context_response
 
 def route_by_query_type(state: AgentState) -> Literal["generic_response", "analytics_agent", "extract_document"]:
     """Route to appropriate handler based on query classification.
-    
+
     Routes:
     - document_extraction → extract_document
     - analytics → analytics_agent
     - generic → generic_response
     """
     query_type = state.get("query_type", "generic")
-    
+
     logger.info(f"Routing based on query_type: {query_type}")
-    
+
     if query_type == "document_extraction":
         return "extract_document"
     elif query_type == "analytics":
@@ -1275,7 +1294,7 @@ def route_by_query_type(state: AgentState) -> Literal["generic_response", "analy
 
 def create_analytics_agent_graph() -> StateGraph:
     """Create and compile the ad-hoc analytics agent graph.
-    
+
     Graph structure:
         START → classify_query → retrieve_context → evaluate_context_sufficiency
             → [route_by_context_sufficiency]
@@ -1284,15 +1303,15 @@ def create_analytics_agent_graph() -> StateGraph:
                     → extract_document → END
                     → generic_response → END
                     → analytics_agent → push_visualization → END
-    
+
     The evaluate_context_sufficiency node uses an LLM to determine if the
     retrieved context fully answers the query, enabling early exit when
     document context is sufficient without needing database/analytics processing.
     """
-    
+
     # Create the graph with our state schema
     builder = StateGraph(AgentState)
-    
+
     # Add all nodes
     builder.add_node("classify_query", classify_query_node)
     builder.add_node("retrieve_context", retrieve_context_node)
@@ -1302,16 +1321,16 @@ def create_analytics_agent_graph() -> StateGraph:
     builder.add_node("generic_response", generic_response_node)
     builder.add_node("analytics_agent", analytics_agent_node)
     builder.add_node("push_visualization", push_visualization_node)
-    
+
     # Add edges
     builder.add_edge(START, "classify_query")
-    
+
     # After classification, retrieve relevant context
     builder.add_edge("classify_query", "retrieve_context")
-    
+
     # After context retrieval, evaluate if context is sufficient
     builder.add_edge("retrieve_context", "evaluate_context_sufficiency")
-    
+
     # Conditional routing based on context sufficiency
     builder.add_conditional_edges(
         "evaluate_context_sufficiency",
@@ -1321,15 +1340,15 @@ def create_analytics_agent_graph() -> StateGraph:
             "route_by_type": "route_by_type_node",
         }
     )
-    
+
     # Add a pass-through node for query type routing
     # (needed because conditional edges need a target node)
     async def route_by_type_passthrough(state: AgentState) -> dict[str, Any]:
         """Pass-through node for query type routing."""
         return {}
-    
+
     builder.add_node("route_by_type_node", route_by_type_passthrough)
-    
+
     # Route from pass-through to appropriate handler
     builder.add_conditional_edges(
         "route_by_type_node",
@@ -1340,20 +1359,20 @@ def create_analytics_agent_graph() -> StateGraph:
             "analytics_agent": "analytics_agent",
         }
     )
-    
+
     # Context-based response goes straight to END
     builder.add_edge("context_response", END)
-    
+
     # Document extraction goes straight to END
     builder.add_edge("extract_document", END)
-    
+
     # Generic queries go straight to END
     builder.add_edge("generic_response", END)
-    
+
     # Analytics queries go through visualization then END
     builder.add_edge("analytics_agent", "push_visualization")
     builder.add_edge("push_visualization", END)
-    
+
     return builder
 
 
@@ -1362,7 +1381,10 @@ def create_analytics_agent_graph() -> StateGraph:
 # =============================================================================
 
 
-# Create and compile the graph
+# Create and compile the graph.
+# Note: Graph construction is lightweight - it only registers node functions
+# and edges without executing any of them. All heavy initialization (DB,
+# LLMs, embedding service) is deferred to first request via lazy singletons.
 graph_builder = create_analytics_agent_graph()
 agent = graph_builder.compile(name="threadwise-analytics-agent")
 
