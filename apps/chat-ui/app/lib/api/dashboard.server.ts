@@ -59,6 +59,7 @@ export interface DashboardMetrics {
   gross_margin: number;
   gross_margin_change: number;
   cogs: number;
+  operating_expenses: number;
   accounts_receivable: number;
   ar_change: number;
   accounts_payable: number;
@@ -210,8 +211,8 @@ export async function getMonthlyFinancials(months: number = 12): Promise<Monthly
       if (account.type === 'revenue') {
         data.revenue += amount;
       } else if (account.type === 'expense') {
-        // COGS is typically account code 5000
-        if (account.code >= 5000 && account.code < 6000) {
+        // COGS: accounts 5000-5499 (sub_type='cogs')
+        if (account.code >= 5000 && account.code < 5500) {
           data.cogs += Math.abs(amount);
         } else {
           data.operating_expenses += Math.abs(amount);
@@ -403,8 +404,14 @@ export async function getDashboardMetrics(): Promise<DashboardMetrics> {
     .filter(b => b.type === 'revenue')
     .reduce((sum, b) => sum + b.balance, 0);
 
+  // COGS: accounts 5000-5499 (sub_type='cogs')
   const totalCogs = balances
-    .filter(b => b.code >= 5000 && b.code < 6000)
+    .filter(b => b.type === 'expense' && b.code >= 5000 && b.code < 5500)
+    .reduce((sum, b) => sum + b.balance, 0);
+
+  // Operating Expenses: accounts 6000+ (sub_type='opex')
+  const totalOpEx = balances
+    .filter(b => b.type === 'expense' && b.code >= 6000)
     .reduce((sum, b) => sum + b.balance, 0);
 
   const grossMargin = totalRevenue > 0 ? ((totalRevenue - totalCogs) / totalRevenue) * 100 : 0;
@@ -421,6 +428,7 @@ export async function getDashboardMetrics(): Promise<DashboardMetrics> {
     gross_margin: grossMargin,
     gross_margin_change: 0,
     cogs: totalCogs,
+    operating_expenses: totalOpEx,
     accounts_receivable: ar,
     ar_change: 0,
     accounts_payable: ap,
@@ -463,7 +471,7 @@ export async function getHealthIndicators(): Promise<HealthMetric[]> {
 
   // Inventory turnover (simplified)
   const cogs = balances
-    .filter(b => b.code >= 5000 && b.code < 6000)
+    .filter(b => b.type === 'expense' && b.code >= 5000 && b.code < 5500)
     .reduce((sum, b) => sum + b.balance, 0);
 
   const inventoryTurnover = inventory > 0 ? cogs / inventory : 0;

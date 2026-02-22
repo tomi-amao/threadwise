@@ -68,7 +68,7 @@ class PaymentStatus(str, Enum):
 
 class InventoryAdjustmentReason(str, Enum):
     """Reasons for inventory adjustments."""
-    
+
     SALE = "sale"
     RETURN = "return"
     RESTOCK = "restock"
@@ -76,6 +76,68 @@ class InventoryAdjustmentReason(str, Enum):
     SHRINKAGE = "shrinkage"
     ADJUSTMENT = "adjustment"
     INITIAL = "initial"
+
+
+class FinancialTransactionType(str, Enum):
+    """Types of financial transactions from bank/payment sources.
+
+    .. deprecated:: Use TxnType instead. Kept for backward compatibility
+        with commerce normalizers that haven't been migrated yet.
+    """
+
+    PAYOUT = "payout"
+    FEE = "fee"
+    REFUND = "refund"
+    TRANSFER = "transfer"
+    FX = "fx"
+    CHARGEBACK = "chargeback"
+    ADJUSTMENT = "adjustment"
+    EXPENSE = "expense"
+
+
+class TxnSource(str, Enum):
+    """Source system for a financial transaction."""
+
+    REVOLUT = "revolut"
+    PAYPAL = "paypal"
+    STRIPE = "stripe"
+    BARCLAYS = "barclays"
+    HSBC = "hsbc"
+    MANUAL = "manual"
+    OTHER = "other"
+
+
+class TxnDirection(str, Enum):
+    """Direction of a financial transaction."""
+
+    IN = "in"
+    OUT = "out"
+
+
+class TxnStatus(str, Enum):
+    """Processing status of a financial transaction."""
+
+    PENDING = "pending"
+    JOURNALISED = "journalised"
+    RECONCILED = "reconciled"
+    EXCLUDED = "excluded"
+    NEEDS_REVIEW = "needs_review"
+
+
+class TxnType(str, Enum):
+    """Canonical transaction types."""
+
+    PAYMENT = "payment"
+    REFUND = "refund"
+    FEE = "fee"
+    TRANSFER = "transfer"
+    FX_CONVERSION = "fx_conversion"
+    INTEREST = "interest"
+    OTHER = "other"
+
+
+# Backward-compatible alias
+TransactionDirection = TxnDirection
 
 
 # =============================================================================
@@ -421,6 +483,112 @@ class CanonicalInventoryAdjustment(BaseModel):
     # Source reference (order ID, etc.)
     source_type: Optional[str] = None
     source_external_id: Optional[str] = None
-    
+
     # Timestamp
     adjusted_at: datetime = Field(default_factory=_utcnow)
+
+
+# =============================================================================
+# FINANCIAL DOMAIN
+# =============================================================================
+
+
+class CanonicalBankAccount(CanonicalBase):
+    """Canonical bank account model.
+
+    Represents a bank account from Revolut, PayPal, or other financial sources.
+    """
+
+    entity_id: UUID = Field(description="Parent entity ID for multi-tenant scoping")
+
+    # Account identity
+    source: str = Field(description="Source provider (e.g., 'revolut', 'paypal')")
+    external_account_id: str = Field(description="Account ID from the provider")
+
+    # Account details
+    name: Optional[str] = None
+    currency: str = Field(min_length=3, max_length=3, description="ISO 4217 currency code")
+    balance: Decimal = Field(default=Decimal("0"), description="Current balance")
+    state: Optional[str] = Field(default=None, description="Account state (e.g., 'active')")
+
+    # Provider-specific extras
+    metadata: Dict[str, Any] = Field(default_factory=dict, description="Provider-specific fields")
+
+
+class CanonicalFinancialTransaction(CanonicalBase):
+    """Canonical financial transaction model.
+
+    Represents a bank-side transaction from Revolut, PayPal, or other sources.
+    Distinct from CanonicalPayment which is commerce-side (Squarespace).
+
+    Key conventions:
+    - ``amount`` is always positive; ``direction`` carries the sign.
+    - ``base_amount`` is always in the entity's base currency (GBP).
+    - For FX transactions, each leg becomes its own row with a
+      ``--leg-<ccy>`` suffix on ``external_transaction_id``.
+    """
+
+    entity_id: UUID = Field(description="Parent entity ID for multi-tenant scoping")
+
+    # Account reference
+    bank_account_id: Optional[UUID] = Field(default=None, description="FK to bank_accounts")
+
+    # Transaction identity
+    source: TxnSource = Field(description="Source system (revolut, paypal, etc.)")
+    external_transaction_id: str = Field(description="Provider's own ID (unique per source)")
+
+    # Transaction details
+    transaction_type: TxnType
+    direction: TxnDirection
+    occurred_at: datetime
+
+    # Descriptive fields
+    description: Optional[str] = None
+    counterparty_name: Optional[str] = None
+
+    # Money
+    amount: Decimal = Field(description="Always positive; direction carries the sign")
+    currency_code: str = Field(min_length=3, max_length=3, description="ISO 4217")
+    base_currency_code: str = Field(default="GBP", min_length=3, max_length=3)
+    fx_rate: Optional[Decimal] = Field(default=None, description="NULL if same currency")
+    base_amount: Decimal = Field(description="Amount in base currency")
+
+    # Processing state
+    status: TxnStatus = Field(default=TxnStatus.PENDING)
+    journalised_at: Optional[datetime] = None
+    reconciled_at: Optional[datetime] = None
+    excluded_reason: Optional[str] = None
+
+    # Provider-specific extras (merchant info, expense_category, etc.)
+    metadata: Dict[str, Any] = Field(default_factory=dict, description="Provider-specific fields")
+
+
+class ExpenseEnrichment(BaseModel):
+    """Enrichment data for existing financial transactions from expense APIs.
+
+    When an expense record arrives separately from the transaction record
+    (e.g., Revolut Expenses API vs Transactions API), this model merges
+    enrichment data into the transaction's ``metadata`` JSONB column.
+    """
+    model_config = ConfigDict(frozen=True)
+
+    # Identity fields to locate existing transaction
+    entity_id: UUID = Field(description="Parent entity ID")
+    source: TxnSource = Field(description="Source provider")
+    external_transaction_id: str = Field(
+        description="Transaction ID from provider (same as existing transaction)"
+    )
+
+    # Enrichment data (merged into metadata)
+    expense_category: Optional[str] = Field(
+        default=None,
+        description="Expense category from provider's expense API"
+    )
+    account_code: Optional[str] = Field(
+        default=None,
+        description="Chart of accounts code derived from expense category"
+    )
+
+    # Metadata
+    raw_event_id: UUID = Field(description="Raw event that triggered this enrichment")
+    warnings: List[str] = Field(default_factory=list)

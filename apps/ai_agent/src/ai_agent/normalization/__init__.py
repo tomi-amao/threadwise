@@ -27,15 +27,27 @@ from .models import (
     CanonicalProductVariant,
     CanonicalInventoryItem,
     CanonicalInventoryAdjustment,
+    # Financial Domain
+    CanonicalBankAccount,
+    CanonicalFinancialTransaction,
+    FinancialTransactionType,
+    TransactionDirection,
+    TxnSource,
+    TxnDirection,
+    TxnStatus,
+    TxnType,
 )
 
 from .normalizer import (
     BaseNormalizer,
+    FinancialNormalizer,
     NormalizationError,
     NormalizationResult,
 )
 
 from .squarespace_normalizer import SquarespaceNormalizer
+from .revolut_normalizer import RevolutNormalizer
+from .paypal_normalizer import PayPalNormalizer
 
 from .persistence import (
     PersistenceService,
@@ -62,11 +74,22 @@ __all__ = [
     "CanonicalProductVariant",
     "CanonicalInventoryItem",
     "CanonicalInventoryAdjustment",
+    "CanonicalBankAccount",
+    "CanonicalFinancialTransaction",
+    "FinancialTransactionType",
+    "TransactionDirection",
+    "TxnSource",
+    "TxnDirection",
+    "TxnStatus",
+    "TxnType",
     # Normalizer
     "BaseNormalizer",
+    "FinancialNormalizer",
     "NormalizationError",
     "NormalizationResult",
     "SquarespaceNormalizer",
+    "RevolutNormalizer",
+    "PayPalNormalizer",
     # Persistence
     "PersistenceService",
     "PersistenceError",

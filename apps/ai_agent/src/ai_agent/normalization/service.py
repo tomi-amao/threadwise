@@ -20,6 +20,8 @@ from .models import ProcessingStatus
 from .normalizer import NormalizationResult
 from .persistence import persistence_service, PersistenceError
 from .squarespace_normalizer import SquarespaceNormalizer
+from .revolut_normalizer import RevolutNormalizer
+from .paypal_normalizer import PayPalNormalizer
 from .utils import extract_id, extract_row, extract_rows
 
 logger = logging.getLogger(__name__)
@@ -32,6 +34,8 @@ logging.getLogger("urllib3").setLevel(logging.WARNING)
 # Provider normalizer registry
 NORMALIZER_REGISTRY = {
     "squarespace": SquarespaceNormalizer,
+    "revolut": RevolutNormalizer,
+    "paypal": PayPalNormalizer,
 }
 
 
@@ -173,7 +177,10 @@ class NormalizationService:
         Returns:
             Dict with counts per table
         """
-        tables = ["customers", "orders", "products", "inventory_items", "payments"]
+        tables = [
+            "customers", "orders", "products", "inventory_items", "payments",
+            "bank_accounts", "financial_transactions",
+        ]
         counts: Dict[str, int] = {}
         
         for table in tables:

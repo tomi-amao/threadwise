@@ -17,18 +17,21 @@ import asyncio
 import json
 import logging
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, cast
 from uuid import UUID
 
 from ..core.supabase_client import get_supabase_client
 from .models import (
+    CanonicalBankAccount,
     CanonicalCustomer,
+    CanonicalFinancialTransaction,
     CanonicalInventoryItem,
     CanonicalLineItem,
     CanonicalOrder,
     CanonicalProduct,
     CanonicalPayment,
     CanonicalPaymentFee,
+    ExpenseEnrichment,
     ProcessingStatus,
 )
 from .normalizer import NormalizationResult
@@ -113,6 +116,16 @@ class PersistenceService:
             )
             return (False, None, result.error_message)
         
+        # Handle intentionally-skipped events (e.g., "General Expenses" category)
+        if result.skipped:
+            await self._update_processing_state(
+                raw_event_id,
+                ProcessingStatus.COMPLETED,
+                error_message=None,
+                error_details=None
+            )
+            return (True, None, f"skipped: {result.skip_reason}")
+        
         if result.canonical is None:
             return (False, None, "No canonical model to persist")
         
@@ -134,6 +147,18 @@ class PersistenceService:
                         canonical_id = await self.persist_inventory_item(item)
                     elif isinstance(item, CanonicalPayment):
                         canonical_id = await self.persist_payment(item)
+                    elif isinstance(item, CanonicalBankAccount):
+                        canonical_id = await self.persist_bank_account(item)
+                    elif isinstance(item, CanonicalFinancialTransaction):
+                        canonical_id = await self.persist_financial_transaction(item)
+                    elif isinstance(item, ExpenseEnrichment):
+                        canonical_id = await self.enrich_financial_transaction(
+                            source=item.source,
+                            external_transaction_id=item.external_transaction_id,
+                            entity_id=item.entity_id,
+                            expense_category=item.expense_category,
+                            account_code=item.account_code,
+                        )
                     else:
                         raise PersistenceError(
                             f"Unknown canonical model type in list: {type(item).__name__}",
@@ -155,6 +180,18 @@ class PersistenceService:
                 canonical_id = await self.persist_inventory_item(canonical)
             elif isinstance(canonical, CanonicalPayment):
                 canonical_id = await self.persist_payment(canonical)
+            elif isinstance(canonical, CanonicalBankAccount):
+                canonical_id = await self.persist_bank_account(canonical)
+            elif isinstance(canonical, CanonicalFinancialTransaction):
+                canonical_id = await self.persist_financial_transaction(canonical)
+            elif isinstance(canonical, ExpenseEnrichment):
+                canonical_id = await self.enrich_financial_transaction(
+                    source=canonical.source,
+                    external_transaction_id=canonical.external_transaction_id,
+                    entity_id=canonical.entity_id,
+                    expense_category=canonical.expense_category,
+                    account_code=canonical.account_code,
+                )
             else:
                 raise PersistenceError(
                     f"Unknown canonical model type: {type(canonical).__name__}",
@@ -734,6 +771,232 @@ class PersistenceService:
         return None
     
     # =========================================================================
+    # BANK ACCOUNT PERSISTENCE
+    # =========================================================================
+
+    async def persist_bank_account(self, account: CanonicalBankAccount) -> UUID:
+        """Persist a canonical bank account.
+
+        Uses upsert on natural key (source, external_account_id, entity_id).
+        """
+        data = {
+            "entity_id": str(account.entity_id),
+            "source": account.source,
+            "external_account_id": account.external_account_id,
+            "name": account.name,
+            "currency": account.currency,
+            "balance": float(account.balance),
+            "state": account.state,
+            "raw_event_id": str(account.raw_event_id),
+            "metadata": account.metadata,
+            "created_at": (
+                account.created_at.isoformat()
+                if account.created_at else None
+            ),
+            "updated_at": (
+                account.updated_at.isoformat()
+                if account.updated_at else None
+            ),
+        }
+
+        result = await asyncio.to_thread(
+            lambda: self.client.table("bank_accounts")
+            .upsert(data, on_conflict="source,external_account_id,entity_id")
+            .execute()
+        )
+
+        if not result.data:
+            raise PersistenceError(
+                "Failed to upsert bank account",
+                entity_type="bank_account",
+                external_id=account.external_account_id,
+                raw_event_id=account.raw_event_id,
+            )
+
+        return _extract_id(result)
+
+    # =========================================================================
+    # FINANCIAL TRANSACTION PERSISTENCE
+    # =========================================================================
+
+    async def persist_financial_transaction(
+        self, txn: CanonicalFinancialTransaction
+    ) -> UUID:
+        """Persist a canonical financial transaction.
+
+        Uses upsert on natural key (source, external_transaction_id).
+        Optionally resolves bank_account_id from metadata.revolut_account_id.
+        """
+        # Try to resolve bank_account_id from metadata
+        bank_account_id = None
+        if txn.bank_account_id:
+            bank_account_id = str(txn.bank_account_id)
+        else:
+            revolut_account_id = (txn.metadata or {}).get("revolut_account_id")
+            if revolut_account_id:
+                resolved = await self._get_bank_account_id(
+                    txn.entity_id, txn.source.value if hasattr(txn.source, 'value') else txn.source, revolut_account_id
+                )
+                if resolved:
+                    bank_account_id = str(resolved)
+
+        data = {
+            "entity_id": str(txn.entity_id),
+            "bank_account_id": bank_account_id,
+            "source": txn.source.value if hasattr(txn.source, 'value') else txn.source,
+            "external_transaction_id": txn.external_transaction_id,
+            "transaction_type": txn.transaction_type.value,
+            "amount": float(txn.amount),
+            "currency_code": txn.currency_code,
+            "base_currency_code": txn.base_currency_code,
+            "fx_rate": float(txn.fx_rate) if txn.fx_rate is not None else None,
+            "base_amount": float(txn.base_amount) if txn.base_amount is not None else None,
+            "direction": txn.direction.value,
+            "occurred_at": txn.occurred_at.isoformat(),
+            "description": txn.description,
+            "counterparty_name": txn.counterparty_name,
+            "status": txn.status.value if hasattr(txn, 'status') and txn.status else "pending",
+            "raw_event_id": str(txn.raw_event_id),
+            "metadata": txn.metadata,
+            "created_at": (
+                txn.created_at.isoformat()
+                if txn.created_at else None
+            ),
+        }
+
+        result = await asyncio.to_thread(
+            lambda: self.client.table("financial_transactions")
+            .upsert(data, on_conflict="source,external_transaction_id")
+            .execute()
+        )
+
+        if not result.data:
+            raise PersistenceError(
+                "Failed to upsert financial transaction",
+                entity_type="financial_transaction",
+                external_id=txn.external_transaction_id,
+                raw_event_id=txn.raw_event_id,
+            )
+
+        return _extract_id(result)
+
+    async def enrich_financial_transaction(
+        self,
+        source: Any,
+        external_transaction_id: str,
+        entity_id: UUID,
+        expense_category: Optional[str] = None,
+        account_code: Optional[str] = None,
+    ) -> Optional[UUID]:
+        """Enrich an existing financial transaction with expense categorization.
+
+        Merges expense_category and account_code into the transaction's metadata
+        JSONB column (these are no longer top-level columns).
+
+        Args:
+            source: Transaction source (TxnSource enum or string)
+            external_transaction_id: External transaction ID
+            entity_id: Entity UUID
+            expense_category: Expense category to set
+            account_code: Account code to set
+
+        Returns:
+            Transaction UUID if found and updated, None otherwise
+        """
+        source_value = source.value if hasattr(source, 'value') else source
+
+        # Find the existing transaction
+        find_result = await asyncio.to_thread(
+            lambda: self.client.table("financial_transactions")
+            .select("id, metadata")
+            .eq("source", source_value)
+            .eq("external_transaction_id", external_transaction_id)
+            .eq("entity_id", str(entity_id))
+            .execute()
+        )
+
+        if not find_result.data:
+            logger.warning(
+                "No existing transaction found to enrich: "
+                "source=%s, external_id=%s",
+                source_value, external_transaction_id,
+            )
+            return None
+
+        row = cast(Dict[str, Any], find_result.data[0])
+        transaction_id: str = row["id"]
+        existing_metadata: Dict[str, Any] = row.get("metadata") or {}
+
+        # Merge enrichment data into metadata
+        updated_metadata: Dict[str, Any] = {**existing_metadata}
+        if expense_category is not None:
+            updated_metadata["expense_category"] = expense_category
+        if account_code is not None:
+            updated_metadata["account_code"] = account_code
+
+        if updated_metadata == existing_metadata:
+            logger.info("No new enrichment data for transaction %s", transaction_id)
+            return UUID(transaction_id)
+
+        update_result = await asyncio.to_thread(
+            lambda: self.client.table("financial_transactions")
+            .update({"metadata": updated_metadata})
+            .eq("id", transaction_id)
+            .execute()
+        )
+
+        if not update_result.data:
+            raise PersistenceError(
+                "Failed to enrich financial transaction",
+                entity_type="financial_transaction",
+                external_id=external_transaction_id,
+            )
+
+        logger.info(
+            "Enriched transaction %s metadata with expense data: "
+            "category=%s, code=%s",
+            transaction_id, expense_category, account_code,
+        )
+
+        return UUID(transaction_id)
+
+    async def _get_bank_account_id(
+        self,
+        entity_id: UUID,
+        source: str,
+        external_account_id: str,
+    ) -> Optional[UUID]:
+        """Get bank_account UUID by natural key."""
+        result = await asyncio.to_thread(
+            lambda: self.client.table("bank_accounts")
+            .select("id")
+            .eq("entity_id", str(entity_id))
+            .eq("source", source)
+            .eq("external_account_id", external_account_id)
+            .execute()
+        )
+
+        if result.data:
+            return _extract_id(result)
+        return None
+
+    async def _get_chart_of_accounts_id(
+        self,
+        account_number: str,
+    ) -> Optional[UUID]:
+        """Get chart_of_accounts UUID by account_number."""
+        result = await asyncio.to_thread(
+            lambda: self.client.table("chart_of_accounts")
+            .select("id")
+            .eq("account_number", account_number)
+            .execute()
+        )
+
+        if result.data:
+            return _extract_id(result)
+        return None
+
+    # =========================================================================
     # PROCESSING STATE MANAGEMENT
     # =========================================================================
     
@@ -806,6 +1069,8 @@ class PersistenceService:
             "inventory_item": "inventory_items",
             "payment": "payments",
             "transaction": "payments",
+            "bank_account": "bank_accounts",
+            "financial_transaction": "financial_transactions",
         }
         return mapping.get(entity_type, entity_type)
     

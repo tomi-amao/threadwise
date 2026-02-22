@@ -31,6 +31,8 @@ import {
   UserCircle,
   Database,
   CaretDown,
+  CurrencyCircleDollar,
+  BookOpen,
 } from 'phosphor-react';
 import { Button } from '~/components/ui/button';
 import { Input } from '~/components/ui/input';
@@ -43,10 +45,13 @@ import {
   createExternalSource,
   validateApiKey,
   reprocessFailedEvents,
+  deleteExternalSource,
   type IntegrationSummary,
 } from '~/lib/api/integrations';
 import { SyncProgressToast } from '~/components/integrations/SyncProgressToast';
 import { NormalizationProgressToast } from '~/components/integrations/NormalizationProgressToast';
+import { IncompleteTransactionsModal } from '~/components/integrations/IncompleteTransactionsModal';
+import { JournalCreationModal } from '~/components/integrations/JournalCreationModal';
 
 // Provider configuration
 const PROVIDERS = {
@@ -61,9 +66,17 @@ const PROVIDERS = {
   revolut: {
     name: 'Revolut',
     icon: <Bank size={24} weight="duotone" className="text-blue-400" />,
-    description: 'Sync transactions and accounts from Revolut Business',
-    endpoints: ['transactions', 'accounts'],
+    description: 'Sync transactions, accounts, and expenses from Revolut Business',
+    endpoints: ['transactions', 'accounts', 'expenses'],
     color: 'blue',
+  },
+  paypal: {
+    name: 'PayPal',
+    icon: <Coins size={24} weight="duotone" className="text-indigo-400" />,
+    description: 'Sync transactions and balances from PayPal Business',
+    endpoints: ['transactions'],
+    color: 'indigo',
+    credentialType: 'compound' as const,
   },
 };
 
@@ -76,6 +89,7 @@ const endpointIcons: Record<string, React.ReactNode> = {
   profiles: <UserCircle size={14} weight="duotone" />,
   transactions: <Coins size={14} weight="duotone" />,
   accounts: <Buildings size={14} weight="duotone" />,
+  expenses: <Coins size={14} weight="duotone" />,
 };
 
 // Status styles
@@ -197,27 +211,39 @@ function IntegrationCard({
   onSync,
   onSyncEndpoint,
   onValidateApiKey,
+  onUpdateApiKey,
   onLoadData,
   onReprocessFailed,
+  onRemove,
+  onViewUncategorized,
+  onCreateJournals,
   isSyncing,
   syncingEndpoint,
   isValidatingApiKey,
   isNormalizing,
   isReprocessing,
+  isRemoving,
 }: {
   integration: IntegrationSummary;
   onSync: () => void;
   onSyncEndpoint: (endpoint: string) => void;
   onValidateApiKey: () => void;
+  onUpdateApiKey: (apiKey: string) => void;
   onLoadData: (mode: 'hard' | 'soft') => void;
   onReprocessFailed: () => void;
+  onRemove: () => void;
+  onViewUncategorized: () => void;
+  onCreateJournals: () => void;
   isSyncing: boolean;
   syncingEndpoint: string | null;
   isValidatingApiKey: boolean;
   isNormalizing: boolean;
   isReprocessing: boolean;
+  isRemoving: boolean;
 }) {
   const providerConfig = PROVIDERS[integration.provider as keyof typeof PROVIDERS];
+  const [showUpdateApiKey, setShowUpdateApiKey] = useState(false);
+  const [newApiKey, setNewApiKey] = useState('');
 
   // Format relative time
   const formatRelativeTime = (dateStr: string | null) => {
@@ -306,6 +332,51 @@ function IntegrationCard({
           <div className="mb-4 p-3 rounded-xl bg-orange-500/10 border border-orange-500/20">
             <p className="text-sm text-orange-500 font-medium">API Key Issue</p>
             <p className="text-sm text-orange-500/80 mt-1">{integration.api_key_error}</p>
+            <button
+              onClick={() => setShowUpdateApiKey(true)}
+              className="mt-2 text-xs text-orange-400 hover:text-orange-300 underline"
+            >
+              Update API Key
+            </button>
+          </div>
+        )}
+
+        {/* Update API Key Form */}
+        {showUpdateApiKey && (
+          <div className="mb-4 p-3 rounded-xl bg-muted/50 border border-border">
+            <p className="text-sm font-medium text-foreground mb-2">Update API Key</p>
+            <div className="flex gap-2">
+              <Input
+                type="password"
+                placeholder="Enter new API key"
+                value={newApiKey}
+                onChange={(e) => setNewApiKey(e.target.value)}
+                className="flex-1 text-sm"
+              />
+              <Button
+                size="sm"
+                onClick={() => {
+                  if (newApiKey.trim()) {
+                    onUpdateApiKey(newApiKey.trim());
+                    setNewApiKey('');
+                    setShowUpdateApiKey(false);
+                  }
+                }}
+                disabled={!newApiKey.trim()}
+              >
+                Save
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => {
+                  setShowUpdateApiKey(false);
+                  setNewApiKey('');
+                }}
+              >
+                Cancel
+              </Button>
+            </div>
           </div>
         )}
 
@@ -354,6 +425,35 @@ function IntegrationCard({
                     Retry Failed Events
                   </>
                 )}
+              </Button>
+            </div>
+          </div>
+        )}
+
+        {/* Uncategorized Transactions Warning */}
+        {integration.uncategorized_transactions_count > 0 && (
+          <div className="mb-4 p-4 rounded-xl bg-purple-500/10 border border-purple-500/20">
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex items-start gap-3">
+                <CurrencyCircleDollar size={20} weight="fill" className="text-purple-400 shrink-0 mt-0.5" />
+                <div>
+                  <p className="text-sm text-purple-400 font-medium">
+                    {integration.uncategorized_transactions_count} Uncategorized Transaction
+                    {integration.uncategorized_transactions_count !== 1 ? 's' : ''}
+                  </p>
+                  <p className="text-sm text-purple-400/80 mt-1">
+                    Transactions missing expense category assignment. Categorize them to enable journal creation.
+                  </p>
+                </div>
+              </div>
+              <Button
+                onClick={onViewUncategorized}
+                variant="outline"
+                size="sm"
+                className="shrink-0 hover:bg-purple-500/10 hover:border-purple-500/30 hover:text-purple-400"
+              >
+                <Sparkle size={14} weight="fill" className="mr-2" />
+                Review & Categorize
               </Button>
             </div>
           </div>
@@ -464,11 +564,41 @@ function IntegrationCard({
             variant="ghost"
             size="sm"
             className="text-muted-foreground hover:text-destructive hover:bg-destructive/10"
+            disabled={isRemoving}
+            onClick={() => {
+              if (window.confirm(`Remove ${integration.display_name || integration.provider}? This will delete all synced data and cannot be undone.`)) {
+                onRemove();
+              }
+            }}
           >
-            <Trash size={14} weight="bold" className="mr-2" />
-            Remove
+            {isRemoving ? (
+              <>
+                <ArrowsClockwise size={14} weight="bold" className="mr-2 animate-spin" />
+                Removing...
+              </>
+            ) : (
+              <>
+                <Trash size={14} weight="bold" className="mr-2" />
+                Remove
+              </>
+            )}
           </Button>
           <div className="flex items-center gap-2">
+            {/* Create Journals button - visible when data has been synced and entity exists */}
+            {integration.entity_id &&
+              (integration.sync_status === 'completed' ||
+                (integration.stats &&
+                  Object.values(integration.stats).reduce((a, b) => a + b, 0) > 0)) && (
+              <Button
+                onClick={onCreateJournals}
+                variant="outline"
+                size="sm"
+                className="gap-1.5 border-violet-500/30 text-violet-400 hover:bg-violet-500/10 hover:text-violet-300"
+              >
+                <BookOpen size={14} weight="duotone" />
+                Create Journals
+              </Button>
+            )}
             {/* Load Data button (normalization) - visible when data has been synced */}
             {(integration.sync_status === 'completed' ||
               (integration.stats &&
@@ -626,13 +756,18 @@ function AddIntegrationForm({
   onCancel: () => void;
 }) {
   const { entity } = useAuth();
-  const [provider, setProvider] = useState<'squarespace' | 'revolut'>('squarespace');
+  const [provider, setProvider] = useState<keyof typeof PROVIDERS>('squarespace');
   const [externalAccountId, setExternalAccountId] = useState('');
   const [displayName, setDisplayName] = useState('');
   const [apiKey, setApiKey] = useState('');
+  const [clientId, setClientId] = useState('');
+  const [clientSecret, setClientSecret] = useState('');
   const [showApiKey, setShowApiKey] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+
+  const providerConfig = PROVIDERS[provider];
+  const isCompound = 'credentialType' in providerConfig && providerConfig.credentialType === 'compound';
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -642,8 +777,21 @@ function AddIntegrationForm({
       return;
     }
 
-    if (!externalAccountId || !apiKey) {
-      setError('Please fill in all required fields');
+    if (!externalAccountId) {
+      setError('Please fill in the account ID');
+      return;
+    }
+
+    // Validate credentials based on type
+    let resolvedApiKey = apiKey;
+    if (isCompound) {
+      if (!clientId || !clientSecret) {
+        setError('Please fill in both Client ID and Secret');
+        return;
+      }
+      resolvedApiKey = JSON.stringify({ client_id: clientId, secret: clientSecret });
+    } else if (!apiKey) {
+      setError('Please fill in the API key');
       return;
     }
 
@@ -656,7 +804,7 @@ function AddIntegrationForm({
         provider,
         external_account_id: externalAccountId,
         display_name: displayName || undefined,
-        api_key: apiKey,
+        api_key: resolvedApiKey,
       });
 
       if (result) {
@@ -670,8 +818,6 @@ function AddIntegrationForm({
       setLoading(false);
     }
   };
-
-  const providerConfig = PROVIDERS[provider];
 
   return (
     <div className="bg-card rounded-2xl border border-border overflow-hidden">
@@ -709,7 +855,7 @@ function AddIntegrationForm({
               <button
                 key={key}
                 type="button"
-                onClick={() => setProvider(key as 'squarespace' | 'revolut')}
+                onClick={() => setProvider(key as keyof typeof PROVIDERS)}
                 className={cn(
                   'p-5 rounded-xl border-2 text-left transition-all duration-200',
                   'hover:shadow-lg hover:shadow-primary/5',
@@ -731,14 +877,16 @@ function AddIntegrationForm({
         {/* External Account ID */}
         <div>
           <label className="block text-sm font-medium text-foreground mb-2">
-            {provider === 'squarespace' ? 'Site ID' : 'Business ID'}
+            {provider === 'squarespace' ? 'Site ID' : provider === 'revolut' ? 'Business ID' : 'Account Email'}
             <span className="text-destructive ml-1">*</span>
           </label>
           <Input
             placeholder={
               provider === 'squarespace'
                 ? 'Enter your Squarespace site ID'
-                : 'Enter your Revolut business ID'
+                : provider === 'revolut'
+                  ? 'Enter your Revolut business ID'
+                  : 'Enter your PayPal account email'
             }
             value={externalAccountId}
             onChange={e => setExternalAccountId(e.target.value)}
@@ -759,34 +907,76 @@ function AddIntegrationForm({
           />
         </div>
 
-        {/* API Key */}
-        <div>
-          <label className="block text-sm font-medium text-foreground mb-2">
-            API Key
-            <span className="text-destructive ml-1">*</span>
-          </label>
-          <div className="relative">
-            <Input
-              type={showApiKey ? 'text' : 'password'}
-              placeholder="Enter your API key"
-              value={apiKey}
-              onChange={e => setApiKey(e.target.value)}
-              className="pr-10 h-11"
-            />
-            <button
-              type="button"
-              onClick={() => setShowApiKey(!showApiKey)}
-              className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
-            >
-              {showApiKey ? <EyeSlash size={18} /> : <Eye size={18} />}
-            </button>
+        {/* Credentials */}
+        {isCompound ? (
+          <>
+            <div>
+              <label className="block text-sm font-medium text-foreground mb-2">
+                Client ID
+                <span className="text-destructive ml-1">*</span>
+              </label>
+              <Input
+                placeholder="Enter your PayPal Client ID"
+                value={clientId}
+                onChange={e => setClientId(e.target.value)}
+                className="h-11"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-foreground mb-2">
+                Secret
+                <span className="text-destructive ml-1">*</span>
+              </label>
+              <div className="relative">
+                <Input
+                  type={showApiKey ? 'text' : 'password'}
+                  placeholder="Enter your PayPal Secret"
+                  value={clientSecret}
+                  onChange={e => setClientSecret(e.target.value)}
+                  className="pr-10 h-11"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowApiKey(!showApiKey)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+                >
+                  {showApiKey ? <EyeSlash size={18} /> : <Eye size={18} />}
+                </button>
+              </div>
+              <p className="text-xs text-muted-foreground mt-2">
+                Get your Client ID and Secret from the PayPal Developer Dashboard under REST API apps
+              </p>
+            </div>
+          </>
+        ) : (
+          <div>
+            <label className="block text-sm font-medium text-foreground mb-2">
+              API Key
+              <span className="text-destructive ml-1">*</span>
+            </label>
+            <div className="relative">
+              <Input
+                type={showApiKey ? 'text' : 'password'}
+                placeholder="Enter your API key"
+                value={apiKey}
+                onChange={e => setApiKey(e.target.value)}
+                className="pr-10 h-11"
+              />
+              <button
+                type="button"
+                onClick={() => setShowApiKey(!showApiKey)}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+              >
+                {showApiKey ? <EyeSlash size={18} /> : <Eye size={18} />}
+              </button>
+            </div>
+            <p className="text-xs text-muted-foreground mt-2">
+              {provider === 'squarespace'
+                ? 'Generate an API key from Squarespace Settings → Advanced → Developer API Keys'
+                : 'Get your API key from Revolut Business Settings'}
+            </p>
           </div>
-          <p className="text-xs text-muted-foreground mt-2">
-            {provider === 'squarespace'
-              ? 'Generate an API key from Squarespace Settings → Advanced → Developer API Keys'
-              : 'Get your API key from Revolut Business Settings'}
-          </p>
-        </div>
+        )}
 
         {/* Error Message */}
         {error && (
@@ -837,6 +1027,7 @@ export default function IntegrationsPage() {
   const [validatingIds, setValidatingIds] = useState<Set<string>>(new Set());
   const [normalizingIds, setNormalizingIds] = useState<Set<string>>(new Set());
   const [reprocessingIds, setReprocessingIds] = useState<Set<string>>(new Set());
+  const [removingIds, setRemovingIds] = useState<Set<string>>(new Set());
   const [showAddForm, setShowAddForm] = useState(false);
   const [activeSyncSource, setActiveSyncSource] = useState<{
     id: string;
@@ -846,6 +1037,14 @@ export default function IntegrationsPage() {
     id: string;
     name: string;
     mode: 'hard' | 'soft';
+  } | null>(null);
+  const [uncategorizedModalSource, setUncategorizedModalSource] = useState<{
+    id: string;
+    entityId?: string;
+  } | null>(null);
+  const [journalModalSource, setJournalModalSource] = useState<{
+    entityId: string;
+    providerName: string;
   } | null>(null);
 
   // Fetch data
@@ -980,6 +1179,25 @@ export default function IntegrationsPage() {
     }
   };
 
+  // Handle API key update
+  const handleUpdateApiKey = async (sourceId: string, apiKey: string) => {
+    toast.loading('Updating API key...', { id: `update-key-${sourceId}` });
+
+    try {
+      const { updateApiKey: updateApiKeyFn } = await import('~/lib/api/integrations');
+      const result = await updateApiKeyFn(sourceId, apiKey);
+      if (result) {
+        toast.success(result.message, { id: `update-key-${sourceId}` });
+        await fetchData();
+      } else {
+        throw new Error('Failed to update API key');
+      }
+    } catch (error) {
+      console.error('Failed to update API key:', error);
+      toast.error('Failed to update API key', { id: `update-key-${sourceId}` });
+    }
+  };
+
   // Handle reprocessing failed events
   const handleReprocessFailed = async (sourceId: string) => {
     setReprocessingIds(prev => new Set([...prev, sourceId]));
@@ -999,6 +1217,34 @@ export default function IntegrationsPage() {
       toast.error('Failed to reprocess events', { id: `reprocess-${sourceId}` });
     } finally {
       setReprocessingIds(prev => {
+        const next = new Set(prev);
+        next.delete(sourceId);
+        return next;
+      });
+    }
+  };
+
+  // Handle removing an integration
+  const handleRemove = async (sourceId: string) => {
+    setRemovingIds(prev => new Set([...prev, sourceId]));
+    toast.loading('Removing integration...', { id: `remove-${sourceId}` });
+
+    try {
+      const result = await deleteExternalSource(sourceId);
+      if (result?.status === 'deleted') {
+        toast.success(
+          `Integration removed (${result.events_deleted} events deleted)`,
+          { id: `remove-${sourceId}` }
+        );
+        await fetchData();
+      } else {
+        throw new Error('Failed to delete integration');
+      }
+    } catch (error) {
+      console.error('Failed to remove integration:', error);
+      toast.error('Failed to remove integration', { id: `remove-${sourceId}` });
+    } finally {
+      setRemovingIds(prev => {
         const next = new Set(prev);
         next.delete(sourceId);
         return next;
@@ -1089,13 +1335,26 @@ export default function IntegrationsPage() {
                 onSync={() => handleSync(integration.id)}
                 onSyncEndpoint={endpoint => handleSync(integration.id, endpoint)}
                 onValidateApiKey={() => handleValidateApiKey(integration.id)}
+                onUpdateApiKey={(apiKey) => handleUpdateApiKey(integration.id, apiKey)}
+                onViewUncategorized={() => setUncategorizedModalSource({ id: integration.id, entityId: integration.entity_id ?? undefined })}
+                onCreateJournals={() => {
+                  if (integration.entity_id) {
+                    const providerConfig = { squarespace: 'Squarespace', revolut: 'Revolut', paypal: 'PayPal' } as const;
+                    setJournalModalSource({
+                      entityId: integration.entity_id,
+                      providerName: providerConfig[integration.provider as keyof typeof providerConfig] || integration.provider,
+                    });
+                  }
+                }}
                 onLoadData={mode => handleLoadData(integration.id, mode)}
                 onReprocessFailed={() => handleReprocessFailed(integration.id)}
+                onRemove={() => handleRemove(integration.id)}
                 isSyncing={syncingIds.has(integration.id)}
                 syncingEndpoint={syncingEndpoints.get(integration.id) || null}
                 isValidatingApiKey={validatingIds.has(integration.id)}
                 isNormalizing={normalizingIds.has(integration.id)}
                 isReprocessing={reprocessingIds.has(integration.id)}
+                isRemoving={removingIds.has(integration.id)}
               />
             ))}
           </div>
@@ -1121,6 +1380,33 @@ export default function IntegrationsPage() {
             mode={activeNormalizeSource.mode}
             onClose={handleCloseNormalizeProgress}
             onComplete={() => {
+              fetchData();
+            }}
+          />
+        )}
+
+        {/* Incomplete Transactions Modal */}
+        {uncategorizedModalSource && (
+          <IncompleteTransactionsModal
+            isOpen={true}
+            sourceId={uncategorizedModalSource.id}
+            entityId={uncategorizedModalSource.entityId}
+            onClose={() => {
+              setUncategorizedModalSource(null);
+              fetchData();
+            }}
+            onUpdate={fetchData}
+          />
+        )}
+
+        {/* Journal Creation Modal */}
+        {journalModalSource && (
+          <JournalCreationModal
+            isOpen={true}
+            entityId={journalModalSource.entityId}
+            providerName={journalModalSource.providerName}
+            onClose={() => {
+              setJournalModalSource(null);
               fetchData();
             }}
           />

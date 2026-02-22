@@ -33,6 +33,8 @@ from .models import ProcessingStatus
 from .normalizer import NormalizationResult
 from .persistence import persistence_service
 from .squarespace_normalizer import SquarespaceNormalizer
+from .revolut_normalizer import RevolutNormalizer
+from .paypal_normalizer import PayPalNormalizer
 from .utils import extract_id, extract_row, extract_rows
 
 logger = logging.getLogger(__name__)
@@ -46,10 +48,15 @@ BATCH_SIZE = 50
 # Supported providers and their normalizers
 PROVIDER_NORMALIZERS = {
     "squarespace": SquarespaceNormalizer,
+    "revolut": RevolutNormalizer,
+    "paypal": PayPalNormalizer,
 }
 
 # Entity type processing order (respects foreign key dependencies)
-ENTITY_TYPE_ORDER = ["profile", "product", "inventory_item", "order", "transaction"]
+ENTITY_TYPE_ORDER = [
+    "profile", "product", "inventory_item", "order", "transaction",
+    "bank_account", "financial_transaction", "expense",
+]
 
 
 def get_normalizer(provider: str, entity_id: UUID):
@@ -127,22 +134,9 @@ async def normalize_raw_event(ctx: inngest.Context) -> Dict[str, Any]:
         # Convert back to UUID for normalizer
         entity_id = UUID(entity_id_str)
         
-        # Step 4: Normalize
-        result_dict = await ctx.step.run(
-            "normalize",
-            lambda: _normalize_event(
-                provider=raw_event["provider"],
-                entity_type=raw_event["entity_type"],
-                external_id=raw_event["external_id"],
-                payload=raw_event["payload"],
-                raw_event_id=raw_event_id,
-                entity_id=entity_id
-            )
-        )
-        
-        # Step 5: Persist (need to re-normalize to get full NormalizationResult)
+        # Step 4: Normalize + Persist in one step (avoids double normalization)
         persist_result = await ctx.step.run(
-            "persist",
+            "normalize-and-persist",
             lambda: _persist_event(
                 provider=raw_event["provider"],
                 entity_type=raw_event["entity_type"],
@@ -154,8 +148,20 @@ async def normalize_raw_event(ctx: inngest.Context) -> Dict[str, Any]:
         )
         
         success = persist_result["success"]
+        skipped = persist_result.get("skipped", False)
         canonical_id = persist_result["canonical_id"]
         error = persist_result["error"]
+        
+        if skipped:
+            return {
+                "status": "skipped",
+                "raw_event_id": str(raw_event_id),
+                "entity_type": raw_event["entity_type"],
+                "external_id": raw_event["external_id"],
+                "canonical_id": None,
+                "error": None,
+                "processed_at": datetime.now().isoformat()
+            }
         
         return {
             "status": "completed" if success else "failed",
@@ -192,6 +198,8 @@ async def normalize_batch(ctx: inngest.Context) -> Dict[str, Any]:
         limit = event_data.get("limit", 100)
         source_id = event_data.get("source_id")
         channel_source_id = event_data.get("source_id_for_channel")
+        total_pending_count = event_data.get("total_pending_count")
+        cumulative_processed = event_data.get("cumulative_processed", 0)
         
         ctx.logger.info(
             f"Starting batch normalization (type={entity_type}, limit={limit})"
@@ -262,6 +270,8 @@ async def normalize_batch(ctx: inngest.Context) -> Dict[str, Any]:
             # Publish progress update if we have a channel
             if channel_source_id and entity_type:
                 total_done = results["completed"] + results["failed"] + results["skipped"]
+                # Use total_pending_count from source for accurate denominator
+                effective_total = total_pending_count if total_pending_count else len(pending_events)
                 try:
                     channel = get_normalization_channel(channel_source_id)
                     await realtime.publish(
@@ -271,8 +281,8 @@ async def normalize_batch(ctx: inngest.Context) -> Dict[str, Any]:
                         data=NormalizationProgressData(
                             entity_type=entity_type,
                             status="processing",
-                            events_processed=total_done,
-                            events_total=len(pending_events),
+                            events_processed=cumulative_processed + total_done,
+                            events_total=effective_total,
                             events_succeeded=results["completed"],
                             events_failed=results["failed"],
                             error=None,
@@ -282,12 +292,17 @@ async def normalize_batch(ctx: inngest.Context) -> Dict[str, Any]:
                 except Exception as pub_err:
                     ctx.logger.warning(f"Failed to publish progress: {pub_err}")
             
-            # Small delay between events
-            if i < len(pending_events) - 1:
-                await ctx.step.sleep(f"delay-{i}", timedelta(milliseconds=100))
+            # No artificial delay — rely on Inngest concurrency controls
         
-        # Publish completion for this entity type
+        # Publish completion/progress for this batch
         if channel_source_id and entity_type:
+            effective_total = total_pending_count if total_pending_count else len(pending_events)
+            total_done = results["completed"] + results["failed"] + results["skipped"]
+            final_processed = cumulative_processed + total_done
+            
+            # Only mark as "completed" if ALL events for this entity type are done
+            is_final_batch = final_processed >= effective_total
+            
             try:
                 channel = get_normalization_channel(channel_source_id)
                 await realtime.publish(
@@ -296,9 +311,9 @@ async def normalize_batch(ctx: inngest.Context) -> Dict[str, Any]:
                     topic="progress",
                     data=NormalizationProgressData(
                         entity_type=entity_type,
-                        status="completed",
-                        events_processed=len(pending_events),
-                        events_total=len(pending_events),
+                        status="completed" if is_final_batch else "processing",
+                        events_processed=final_processed,
+                        events_total=effective_total,
                         events_succeeded=results["completed"],
                         events_failed=results["failed"],
                         error=None,
@@ -362,6 +377,21 @@ async def normalize_source(ctx: inngest.Context) -> Dict[str, Any]:
         
         channel = get_normalization_channel(source_id)
         
+        # Determine which entity types this provider supports
+        provider = await ctx.step.run(
+            "get-provider",
+            lambda: _get_provider_from_source(source_id)
+        )
+        
+        normalizer_class = PROVIDER_NORMALIZERS.get(provider)
+        if normalizer_class:
+            supported = normalizer_class.supported_entity_types if hasattr(normalizer_class, 'supported_entity_types') else ENTITY_TYPE_ORDER
+            entity_types_to_process = [
+                et for et in ENTITY_TYPE_ORDER if et in supported
+            ]
+        else:
+            entity_types_to_process = ENTITY_TYPE_ORDER
+        
         # Publish initial status
         await realtime.publish(
             client=inngest_client,
@@ -371,7 +401,7 @@ async def normalize_source(ctx: inngest.Context) -> Dict[str, Any]:
                 status="starting",
                 mode=mode,
                 entity_types_completed=0,
-                entity_types_total=len(ENTITY_TYPE_ORDER),
+                entity_types_total=len(entity_types_to_process),
                 total_processed=0,
                 total_succeeded=0,
                 total_failed=0,
@@ -394,7 +424,7 @@ async def normalize_source(ctx: inngest.Context) -> Dict[str, Any]:
         total_failed = 0
         completed_types = 0
         
-        for entity_type in ENTITY_TYPE_ORDER:
+        for entity_type in entity_types_to_process:
             # Publish progress for starting this entity type
             await realtime.publish(
                 client=inngest_client,
@@ -456,6 +486,8 @@ async def normalize_source(ctx: inngest.Context) -> Dict[str, Any]:
                         "source_id": source_id,
                         "limit": batch_size,
                         "source_id_for_channel": source_id,
+                        "total_pending_count": pending_count,
+                        "cumulative_processed": type_results["completed"] + type_results["failed"] + type_results["skipped"],
                     }
                 )
                 
@@ -488,7 +520,7 @@ async def normalize_source(ctx: inngest.Context) -> Dict[str, Any]:
                     status="processing",
                     mode=mode,
                     entity_types_completed=completed_types,
-                    entity_types_total=len(ENTITY_TYPE_ORDER),
+                    entity_types_total=len(entity_types_to_process),
                     total_processed=total_succeeded + total_failed,
                     total_succeeded=total_succeeded,
                     total_failed=total_failed,
@@ -510,8 +542,8 @@ async def normalize_source(ctx: inngest.Context) -> Dict[str, Any]:
             data=NormalizationStatusData(
                 status="completed",
                 mode=mode,
-                entity_types_completed=len(ENTITY_TYPE_ORDER),
-                entity_types_total=len(ENTITY_TYPE_ORDER),
+                entity_types_completed=len(entity_types_to_process),
+                entity_types_total=len(entity_types_to_process),
                 total_processed=total_succeeded + total_failed,
                 total_succeeded=total_succeeded,
                 total_failed=total_failed,
@@ -564,20 +596,20 @@ async def normalize_source(ctx: inngest.Context) -> Dict[str, Any]:
     retries=2,
 )
 async def normalize_after_sync(ctx: inngest.Context) -> Dict[str, Any]:
-    """Trigger normalization after a sync completes.
-    
+    """Trigger normalization after a Squarespace sync completes.
+
     Automatically processes all new raw events from a sync using soft mode.
     """
     try:
         event_data = ctx.event.data
         source_id = event_data.get("source_id")
         total_items = event_data.get("total_items", 0)
-        
+
         ctx.logger.info(
             f"Triggering normalization after sync for source {source_id} "
             f"({total_items} items)"
         )
-        
+
         # Delegate to normalize_source with soft mode
         result = await ctx.step.invoke(
             "normalize-source-after-sync",
@@ -588,16 +620,94 @@ async def normalize_after_sync(ctx: inngest.Context) -> Dict[str, Any]:
                 "batch_size": 100,
             }
         )
-        
+
         return {
             "status": "completed",
             "source_id": source_id,
             "normalization_result": result,
             "processed_at": datetime.now().isoformat()
         }
-        
+
     except Exception as e:
         ctx.logger.error(f"Error in post-sync normalization: {str(e)}")
+        raise
+
+
+@inngest_client.create_function(
+    fn_id="normalize_after_revolut_sync",
+    trigger=inngest.TriggerEvent(event="revolut/sync.completed"),
+    retries=2,
+)
+async def normalize_after_revolut_sync(ctx: inngest.Context) -> Dict[str, Any]:
+    """Trigger normalization after a Revolut sync completes."""
+    try:
+        event_data = ctx.event.data
+        source_id = event_data.get("source_id")
+        total_items = event_data.get("total_items", 0)
+
+        ctx.logger.info(
+            f"Triggering normalization after Revolut sync for source {source_id} "
+            f"({total_items} items)"
+        )
+
+        result = await ctx.step.invoke(
+            "normalize-source-after-revolut-sync",
+            function=normalize_source,
+            data={
+                "source_id": source_id,
+                "mode": "soft",
+                "batch_size": 100,
+            }
+        )
+
+        return {
+            "status": "completed",
+            "source_id": source_id,
+            "normalization_result": result,
+            "processed_at": datetime.now().isoformat()
+        }
+
+    except Exception as e:
+        ctx.logger.error(f"Error in post-Revolut-sync normalization: {str(e)}")
+        raise
+
+
+@inngest_client.create_function(
+    fn_id="normalize_after_paypal_sync",
+    trigger=inngest.TriggerEvent(event="paypal/sync.completed"),
+    retries=2,
+)
+async def normalize_after_paypal_sync(ctx: inngest.Context) -> Dict[str, Any]:
+    """Trigger normalization after a PayPal sync completes."""
+    try:
+        event_data = ctx.event.data
+        source_id = event_data.get("source_id")
+        total_items = event_data.get("total_items", 0)
+
+        ctx.logger.info(
+            f"Triggering normalization after PayPal sync for source {source_id} "
+            f"({total_items} items)"
+        )
+
+        result = await ctx.step.invoke(
+            "normalize-source-after-paypal-sync",
+            function=normalize_source,
+            data={
+                "source_id": source_id,
+                "mode": "soft",
+                "batch_size": 100,
+            }
+        )
+
+        return {
+            "status": "completed",
+            "source_id": source_id,
+            "normalization_result": result,
+            "processed_at": datetime.now().isoformat()
+        }
+
+    except Exception as e:
+        ctx.logger.error(f"Error in post-PayPal-sync normalization: {str(e)}")
         raise
 
 
@@ -824,6 +934,24 @@ async def _get_entity_id_from_source(source_id: str) -> Optional[str]:
     return None
 
 
+async def _get_provider_from_source(source_id: str) -> str:
+    """Get provider name from source."""
+    from ..core.supabase_client import get_supabase_client
+    
+    client = get_supabase_client()
+    if client is None:
+        raise RuntimeError("Supabase client not configured")
+    result = await asyncio.to_thread(
+        lambda: client.table("external_sources")
+        .select("provider")
+        .eq("id", source_id)
+        .execute()
+    )
+    if result.data:
+        return result.data[0].get("provider", "unknown")
+    return "unknown"
+
+
 async def _normalize_event(
     provider: str,
     entity_type: str,
@@ -842,6 +970,8 @@ async def _normalize_event(
     # Convert to serializable dict (NormalizationResult is not JSON-serializable)
     return {
         "success": result.success,
+        "skipped": result.skipped,
+        "skip_reason": result.skip_reason,
         "status": result.status.value,
         "entity_type": result.entity_type,
         "external_id": result.external_id,
@@ -877,8 +1007,9 @@ async def _persist_event(
     
     return {
         "success": success,
+        "skipped": result.skipped,
         "canonical_id": str(canonical_id) if canonical_id else None,
-        "error": error
+        "error": error if not result.skipped else None
     }
 
 
@@ -1168,6 +1299,8 @@ NORMALIZATION_FUNCTIONS = [
     normalize_batch,
     normalize_source,
     normalize_after_sync,
+    normalize_after_revolut_sync,
+    normalize_after_paypal_sync,
     reprocess_failed_events,
     reprocess_stuck_processing_events,
     reprocess_failed_manual,

@@ -13,6 +13,7 @@ export interface IntegrationSummary {
   provider: string;
   display_name: string | null;
   external_account_id: string;
+  entity_id: string | null;
   sync_status: 'idle' | 'syncing' | 'error' | 'completed';
   sync_error: string | null;
   last_synced_at: string | null;
@@ -22,6 +23,7 @@ export interface IntegrationSummary {
   api_key_last_validated_at: string | null;
   api_key_error: string | null;
   failed_events_count: number;
+  uncategorized_transactions_count: number;
 }
 
 // Sync trigger response
@@ -54,6 +56,13 @@ export interface ValidateApiKeyResponse {
   status: 'valid' | 'invalid';
   message: string;
   provider: string;
+}
+
+// API key update response
+export interface UpdateApiKeyResponse {
+  source_id: string;
+  status: string;
+  message: string;
 }
 
 // Entity response
@@ -320,6 +329,42 @@ export async function validateApiKey(sourceId: string): Promise<ValidateApiKeyRe
 }
 
 /**
+ * Update the API key for an integration
+ *
+ * Stores the new key securely in Vault and resets validation status.
+ *
+ * @param sourceId - The external source ID to update
+ * @param apiKey - The new API key
+ */
+export async function updateApiKey(
+  sourceId: string,
+  apiKey: string
+): Promise<UpdateApiKeyResponse | null> {
+  const baseUrl = getApiBaseUrl();
+
+  try {
+    const response = await fetch(`${baseUrl}/integrations/sources/${sourceId}/api-key`, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ api_key: apiKey }),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('Failed to update API key:', response.status, errorText);
+      return null;
+    }
+
+    return await response.json();
+  } catch (error) {
+    console.error('Error updating API key:', error);
+    return null;
+  }
+}
+
+/**
  * Trigger normalization for a source (the "Load Data" action)
  *
  * Processes synced raw events into canonical models (customers, orders, products, etc.)
@@ -421,5 +466,199 @@ export async function reprocessFailedEvents(
   } catch (error) {
     console.error('Error triggering reprocessing:', error);
     return null;
+  }
+}
+
+/**
+ * Delete an external source and all associated data
+ *
+ * Cascades: raw events, Vault API key, source record.
+ *
+ * @param sourceId - The external source ID to delete
+ */
+export async function deleteExternalSource(
+  sourceId: string
+): Promise<{ source_id: string; status: string; events_deleted: number } | null> {
+  const baseUrl = getApiBaseUrl();
+
+  try {
+    const response = await fetch(`${baseUrl}/integrations/sources/${sourceId}`, {
+      method: 'DELETE',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('Failed to delete external source:', response.status, errorText);
+      return null;
+    }
+
+    return await response.json();
+  } catch (error) {
+    console.error('Error deleting external source:', error);
+    return null;
+  }
+}
+
+// =============================================================================
+// INCOMPLETE TRANSACTIONS
+// =============================================================================
+
+export interface IncompleteTransaction {
+  id: string;
+  source: string;
+  external_transaction_id: string;
+  transaction_type: string;
+  amount: number;
+  currency_code: string;
+  direction: string;
+  occurred_at: string;
+  description: string | null;
+  counterparty_name: string | null;
+  metadata: Record<string, any> | null;
+}
+
+export interface IncompleteTransactionsResponse {
+  transactions: IncompleteTransaction[];
+  total_count: number;
+}
+
+export interface ChartOfAccountsEntry {
+  id: string;
+  account_number: string;
+  name: string;
+  account_type: string;
+  normal_balance: string;
+  is_header: boolean;
+  department: string | null;
+  tax_code: string | null;
+  status: string;
+}
+
+export interface AISuggestion {
+  transaction_id: string;
+  suggested_account_number: string | null;
+  suggested_expense_category: string | null;
+  confidence: number;
+  reasoning: string | null;
+}
+
+/**
+ * Get incomplete transactions (missing chart_of_accounts assignment)
+ */
+export async function getIncompleteTransactions(
+  sourceId?: string,
+  limit: number = 50,
+  offset: number = 0
+): Promise<IncompleteTransactionsResponse | null> {
+  const baseUrl = getApiBaseUrl();
+  const params = new URLSearchParams();
+  if (sourceId) params.set('source_id', sourceId);
+  console.log(sourceId);
+
+  params.set('limit', limit.toString());
+  params.set('offset', offset.toString());
+
+  try {
+    const response = await fetch(`${baseUrl}/integrations/transactions/incomplete?${params}`, {
+      method: 'GET',
+      headers: { 'Content-Type': 'application/json' },
+    });
+
+    if (!response.ok) {
+      console.error('Failed to fetch incomplete transactions:', response.status);
+      return null;
+    }
+
+    return await response.json();
+  } catch (error) {
+    console.error('Error fetching incomplete transactions:', error);
+    return null;
+  }
+}
+
+/**
+ * Assign an account_number to a transaction (stored in metadata)
+ */
+export async function updateTransactionCategory(
+  transactionId: string,
+  accountNumber: string
+): Promise<{ status: string } | null> {
+  const baseUrl = getApiBaseUrl();
+
+  try {
+    const response = await fetch(`${baseUrl}/integrations/transactions/${transactionId}/category`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ account_number: accountNumber }),
+    });
+
+    if (!response.ok) {
+      console.error('Failed to update transaction category:', response.status);
+      return null;
+    }
+
+    return await response.json();
+  } catch (error) {
+    console.error('Error updating transaction category:', error);
+    return null;
+  }
+}
+
+/**
+ * Get AI-suggested categories for transactions
+ */
+export async function aiCategorizeTransactions(
+  transactionIds: string[]
+): Promise<AISuggestion[] | null> {
+  const baseUrl = getApiBaseUrl();
+
+  try {
+    const response = await fetch(`${baseUrl}/integrations/transactions/ai-categorize`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ transaction_ids: transactionIds }),
+    });
+
+    if (!response.ok) {
+      console.error('Failed to get AI categories:', response.status);
+      return null;
+    }
+
+    const data = await response.json();
+    return data.suggestions;
+  } catch (error) {
+    console.error('Error getting AI categories:', error);
+    return null;
+  }
+}
+
+/**
+ * Get chart of accounts entries
+ */
+export async function getChartOfAccounts(
+  accountType?: string
+): Promise<ChartOfAccountsEntry[]> {
+  const baseUrl = getApiBaseUrl();
+  const params = new URLSearchParams();
+  if (accountType) params.set('account_type', accountType);
+
+  try {
+    const response = await fetch(`${baseUrl}/integrations/chart-of-accounts?${params}`, {
+      method: 'GET',
+      headers: { 'Content-Type': 'application/json' },
+    });
+
+    if (!response.ok) {
+      console.error('Failed to fetch chart of accounts:', response.status);
+      return [];
+    }
+
+    return await response.json();
+  } catch (error) {
+    console.error('Error fetching chart of accounts:', error);
+    return [];
   }
 }

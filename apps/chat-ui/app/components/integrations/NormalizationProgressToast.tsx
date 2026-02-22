@@ -23,6 +23,9 @@ import {
   Cube,
   ShoppingCart,
   Database,
+  Bank,
+  CurrencyCircleDollar,
+  Receipt,
 } from 'phosphor-react';
 import { useInngestSubscription } from '@inngest/realtime/hooks';
 import { cn } from '~/lib/utils';
@@ -79,6 +82,10 @@ const entityTypeIcons: Record<string, React.ReactNode> = {
   product: <Package size={16} weight="duotone" />,
   inventory_item: <Cube size={16} weight="duotone" />,
   order: <ShoppingCart size={16} weight="duotone" />,
+  transaction: <CurrencyCircleDollar size={16} weight="duotone" />,
+  bank_account: <Bank size={16} weight="duotone" />,
+  financial_transaction: <CurrencyCircleDollar size={16} weight="duotone" />,
+  expense: <Receipt size={16} weight="duotone" />,
 };
 
 // Friendly entity type labels
@@ -87,6 +94,10 @@ const entityTypeLabels: Record<string, string> = {
   product: 'Products',
   inventory_item: 'Inventory',
   order: 'Orders',
+  transaction: 'Transactions',
+  bank_account: 'Bank Accounts',
+  financial_transaction: 'Financial Transactions',
+  expense: 'Expenses',
 };
 
 // =============================================================================
@@ -381,7 +392,9 @@ export function NormalizationProgressToast({
                 <span className="text-xs">Initializing normalization...</span>
               </div>
             ) : (
-              Array.from(entityProgress.entries()).map(([entityType, progress]) => (
+              Array.from(entityProgress.entries())
+                .filter(([_, progress]) => progress.events_total > 0 || progress.status === 'processing')
+                .map(([entityType, progress]) => (
                 <EntityTypeProgressCard
                   key={entityType}
                   entityType={entityType}

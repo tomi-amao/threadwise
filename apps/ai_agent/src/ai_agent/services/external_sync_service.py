@@ -172,7 +172,48 @@ class ExternalSyncService:
         except Exception as e:
             logger.error(f"Failed to retrieve API key from Vault: {e}")
             return None
-    
+
+    async def update_api_key(self, source_id: str, api_key: str) -> bool:
+        """Update the API key for an external source.
+        
+        Stores the new key securely in Vault and resets api_key_status to 'pending'.
+        
+        Args:
+            source_id: External source ID
+            api_key: New API key value
+            
+        Returns:
+            True if successful
+        """
+        try:
+            # Get source to know the provider
+            source = await self.get_external_source(source_id)
+            if not source:
+                raise ValueError(f"Source not found: {source_id}")
+            
+            provider = source.get("provider", "unknown")
+            
+            # Store new key in Vault
+            await asyncio.to_thread(
+                lambda: self.client.rpc(
+                    "store_api_key_secure",
+                    {
+                        "p_source_id": source_id,
+                        "p_api_key": api_key,
+                        "p_provider": provider
+                    }
+                ).execute()
+            )
+            
+            # Reset api_key_status to pending
+            await self.update_api_key_status(source_id, "pending")
+            
+            logger.info(f"Updated API key for source {source_id}")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to update API key: {e}")
+            raise
+
     async def update_api_key_status(
         self,
         source_id: str,
@@ -383,7 +424,7 @@ class ExternalSyncService:
         source_id: str
     ) -> Dict[str, int]:
         """Get sync statistics for a source.
-        
+
         Returns count of unique items by entity type (deduplicated by external_id).
         """
         # Use RPC call to get distinct counts per entity_type
@@ -394,13 +435,70 @@ class ExternalSyncService:
                 {"p_source_id": source_id}
             ).execute()
         )
-        
+
         stats = {}
         for row in result.data or []:
             entity_type = row["entity_type"]
             stats[entity_type] = row["unique_count"]
-        
+
         return stats
+
+    async def delete_external_source(
+        self,
+        source_id: str,
+    ) -> Dict[str, Any]:
+        """Delete an external source and all associated data.
+
+        Cascade:
+        1. Delete external_raw_events for this source
+        2. Remove API key from Vault via delete_api_key_secure RPC
+        3. Delete external_sources record
+
+        Returns:
+            Summary with counts of deleted records
+        """
+        # Verify source exists
+        source = await self.get_external_source(source_id)
+        if not source:
+            return None
+
+        # 1. Delete raw events
+        events_result = await asyncio.to_thread(
+            lambda: self.client.table("external_raw_events")
+            .delete()
+            .eq("source_id", source_id)
+            .execute()
+        )
+        events_deleted = len(events_result.data) if events_result.data else 0
+
+        # 2. Remove API key from Vault
+        vault_cleaned = False
+        try:
+            await asyncio.to_thread(
+                lambda: self.client.rpc(
+                    "delete_api_key_secure",
+                    {"p_source_id": source_id},
+                ).execute()
+            )
+            vault_cleaned = True
+        except Exception as e:
+            logger.warning(f"Failed to delete Vault key for {source_id}: {e}")
+
+        # 3. Delete external_sources record
+        await asyncio.to_thread(
+            lambda: self.client.table("external_sources")
+            .delete()
+            .eq("id", source_id)
+            .execute()
+        )
+
+        return {
+            "source_id": source_id,
+            "provider": source.get("provider"),
+            "events_deleted": events_deleted,
+            "vault_cleaned": vault_cleaned,
+            "status": "deleted",
+        }
 
 
 # Global service instance

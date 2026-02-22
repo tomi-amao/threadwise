@@ -16,7 +16,9 @@ from uuid import UUID
 
 from .models import (
     CanonicalBase,
+    CanonicalBankAccount,
     CanonicalCustomer,
+    CanonicalFinancialTransaction,
     CanonicalOrder,
     CanonicalProduct,
     CanonicalInventoryItem,
@@ -77,6 +79,10 @@ class NormalizationResult:
     needs_review: bool = False
     review_reason: Optional[str] = None
     
+    # Skip (intentionally not persisted, e.g. "General Expenses" category)
+    skipped: bool = False
+    skip_reason: Optional[str] = None
+    
     # Timing
     processed_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     
@@ -120,6 +126,30 @@ class NormalizationResult:
             error_details=error_details,
         )
     
+    @classmethod
+    def skip_result(
+        cls,
+        entity_type: str,
+        external_id: str,
+        raw_event_id: UUID,
+        skip_reason: str,
+    ) -> "NormalizationResult":
+        """Create a intentionally-skipped result.
+        
+        Used when the event is valid but should not be persisted
+        (e.g., expense with 'General Expenses' category).
+        The raw event will be marked as 'completed' in the DB.
+        """
+        return cls(
+            success=True,
+            skipped=True,
+            skip_reason=skip_reason,
+            status=ProcessingStatus.COMPLETED,
+            entity_type=entity_type,
+            external_id=external_id,
+            raw_event_id=raw_event_id,
+        )
+
     @classmethod
     def needs_review_result(
         cls,
@@ -316,3 +346,102 @@ class BaseNormalizer(ABC):
             if current is None:
                 return default
         return current
+
+
+class FinancialNormalizer(BaseNormalizer):
+    """Base class for financial-source normalizers (Revolut, PayPal, etc.).
+
+    These normalizers handle bank/payment-source data that produces
+    CanonicalBankAccount and CanonicalFinancialTransaction models,
+    rather than commerce entities like orders and products.
+
+    Commerce-specific abstract methods are stubbed with "not supported"
+    returns so subclasses only need to implement financial methods.
+    """
+
+    # Override in subclasses
+    supported_entity_types: List[str] = ["bank_account", "financial_transaction", "expense"]
+
+    # =========================================================================
+    # COMMERCE STUBS (not applicable for financial normalizers)
+    # =========================================================================
+
+    def normalize_order(
+        self, external_id: str, payload: Dict[str, Any], raw_event_id: UUID
+    ) -> NormalizationResult:
+        return NormalizationResult.failure_result(
+            entity_type="order",
+            external_id=external_id,
+            raw_event_id=raw_event_id,
+            error_message=f"{self.provider} normalizer does not support orders",
+        )
+
+    def normalize_product(
+        self, external_id: str, payload: Dict[str, Any], raw_event_id: UUID
+    ) -> NormalizationResult:
+        return NormalizationResult.failure_result(
+            entity_type="product",
+            external_id=external_id,
+            raw_event_id=raw_event_id,
+            error_message=f"{self.provider} normalizer does not support products",
+        )
+
+    def normalize_profile(
+        self, external_id: str, payload: Dict[str, Any], raw_event_id: UUID
+    ) -> NormalizationResult:
+        return NormalizationResult.failure_result(
+            entity_type="profile",
+            external_id=external_id,
+            raw_event_id=raw_event_id,
+            error_message=f"{self.provider} normalizer does not support profiles",
+        )
+
+    def normalize_inventory_item(
+        self, external_id: str, payload: Dict[str, Any], raw_event_id: UUID
+    ) -> NormalizationResult:
+        return NormalizationResult.failure_result(
+            entity_type="inventory_item",
+            external_id=external_id,
+            raw_event_id=raw_event_id,
+            error_message=f"{self.provider} normalizer does not support inventory items",
+        )
+
+    # =========================================================================
+    # FINANCIAL ABSTRACT METHODS - Must be implemented by subclasses
+    # =========================================================================
+
+    @abstractmethod
+    def normalize_financial_transaction(
+        self,
+        external_id: str,
+        payload: Dict[str, Any],
+        raw_event_id: UUID,
+    ) -> NormalizationResult:
+        """Normalize a financial transaction payload."""
+        pass
+
+    @abstractmethod
+    def normalize_bank_account(
+        self,
+        external_id: str,
+        payload: Dict[str, Any],
+        raw_event_id: UUID,
+    ) -> NormalizationResult:
+        """Normalize a bank account payload."""
+        pass
+
+    @abstractmethod
+    def normalize_expense(
+        self,
+        external_id: str,
+        payload: Dict[str, Any],
+        raw_event_id: UUID,
+    ) -> NormalizationResult:
+        """Normalize an expense payload.
+
+        For providers that have a separate expenses API (e.g., Revolut),
+        this method handles expense-specific data with richer categorization.
+        Implementations should handle deduplication if expenses can also
+        appear in the transactions API.
+        """
+        pass

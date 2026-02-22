@@ -185,7 +185,93 @@ async def send_squarespace_sync_event(
         
         logger.info(f"Sent Squarespace sync event for source {source_id}")
         return True
-        
+
     except Exception as e:
         logger.error(f"Failed to send Squarespace sync event: {str(e)}")
+        return False
+
+
+async def send_revolut_sync_event(
+    source_id: str,
+    endpoint: Optional[str] = None,
+    cursor: Optional[str] = None
+) -> bool:
+    """Send a Revolut sync event to trigger data extraction.
+
+    Args:
+        source_id: The external source ID to sync
+        endpoint: Optional specific endpoint to sync (transactions, accounts)
+        cursor: Optional cursor to resume pagination
+
+    Returns:
+        True if event was sent successfully, False otherwise
+    """
+    try:
+        client = get_client()
+
+        if endpoint:
+            event_name = "revolut/sync.endpoint"
+            event_data = {
+                "source_id": source_id,
+                "endpoint": endpoint,
+                "cursor": cursor,
+                "timestamp": datetime.now().isoformat(),
+            }
+        else:
+            event_name = "revolut/sync.requested"
+            event_data = {
+                "source_id": source_id,
+                "timestamp": datetime.now().isoformat(),
+            }
+
+        await client.send({"name": event_name, "data": event_data})
+
+        logger.info(f"Sent Revolut sync event for source {source_id}")
+        return True
+
+    except Exception as e:
+        logger.error(f"Failed to send Revolut sync event: {str(e)}")
+        return False
+
+
+async def send_paypal_sync_event(
+    source_id: str,
+    endpoint: Optional[str] = None,
+    cursor: Optional[str] = None
+) -> bool:
+    """Send a PayPal sync event to trigger data extraction.
+
+    Args:
+        source_id: The external source ID to sync
+        endpoint: Optional specific endpoint to sync (transactions)
+        cursor: Optional cursor to resume pagination
+
+    Returns:
+        True if event was sent successfully, False otherwise
+    """
+    try:
+        client = get_client()
+
+        if endpoint:
+            event_name = "paypal/sync.endpoint"
+            event_data = {
+                "source_id": source_id,
+                "endpoint": endpoint,
+                "cursor": cursor,
+                "timestamp": datetime.now().isoformat(),
+            }
+        else:
+            event_name = "paypal/sync.requested"
+            event_data = {
+                "source_id": source_id,
+                "timestamp": datetime.now().isoformat(),
+            }
+
+        await client.send({"name": event_name, "data": event_data})
+
+        logger.info(f"Sent PayPal sync event for source {source_id}")
+        return True
+
+    except Exception as e:
+        logger.error(f"Failed to send PayPal sync event: {str(e)}")
         return False

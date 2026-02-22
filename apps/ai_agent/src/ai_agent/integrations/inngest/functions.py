@@ -223,6 +223,8 @@ async def _cleanup_temporary_files() -> int:
 
 # Import sync functions
 from .sync_functions import SYNC_FUNCTIONS
+from .revolut_sync_functions import REVOLUT_SYNC_FUNCTIONS
+from .paypal_sync_functions import PAYPAL_SYNC_FUNCTIONS
 
 # Import normalization functions
 from ...normalization.inngest_functions import NORMALIZATION_FUNCTIONS
@@ -230,8 +232,10 @@ from ...normalization.inngest_functions import NORMALIZATION_FUNCTIONS
 # Export all functions for registration
 FUNCTIONS = [
     process_chat_message,
-    process_document_embedding, 
+    process_document_embedding,
     cleanup_old_threads,
     *SYNC_FUNCTIONS,  # Include external sync functions
+    *REVOLUT_SYNC_FUNCTIONS,  # Include Revolut sync functions
+    *PAYPAL_SYNC_FUNCTIONS,  # Include PayPal sync functions
     *NORMALIZATION_FUNCTIONS,  # Include normalization functions
 ]
