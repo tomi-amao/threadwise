@@ -153,3 +153,6 @@ Reconcile on the fly
 Infer clearing logic on the fly
 
 Add marketing context to understand how marketing translates to purchase orders
+
+consider SQL triggers e.g.
+Would you like me to write the SQL trigger that automatically updates your Inventory levels whenever a customer_invoice is marked as 'PAID'?

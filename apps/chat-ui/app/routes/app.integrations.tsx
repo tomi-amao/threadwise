@@ -350,7 +350,7 @@ function IntegrationCard({
                 type="password"
                 placeholder="Enter new API key"
                 value={newApiKey}
-                onChange={(e) => setNewApiKey(e.target.value)}
+                onChange={e => setNewApiKey(e.target.value)}
                 className="flex-1 text-sm"
               />
               <Button
@@ -435,14 +435,19 @@ function IntegrationCard({
           <div className="mb-4 p-4 rounded-xl bg-purple-500/10 border border-purple-500/20">
             <div className="flex items-start justify-between gap-3">
               <div className="flex items-start gap-3">
-                <CurrencyCircleDollar size={20} weight="fill" className="text-purple-400 shrink-0 mt-0.5" />
+                <CurrencyCircleDollar
+                  size={20}
+                  weight="fill"
+                  className="text-purple-400 shrink-0 mt-0.5"
+                />
                 <div>
                   <p className="text-sm text-purple-400 font-medium">
                     {integration.uncategorized_transactions_count} Uncategorized Transaction
                     {integration.uncategorized_transactions_count !== 1 ? 's' : ''}
                   </p>
                   <p className="text-sm text-purple-400/80 mt-1">
-                    Transactions missing expense category assignment. Categorize them to enable journal creation.
+                    Transactions missing expense category assignment. Categorize them to enable
+                    journal creation.
                   </p>
                 </div>
               </div>
@@ -566,7 +571,11 @@ function IntegrationCard({
             className="text-muted-foreground hover:text-destructive hover:bg-destructive/10"
             disabled={isRemoving}
             onClick={() => {
-              if (window.confirm(`Remove ${integration.display_name || integration.provider}? This will delete all synced data and cannot be undone.`)) {
+              if (
+                window.confirm(
+                  `Remove ${integration.display_name || integration.provider}? This will delete all synced data and cannot be undone.`
+                )
+              ) {
                 onRemove();
               }
             }}
@@ -589,16 +598,16 @@ function IntegrationCard({
               (integration.sync_status === 'completed' ||
                 (integration.stats &&
                   Object.values(integration.stats).reduce((a, b) => a + b, 0) > 0)) && (
-              <Button
-                onClick={onCreateJournals}
-                variant="outline"
-                size="sm"
-                className="gap-1.5 border-violet-500/30 text-violet-400 hover:bg-violet-500/10 hover:text-violet-300"
-              >
-                <BookOpen size={14} weight="duotone" />
-                Create Journals
-              </Button>
-            )}
+                <Button
+                  onClick={onCreateJournals}
+                  variant="outline"
+                  size="sm"
+                  className="gap-1.5 border-violet-500/30 text-violet-400 hover:bg-violet-500/10 hover:text-violet-300"
+                >
+                  <BookOpen size={14} weight="duotone" />
+                  Create Journals
+                </Button>
+              )}
             {/* Load Data button (normalization) - visible when data has been synced */}
             {(integration.sync_status === 'completed' ||
               (integration.stats &&
@@ -767,7 +776,8 @@ function AddIntegrationForm({
   const [error, setError] = useState('');
 
   const providerConfig = PROVIDERS[provider];
-  const isCompound = 'credentialType' in providerConfig && providerConfig.credentialType === 'compound';
+  const isCompound =
+    'credentialType' in providerConfig && providerConfig.credentialType === 'compound';
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -877,7 +887,11 @@ function AddIntegrationForm({
         {/* External Account ID */}
         <div>
           <label className="block text-sm font-medium text-foreground mb-2">
-            {provider === 'squarespace' ? 'Site ID' : provider === 'revolut' ? 'Business ID' : 'Account Email'}
+            {provider === 'squarespace'
+              ? 'Site ID'
+              : provider === 'revolut'
+                ? 'Business ID'
+                : 'Account Email'}
             <span className="text-destructive ml-1">*</span>
           </label>
           <Input
@@ -944,7 +958,8 @@ function AddIntegrationForm({
                 </button>
               </div>
               <p className="text-xs text-muted-foreground mt-2">
-                Get your Client ID and Secret from the PayPal Developer Dashboard under REST API apps
+                Get your Client ID and Secret from the PayPal Developer Dashboard under REST API
+                apps
               </p>
             </div>
           </>
@@ -1037,7 +1052,27 @@ export default function IntegrationsPage() {
     id: string;
     name: string;
     mode: 'hard' | 'soft';
-  } | null>(null);
+  } | null>(() => {
+    if (typeof window === 'undefined') return null;
+    try {
+      const stored = localStorage.getItem('threadwise:activeNormalizeSource');
+      return stored ? JSON.parse(stored) : null;
+    } catch {
+      return null;
+    }
+  });
+
+  // Persist activeNormalizeSource to localStorage so the toast survives page reloads
+  useEffect(() => {
+    if (activeNormalizeSource) {
+      localStorage.setItem(
+        'threadwise:activeNormalizeSource',
+        JSON.stringify(activeNormalizeSource)
+      );
+    } else {
+      localStorage.removeItem('threadwise:activeNormalizeSource');
+    }
+  }, [activeNormalizeSource]);
   const [uncategorizedModalSource, setUncategorizedModalSource] = useState<{
     id: string;
     entityId?: string;
@@ -1232,10 +1267,9 @@ export default function IntegrationsPage() {
     try {
       const result = await deleteExternalSource(sourceId);
       if (result?.status === 'deleted') {
-        toast.success(
-          `Integration removed (${result.events_deleted} events deleted)`,
-          { id: `remove-${sourceId}` }
-        );
+        toast.success(`Integration removed (${result.events_deleted} events deleted)`, {
+          id: `remove-${sourceId}`,
+        });
         await fetchData();
       } else {
         throw new Error('Failed to delete integration');
@@ -1335,14 +1369,25 @@ export default function IntegrationsPage() {
                 onSync={() => handleSync(integration.id)}
                 onSyncEndpoint={endpoint => handleSync(integration.id, endpoint)}
                 onValidateApiKey={() => handleValidateApiKey(integration.id)}
-                onUpdateApiKey={(apiKey) => handleUpdateApiKey(integration.id, apiKey)}
-                onViewUncategorized={() => setUncategorizedModalSource({ id: integration.id, entityId: integration.entity_id ?? undefined })}
+                onUpdateApiKey={apiKey => handleUpdateApiKey(integration.id, apiKey)}
+                onViewUncategorized={() =>
+                  setUncategorizedModalSource({
+                    id: integration.id,
+                    entityId: integration.entity_id ?? undefined,
+                  })
+                }
                 onCreateJournals={() => {
                   if (integration.entity_id) {
-                    const providerConfig = { squarespace: 'Squarespace', revolut: 'Revolut', paypal: 'PayPal' } as const;
+                    const providerConfig = {
+                      squarespace: 'Squarespace',
+                      revolut: 'Revolut',
+                      paypal: 'PayPal',
+                    } as const;
                     setJournalModalSource({
                       entityId: integration.entity_id,
-                      providerName: providerConfig[integration.provider as keyof typeof providerConfig] || integration.provider,
+                      providerName:
+                        providerConfig[integration.provider as keyof typeof providerConfig] ||
+                        integration.provider,
                     });
                   }
                 }}

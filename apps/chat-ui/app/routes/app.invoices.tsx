@@ -7,7 +7,7 @@
 import type { MetaFunction, LoaderFunctionArgs } from 'react-router';
 import { useLoaderData, useRevalidator } from 'react-router';
 import { InvoicesSection } from '~/components/invoices';
-import { listInvoices, getInvoiceStats } from '~/lib/api/invoices.server';
+import { getInvoiceStats } from '~/lib/api/invoices.server';
 import type { Invoice, InvoiceStats } from '~/types/invoice';
 
 export const meta: MetaFunction = () => {
@@ -17,16 +17,20 @@ export const meta: MetaFunction = () => {
   ];
 };
 
-export async function loader({ request }: LoaderFunctionArgs): Promise<{
+export async function loader({ request: _request }: LoaderFunctionArgs): Promise<{
   invoices: Invoice[];
   stats: InvoiceStats;
 }> {
-  const [invoicesResult, stats] = await Promise.all([listInvoices(), getInvoiceStats()]);
-
-  return {
-    invoices: invoicesResult.invoices,
-    stats,
+  // Auth lives in localStorage, not cookies, so the server can't hold a user
+  // session. The InvoicesSection component fetches invoices client-side using
+  // the authenticated browser Supabase client (which satisfies RLS).
+  // We return empty initial data here so the page shell renders immediately.
+  const empty: InvoiceStats = {
+    total: 0,
+    sales: { total: 0, open: 0, paid: 0, overdue: 0, outstanding: 0 },
+    purchases: { total: 0, open: 0, paid: 0, overdue: 0, payable: 0 },
   };
+  return { invoices: [], stats: empty };
 }
 
 export default function InvoicesPage() {

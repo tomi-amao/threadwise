@@ -27,7 +27,7 @@ export async function loader({
 }: LoaderFunctionArgs): Promise<{ dashboard: DashboardLoaderData }> {
   // Fetch dashboard data in parallel (only what's needed for KPIs, Health, Insights)
   const [entity, metrics, healthIndicators, orderAnalytics] = await Promise.all([
-    getEntityInfo(),
+    getEntityInfo(request),
     getDashboardMetrics(),
     getHealthIndicators(),
     getOrderAnalytics(),

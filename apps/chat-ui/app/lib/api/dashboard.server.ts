@@ -5,7 +5,7 @@
  * Uses Supabase to query financial data from the double-entry accounting system.
  */
 
-import { getServerSupabaseClient } from '~/lib/supabase';
+import { getServerSupabaseClient, getAuthenticatedServerClient } from '~/lib/supabase';
 
 // Types for database schema
 export interface Account {
@@ -550,14 +550,61 @@ export async function getHealthIndicators(): Promise<HealthMetric[]> {
 }
 
 /**
- * Get entity information
+ * Get entity information for the authenticated user
+ * Fetches the entity owned by the current user (auth.users)
+ *
+ * Note: This requires proper server-side auth setup with Supabase.
+ * Token extraction from cookies or explicit passing is required.
  */
-export async function getEntityInfo(): Promise<{ id: string; name: string } | null> {
-  const supabase = getSupabaseClient();
+export async function getEntityInfo(
+  request: Request
+): Promise<{ id: string; name: string } | null> {
+  try {
+    const supabase = getAuthenticatedServerClient(request);
 
-  const { data } = await supabase.from('entities').select('id, name').limit(1).single();
+    // Get the authenticated user
+    const {
+      data: { user },
+      error: authError,
+    } = await supabase.auth.getUser();
 
-  return data;
+    if (authError) {
+      console.warn(
+        'Auth error in getEntityInfo (expected in dev without cookies):',
+        authError.message
+      );
+      // Return null if auth fails - this is expected if not using cookie-based auth
+      return null;
+    }
+
+    if (!user) {
+      console.debug('No authenticated user found in server request');
+      return null;
+    }
+
+    // Fetch the entity owned by this user
+    const { data, error } = await supabase
+      .from('entities')
+      .select('id, name')
+      .eq('owner_user_id', user.id)
+      .single();
+
+    console.log('Entity data:', data);
+
+    if (error) {
+      console.warn('Error fetching entity for user:', error.message);
+      return null;
+    }
+
+    return data;
+  } catch (error) {
+    console.warn(
+      'Unexpected error in getEntityInfo:',
+      error instanceof Error ? error.message : error
+    );
+    // Return null on error - the route should handle null entity gracefully
+    return null;
+  }
 }
 
 /**

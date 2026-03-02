@@ -200,6 +200,8 @@ async def normalize_batch(ctx: inngest.Context) -> Dict[str, Any]:
         channel_source_id = event_data.get("source_id_for_channel")
         total_pending_count = event_data.get("total_pending_count")
         cumulative_processed = event_data.get("cumulative_processed", 0)
+        cumulative_succeeded = event_data.get("cumulative_succeeded", 0)
+        cumulative_failed = event_data.get("cumulative_failed", 0)
         
         ctx.logger.info(
             f"Starting batch normalization (type={entity_type}, limit={limit})"
@@ -283,8 +285,8 @@ async def normalize_batch(ctx: inngest.Context) -> Dict[str, Any]:
                             status="processing",
                             events_processed=cumulative_processed + total_done,
                             events_total=effective_total,
-                            events_succeeded=results["completed"],
-                            events_failed=results["failed"],
+                            events_succeeded=cumulative_succeeded + results["completed"],
+                            events_failed=cumulative_failed + results["failed"],
                             error=None,
                             timestamp=datetime.now().isoformat(),
                         ),
@@ -314,8 +316,8 @@ async def normalize_batch(ctx: inngest.Context) -> Dict[str, Any]:
                         status="completed" if is_final_batch else "processing",
                         events_processed=final_processed,
                         events_total=effective_total,
-                        events_succeeded=results["completed"],
-                        events_failed=results["failed"],
+                        events_succeeded=cumulative_succeeded + results["completed"],
+                        events_failed=cumulative_failed + results["failed"],
                         error=None,
                         timestamp=datetime.now().isoformat(),
                     ),
@@ -488,6 +490,8 @@ async def normalize_source(ctx: inngest.Context) -> Dict[str, Any]:
                         "source_id_for_channel": source_id,
                         "total_pending_count": pending_count,
                         "cumulative_processed": type_results["completed"] + type_results["failed"] + type_results["skipped"],
+                        "cumulative_succeeded": type_results["completed"],
+                        "cumulative_failed": type_results["failed"],
                     }
                 )
                 

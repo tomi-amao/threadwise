@@ -457,10 +457,8 @@ class SquarespaceNormalizer(BaseNormalizer):
         """
         warnings: List[str] = []
         
-        # Provider-specific fields → metadata
-        metadata: Dict[str, Any] = {}
-        if payload.get("descriptor"):
-            metadata["descriptor"] = payload["descriptor"]
+        # Extract description from descriptor field
+        description = payload.get("descriptor")
 
         canonical_item = CanonicalInventoryItem(
             # Provenance
@@ -475,12 +473,11 @@ class SquarespaceNormalizer(BaseNormalizer):
             variant_external_id=payload.get("variantId", external_id),
             sku=payload.get("sku"),
             
-            # Inventory levels
-            quantity=payload.get("quantity", 0),
+            # Inventory flags
             is_unlimited=payload.get("isUnlimited", False),
             
-            # Provider-specific
-            metadata=metadata,
+            # Item details
+            description=description,
         )
         
         return NormalizationResult.success_result(

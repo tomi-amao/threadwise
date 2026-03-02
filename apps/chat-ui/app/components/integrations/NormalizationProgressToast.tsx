@@ -122,9 +122,9 @@ function StatusIndicator({ status }: { status: string }) {
 function getApiBaseUrl(): string {
   if (typeof window !== 'undefined') {
     // @ts-ignore
-    return import.meta.env?.VITE_AI_AGENT_URL || 'http://localhost:8000';
+    return import.meta.env?.VITE_AI_AGENT_URL || 'http://localhost:2024';
   }
-  return process.env.AI_AGENT_URL || process.env.VITE_AI_AGENT_URL || 'http://localhost:8000';
+  return process.env.AI_AGENT_URL || process.env.VITE_AI_AGENT_URL || 'http://localhost:2024';
 }
 
 // =============================================================================
@@ -210,6 +210,7 @@ export function NormalizationProgressToast({
                   existing.events_processed,
                   progressData.events_processed
                 ),
+                events_total: Math.max(existing.events_total, progressData.events_total),
                 events_succeeded: Math.max(
                   existing.events_succeeded,
                   progressData.events_succeeded
@@ -224,6 +225,7 @@ export function NormalizationProgressToast({
             const merged: NormalizationProgressData = {
               ...progressData,
               events_processed: Math.max(existing.events_processed, progressData.events_processed),
+              events_total: Math.max(existing.events_total, progressData.events_total),
               events_succeeded: Math.max(existing.events_succeeded, progressData.events_succeeded),
               events_failed: Math.max(existing.events_failed, progressData.events_failed),
             };
@@ -393,14 +395,16 @@ export function NormalizationProgressToast({
               </div>
             ) : (
               Array.from(entityProgress.entries())
-                .filter(([_, progress]) => progress.events_total > 0 || progress.status === 'processing')
+                .filter(
+                  ([_, progress]) => progress.events_total > 0 || progress.status === 'processing'
+                )
                 .map(([entityType, progress]) => (
-                <EntityTypeProgressCard
-                  key={entityType}
-                  entityType={entityType}
-                  progress={progress}
-                />
-              ))
+                  <EntityTypeProgressCard
+                    key={entityType}
+                    entityType={entityType}
+                    progress={progress}
+                  />
+                ))
             )}
           </div>
 

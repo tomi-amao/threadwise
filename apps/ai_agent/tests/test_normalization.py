@@ -356,10 +356,8 @@ class TestSquarespaceNormalizer:
         
         item = result.canonical
         assert item.sku == "D2DHL"
-        assert item.quantity == 25
         assert item.is_unlimited is False
-        # Provider-specific fields moved to metadata
-        assert item.metadata["descriptor"] == "D2D FLOCK HOODIE [L]"
+        assert item.description == "D2D FLOCK HOODIE [L]"
     
     def test_normalize_unsupported_type(self, entity_id, raw_event_id):
         """Test normalization of unsupported entity type."""

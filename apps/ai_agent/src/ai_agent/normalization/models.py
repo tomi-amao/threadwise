@@ -133,6 +133,8 @@ class TxnType(str, Enum):
     TRANSFER = "transfer"
     FX_CONVERSION = "fx_conversion"
     INTEREST = "interest"
+    RESERVE_HOLD = "reserve_hold"
+    RESERVE_RELEASE = "reserve_release"
     OTHER = "other"
 
 
@@ -434,28 +436,73 @@ class CanonicalProduct(CanonicalBase):
     metadata: Dict[str, Any] = Field(default_factory=dict, description="Provider-specific fields")
 
 
+class InventoryMovementType(str, Enum):
+    """Types of inventory movements."""
+
+    INITIAL = "INITIAL"        # Opening / migration balance
+    SALE = "SALE"              # Stock out from a fulfilled order
+    PURCHASE = "PURCHASE"      # Stock in from a purchase invoice
+    RETURN = "RETURN"          # Stock in from a customer return
+    ADJUSTMENT = "ADJUSTMENT"  # Manual or provider-sync adjustment
+
+
 class CanonicalInventoryItem(CanonicalBase):
     """Canonical inventory item model.
     
     Represents inventory for a specific product variant.
     Only contains fields universal to every provider.
-    Provider-specific data lives in metadata.
+    
+    Stock quantity is tracked via the inventory_movements ledger,
+    not stored directly on this record.
     """
     
     # Entity scoping
     entity_id: UUID
     
     # Product reference
-    product_external_id: Optional[str] = None
     variant_external_id: str
     sku: Optional[str] = None
     
-    # Inventory levels
-    quantity: int = 0
+    # Flags
     is_unlimited: bool = False
     
-    # Provider-specific extras
-    metadata: Dict[str, Any] = Field(default_factory=dict, description="Provider-specific fields")
+    # Item details
+    description: Optional[str] = None
+    category: Optional[str] = None
+    unit_cost: Decimal = Decimal("0")
+    
+    # GL account references
+    asset_account_id: Optional[UUID] = None
+    cogs_account_id: Optional[UUID] = None
+
+
+class CanonicalInventoryMovement(BaseModel):
+    """Canonical inventory movement model.
+    
+    Represents a single stock movement in the inventory ledger.
+    Positive quantity = stock IN; negative = stock OUT.
+    """
+    
+    model_config = ConfigDict(frozen=True)
+    
+    # Which inventory item
+    inventory_item_id: Optional[UUID] = None  # Resolved at persistence time
+    
+    # Identifiers to resolve inventory_item_id if not known
+    entity_id: UUID
+    provider: str
+    variant_external_id: str
+    
+    # Movement details
+    transaction_type: InventoryMovementType
+    quantity: Decimal  # positive = IN, negative = OUT
+    unit_cost: Decimal = Decimal("0")
+    
+    # Reference to source record
+    reference_id: Optional[UUID] = None
+    reference_table: Optional[str] = None  # 'order_line_items', 'invoice_line_items'
+    
+    notes: Optional[str] = None
 
 
 class CanonicalInventoryAdjustment(BaseModel):

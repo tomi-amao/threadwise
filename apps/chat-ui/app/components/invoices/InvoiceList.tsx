@@ -1,270 +1,163 @@
 import React, { useState } from 'react';
 import {
-  File,
+  Receipt,
   Eye,
   Trash,
-  PencilSimple,
-  Check,
-  X,
-  Clock,
-  Warning,
-  CheckCircle,
-  XCircle,
-  DotsThreeVertical,
   Download,
   CaretDown,
   CaretUp,
-  Brain,
-  CircleNotch,
-  Sparkle,
+  ArrowUUpLeft,
+  Tag,
+  PencilSimple,
 } from 'phosphor-react';
-import type { Invoice, InvoiceStatus, UpdateInvoiceInput, ExtractionStatus } from '~/types/invoice';
+import { SearchableSelect } from '~/components/ui/searchable-select';
+import type { Invoice, InvoiceStatus, InvoiceType } from '~/types/invoice';
 
 interface InvoiceListProps {
   invoices: Invoice[];
   onView: (invoice: Invoice) => void;
-  onEdit: (id: string, data: UpdateInvoiceInput) => Promise<void>;
+  onUpdateStatus: (id: string, status: InvoiceStatus) => Promise<void>;
   onDelete: (id: string) => Promise<void>;
   onDownload: (invoice: Invoice) => void;
+  onEdit?: (invoice: Invoice) => void;
   isLoading?: boolean;
 }
 
-// Status badge component
+// ─── Type Badge ────────────────────────────────────────────────────────────────
+function TypeBadge({ type }: { type: InvoiceType }) {
+  const isSale = type === 'SALE';
+  return (
+    <span
+      className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold border ${
+        isSale
+          ? 'bg-blue-500/15 text-blue-400 border-blue-500/30'
+          : 'bg-orange-500/15 text-orange-400 border-orange-500/30'
+      }`}
+    >
+      <Tag size={11} weight="bold" />
+      {isSale ? 'Sale' : 'Purchase'}
+    </span>
+  );
+}
+
+// ─── Status Badge ──────────────────────────────────────────────────────────────
+const STATUS_CONFIG: Record<InvoiceStatus, { label: string; className: string }> = {
+  DRAFT: { label: 'Draft', className: 'bg-slate-500/20 text-slate-400 border-slate-500/30' },
+  OPEN: { label: 'Open', className: 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30' },
+  PAID: { label: 'Paid', className: 'bg-green-500/20 text-green-400 border-green-500/30' },
+  PARTIALLY_PAID: {
+    label: 'Partial',
+    className: 'bg-teal-500/20 text-teal-400 border-teal-500/30',
+  },
+  OVERDUE: { label: 'Overdue', className: 'bg-red-500/20 text-red-400 border-red-500/30' },
+  CANCELLED: { label: 'Cancelled', className: 'bg-gray-500/20 text-gray-400 border-gray-500/30' },
+  VOID: { label: 'Void', className: 'bg-gray-600/20 text-gray-500 border-gray-600/30' },
+};
+
 function StatusBadge({ status }: { status: InvoiceStatus }) {
-  const configs: Record<
-    InvoiceStatus,
-    { icon: React.ReactNode; label: string; className: string }
-  > = {
-    pending: {
-      icon: <Clock size={14} weight="bold" />,
-      label: 'Pending',
-      className: 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30',
-    },
-    paid: {
-      icon: <CheckCircle size={14} weight="bold" />,
-      label: 'Paid',
-      className: 'bg-green-500/20 text-green-400 border-green-500/30',
-    },
-    overdue: {
-      icon: <Warning size={14} weight="bold" />,
-      label: 'Overdue',
-      className: 'bg-red-500/20 text-red-400 border-red-500/30',
-    },
-    cancelled: {
-      icon: <XCircle size={14} weight="bold" />,
-      label: 'Cancelled',
-      className: 'bg-gray-500/20 text-gray-400 border-gray-500/30',
-    },
-  };
-
-  const config = configs[status];
-
+  const cfg = STATUS_CONFIG[status] ?? STATUS_CONFIG.DRAFT;
   return (
     <span
-      className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border ${config.className}`}
+      className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium border ${cfg.className}`}
     >
-      {config.icon}
-      {config.label}
+      {cfg.label}
     </span>
   );
 }
 
-// Extraction status badge component
-function ExtractionBadge({
-  status,
-  confidence,
+// ─── Status Select (quick update) ─────────────────────────────────────────────
+const STATUS_OPTIONS = (Object.keys(STATUS_CONFIG) as InvoiceStatus[]).map(s => ({
+  value: s,
+  label: STATUS_CONFIG[s].label,
+}));
+
+function StatusSelect({
+  current,
+  onChange,
 }: {
-  status: ExtractionStatus | null;
-  confidence: number | null;
+  current: InvoiceStatus;
+  onChange: (s: InvoiceStatus) => void;
 }) {
-  if (!status) return null;
-
-  const configs: Record<
-    ExtractionStatus,
-    { icon: React.ReactNode; label: string; className: string }
-  > = {
-    pending: {
-      icon: <Clock size={12} weight="bold" />,
-      label: 'Awaiting AI',
-      className: 'bg-slate-500/20 text-slate-400 border-slate-500/30',
-    },
-    processing: {
-      icon: <CircleNotch size={12} weight="bold" className="animate-spin" />,
-      label: 'Processing',
-      className: 'bg-blue-500/20 text-blue-400 border-blue-500/30',
-    },
-    completed: {
-      icon: <Sparkle size={12} weight="bold" />,
-      label: confidence ? `AI ${Math.round(confidence * 100)}%` : 'AI Extracted',
-      className: 'bg-purple-500/20 text-purple-400 border-purple-500/30',
-    },
-    failed: {
-      icon: <XCircle size={12} weight="bold" />,
-      label: 'AI Failed',
-      className: 'bg-red-500/20 text-red-400 border-red-500/30',
-    },
-  };
-
-  const config = configs[status];
-
   return (
-    <span
-      className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium border ${config.className}`}
-      title={`Document extraction: ${status}${confidence ? ` (${Math.round(confidence * 100)}% confidence)` : ''}`}
-    >
-      {config.icon}
-      {config.label}
-    </span>
+    <SearchableSelect
+      options={STATUS_OPTIONS}
+      value={current}
+      onChange={s => onChange(s as InvoiceStatus)}
+      searchable={false}
+      stopPropagation
+      className="px-2 py-1"
+      renderValue={opt => {
+        if (!opt) return null;
+        const cfg = STATUS_CONFIG[opt.value as InvoiceStatus];
+        const textClass = cfg?.className.split(' ').find(c => c.startsWith('text-')) ?? '';
+        return (
+          <span className={`text-xs font-medium ${textClass}`}>{cfg?.label ?? opt.label}</span>
+        );
+      }}
+      renderOption={opt => (
+        <span
+          className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border ${
+            STATUS_CONFIG[opt.value as InvoiceStatus]?.className ?? ''
+          }`}
+        >
+          {STATUS_CONFIG[opt.value as InvoiceStatus]?.label ?? opt.label}
+        </span>
+      )}
+    />
   );
 }
 
-// Inline edit form for quick edits
-function InlineEditForm({
-  invoice,
-  onSave,
-  onCancel,
-}: {
-  invoice: Invoice;
-  onSave: (data: UpdateInvoiceInput) => void;
-  onCancel: () => void;
-}) {
-  const [formData, setFormData] = useState({
-    vendor_name: invoice.vendor_name || '',
-    invoice_number: invoice.invoice_number || '',
-    amount: invoice.amount?.toString() || '',
-    status: invoice.status,
-  });
-
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    onSave({
-      vendor_name: formData.vendor_name || undefined,
-      invoice_number: formData.invoice_number || undefined,
-      amount: formData.amount ? parseFloat(formData.amount) : undefined,
-      status: formData.status,
-    });
-  };
-
-  return (
-    <form onSubmit={handleSubmit} className="flex items-center gap-2 flex-wrap">
-      <input
-        type="text"
-        value={formData.vendor_name}
-        onChange={e => setFormData({ ...formData, vendor_name: e.target.value })}
-        placeholder="Vendor"
-        className="px-2 py-1 text-sm bg-background border border-border rounded w-32"
-      />
-      <input
-        type="text"
-        value={formData.invoice_number}
-        onChange={e => setFormData({ ...formData, invoice_number: e.target.value })}
-        placeholder="Invoice #"
-        className="px-2 py-1 text-sm bg-background border border-border rounded w-24"
-      />
-      <input
-        type="number"
-        step="0.01"
-        value={formData.amount}
-        onChange={e => setFormData({ ...formData, amount: e.target.value })}
-        placeholder="Amount"
-        className="px-2 py-1 text-sm bg-background border border-border rounded w-24"
-      />
-      <select
-        value={formData.status}
-        onChange={e => setFormData({ ...formData, status: e.target.value as InvoiceStatus })}
-        className="px-2 py-1 text-sm bg-background border border-border rounded"
-      >
-        <option value="pending">Pending</option>
-        <option value="paid">Paid</option>
-        <option value="overdue">Overdue</option>
-        <option value="cancelled">Cancelled</option>
-      </select>
-      <button type="submit" className="p-1.5 hover:bg-green-500/20 rounded text-green-400">
-        <Check size={16} weight="bold" />
-      </button>
-      <button
-        type="button"
-        onClick={onCancel}
-        className="p-1.5 hover:bg-red-500/20 rounded text-red-400"
-      >
-        <X size={16} weight="bold" />
-      </button>
-    </form>
-  );
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+function formatCurrency(amount: number | null | undefined, currency: string = 'EUR'): string {
+  if (amount == null) return '—';
+  return new Intl.NumberFormat('en-IE', { style: 'currency', currency }).format(amount);
 }
 
-// Format currency
-function formatCurrency(amount: number | null, currency: string = 'USD'): string {
-  if (amount === null) return '-';
-  return new Intl.NumberFormat('en-US', {
-    style: 'currency',
-    currency,
-  }).format(amount);
-}
-
-// Format date
-function formatDate(dateStr: string | null): string {
-  if (!dateStr) return '-';
-  return new Date(dateStr).toLocaleDateString('en-US', {
-    month: 'short',
+function formatDate(dateStr: string | null | undefined): string {
+  if (!dateStr) return '—';
+  return new Date(dateStr).toLocaleDateString('en-IE', {
     day: 'numeric',
+    month: 'short',
     year: 'numeric',
   });
 }
 
-// Format file size
-function formatFileSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+function contactDisplayName(invoice: Invoice): string {
+  if (!invoice.contacts) return '—';
+  return invoice.contacts.company_name || invoice.contacts.name || '—';
 }
 
-/**
- * InvoiceList Component
- *
- * Displays list of invoices with:
- * - Sortable columns
- * - Status badges
- * - Inline editing
- * - Actions (view, edit, delete, download)
- */
+// ─── Main Component ────────────────────────────────────────────────────────────
 export function InvoiceList({
   invoices,
   onView,
-  onEdit,
+  onUpdateStatus,
   onDelete,
   onDownload,
+  onEdit,
   isLoading,
 }: InvoiceListProps) {
-  const [editingId, setEditingId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
-  const [sortField, setSortField] = useState<keyof Invoice>('uploaded_at');
+  const [editingStatusId, setEditingStatusId] = useState<string | null>(null);
+  const [sortField, setSortField] = useState<keyof Invoice>('created_at');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
-  const [expandedRow, setExpandedRow] = useState<string | null>(null);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
 
   const handleSort = (field: keyof Invoice) => {
-    if (sortField === field) {
-      setSortDir(sortDir === 'asc' ? 'desc' : 'asc');
-    } else {
+    if (sortField === field) setSortDir(d => (d === 'asc' ? 'desc' : 'asc'));
+    else {
       setSortField(field);
       setSortDir('desc');
     }
   };
 
-  const sortedInvoices = [...invoices].sort((a, b) => {
-    const aVal = a[sortField];
-    const bVal = b[sortField];
-    if (aVal === null || aVal === undefined) return 1;
-    if (bVal === null || bVal === undefined) return -1;
-    if (aVal < bVal) return sortDir === 'asc' ? -1 : 1;
-    if (aVal > bVal) return sortDir === 'asc' ? 1 : -1;
-    return 0;
+  const sorted = [...invoices].sort((a, b) => {
+    const av = a[sortField],
+      bv = b[sortField];
+    if (av == null) return 1;
+    if (bv == null) return -1;
+    return av < bv ? (sortDir === 'asc' ? -1 : 1) : av > bv ? (sortDir === 'asc' ? 1 : -1) : 0;
   });
-
-  const handleEditSave = async (id: string, data: UpdateInvoiceInput) => {
-    await onEdit(id, data);
-    setEditingId(null);
-  };
 
   const handleDelete = async (id: string) => {
     setDeletingId(id);
@@ -272,21 +165,25 @@ export function InvoiceList({
     setDeletingId(null);
   };
 
-  const SortIcon = ({ field }: { field: keyof Invoice }) => {
-    if (sortField !== field) return null;
-    return sortDir === 'asc' ? (
-      <CaretUp size={14} weight="bold" />
-    ) : (
-      <CaretDown size={14} weight="bold" />
-    );
+  const handleStatusChange = async (id: string, status: InvoiceStatus) => {
+    setEditingStatusId(id);
+    await onUpdateStatus(id, status);
+    setEditingStatusId(null);
   };
 
-  if (invoices.length === 0) {
+  const SortIcon = ({ field }: { field: keyof Invoice }) =>
+    sortField !== field ? null : sortDir === 'asc' ? (
+      <CaretUp size={13} weight="bold" />
+    ) : (
+      <CaretDown size={13} weight="bold" />
+    );
+
+  if (!isLoading && invoices.length === 0) {
     return (
-      <div className="text-center py-12 text-muted-foreground">
-        <File size={48} className="mx-auto mb-4 opacity-50" />
-        <p className="text-lg font-medium">No invoices yet</p>
-        <p className="text-sm mt-1">Upload your first invoice to get started</p>
+      <div className="text-center py-14 text-muted-foreground">
+        <Receipt size={48} className="mx-auto mb-3 opacity-40" />
+        <p className="text-base font-medium">No invoices yet</p>
+        <p className="text-sm mt-1">Upload an invoice to get started</p>
       </div>
     );
   }
@@ -296,23 +193,15 @@ export function InvoiceList({
       <table className="w-full text-sm">
         <thead>
           <tr className="border-b border-border text-left">
-            <th className="pb-3 font-medium text-muted-foreground">
+            <th className="pb-3 font-medium text-muted-foreground pr-4">
               <button
-                onClick={() => handleSort('file_name')}
+                onClick={() => handleSort('invoice_type')}
                 className="flex items-center gap-1 hover:text-foreground"
               >
-                File <SortIcon field="file_name" />
+                Type <SortIcon field="invoice_type" />
               </button>
             </th>
-            <th className="pb-3 font-medium text-muted-foreground">
-              <button
-                onClick={() => handleSort('vendor_name')}
-                className="flex items-center gap-1 hover:text-foreground"
-              >
-                Vendor <SortIcon field="vendor_name" />
-              </button>
-            </th>
-            <th className="pb-3 font-medium text-muted-foreground hidden md:table-cell">
+            <th className="pb-3 font-medium text-muted-foreground pr-4">
               <button
                 onClick={() => handleSort('invoice_number')}
                 className="flex items-center gap-1 hover:text-foreground"
@@ -320,15 +209,18 @@ export function InvoiceList({
                 Invoice # <SortIcon field="invoice_number" />
               </button>
             </th>
-            <th className="pb-3 font-medium text-muted-foreground">
+            <th className="pb-3 font-medium text-muted-foreground pr-4 hidden sm:table-cell">
+              Contact
+            </th>
+            <th className="pb-3 font-medium text-muted-foreground pr-4">
               <button
-                onClick={() => handleSort('amount')}
+                onClick={() => handleSort('gross_amount')}
                 className="flex items-center gap-1 hover:text-foreground"
               >
-                Amount <SortIcon field="amount" />
+                Total <SortIcon field="gross_amount" />
               </button>
             </th>
-            <th className="pb-3 font-medium text-muted-foreground hidden lg:table-cell">
+            <th className="pb-3 font-medium text-muted-foreground pr-4 hidden md:table-cell">
               <button
                 onClick={() => handleSort('invoice_date')}
                 className="flex items-center gap-1 hover:text-foreground"
@@ -336,7 +228,15 @@ export function InvoiceList({
                 Date <SortIcon field="invoice_date" />
               </button>
             </th>
-            <th className="pb-3 font-medium text-muted-foreground">
+            <th className="pb-3 font-medium text-muted-foreground pr-4 hidden md:table-cell">
+              <button
+                onClick={() => handleSort('due_date')}
+                className="flex items-center gap-1 hover:text-foreground"
+              >
+                Due <SortIcon field="due_date" />
+              </button>
+            </th>
+            <th className="pb-3 font-medium text-muted-foreground pr-4">
               <button
                 onClick={() => handleSort('status')}
                 className="flex items-center gap-1 hover:text-foreground"
@@ -348,170 +248,189 @@ export function InvoiceList({
           </tr>
         </thead>
         <tbody>
-          {sortedInvoices.map(invoice => (
+          {sorted.map(invoice => (
             <React.Fragment key={invoice.id}>
               <tr
-                className={`border-b border-border/50 hover:bg-muted/30 transition-colors ${
-                  deletingId === invoice.id ? 'opacity-50' : ''
+                className={`border-b border-border/50 hover:bg-muted/20 transition-colors cursor-pointer ${
+                  deletingId === invoice.id ? 'opacity-40' : ''
                 }`}
+                onClick={() => setExpandedId(expandedId === invoice.id ? null : invoice.id)}
               >
-                {editingId === invoice.id ? (
-                  <td colSpan={7} className="py-3 px-2">
-                    <InlineEditForm
-                      invoice={invoice}
-                      onSave={data => handleEditSave(invoice.id, data)}
-                      onCancel={() => setEditingId(null)}
+                {/* Type */}
+                <td className="py-3 pr-4">
+                  <TypeBadge type={invoice.invoice_type} />
+                </td>
+
+                {/* Invoice # */}
+                <td className="py-3 pr-4 font-mono text-xs text-muted-foreground">
+                  {invoice.invoice_number || <span className="italic">—</span>}
+                </td>
+
+                {/* Contact */}
+                <td className="py-3 pr-4 hidden sm:table-cell max-w-40">
+                  <span className="truncate block">{contactDisplayName(invoice)}</span>
+                </td>
+
+                {/* Total (gross) */}
+                <td className="py-3 pr-4 font-semibold tabular-nums">
+                  {formatCurrency(invoice.gross_amount, invoice.currency)}
+                </td>
+
+                {/* Invoice date */}
+                <td className="py-3 pr-4 text-muted-foreground hidden md:table-cell">
+                  {formatDate(invoice.invoice_date)}
+                </td>
+
+                {/* Due date */}
+                <td className="py-3 pr-4 text-muted-foreground hidden md:table-cell">
+                  {formatDate(invoice.due_date)}
+                </td>
+
+                {/* Status */}
+                <td className="py-3 pr-4" onClick={e => e.stopPropagation()}>
+                  {editingStatusId === invoice.id ? (
+                    <span className="text-xs text-muted-foreground">Saving…</span>
+                  ) : (
+                    <StatusSelect
+                      current={invoice.status}
+                      onChange={s => handleStatusChange(invoice.id, s)}
                     />
-                  </td>
-                ) : (
-                  <>
-                    <td className="py-3">
-                      <div className="flex items-center gap-2">
-                        <File size={18} className="text-primary" weight="duotone" />
-                        <div className="min-w-0">
-                          <p className="font-medium truncate max-w-[150px]">{invoice.file_name}</p>
-                          <p className="text-xs text-muted-foreground">
-                            {formatFileSize(invoice.file_size)}
-                          </p>
-                        </div>
-                      </div>
-                    </td>
-                    <td className="py-3">
-                      {invoice.vendor_name || (
-                        <span className="text-muted-foreground italic">Unknown</span>
-                      )}
-                    </td>
-                    <td className="py-3 hidden md:table-cell">{invoice.invoice_number || '-'}</td>
-                    <td className="py-3 font-medium">
-                      {formatCurrency(invoice.amount, invoice.currency)}
-                    </td>
-                    <td className="py-3 hidden lg:table-cell">
-                      {formatDate(invoice.invoice_date)}
-                    </td>
-                    <td className="py-3">
-                      <div className="flex flex-col gap-1">
-                        <StatusBadge status={invoice.status} />
-                        <ExtractionBadge
-                          status={invoice.extraction_status ?? null}
-                          confidence={invoice.extraction_confidence ?? null}
-                        />
-                      </div>
-                    </td>
-                    <td className="py-3">
-                      <div className="flex items-center justify-end gap-1">
-                        <button
-                          onClick={() => onView(invoice)}
-                          className="p-1.5 hover:bg-muted rounded text-muted-foreground hover:text-foreground"
-                          title="View"
-                        >
-                          <Eye size={16} />
-                        </button>
-                        <button
-                          onClick={() => onDownload(invoice)}
-                          className="p-1.5 hover:bg-muted rounded text-muted-foreground hover:text-foreground"
-                          title="Download"
-                        >
-                          <Download size={16} />
-                        </button>
-                        <button
-                          onClick={() => setEditingId(invoice.id)}
-                          className="p-1.5 hover:bg-muted rounded text-muted-foreground hover:text-foreground"
-                          title="Edit"
-                        >
-                          <PencilSimple size={16} />
-                        </button>
-                        <button
-                          onClick={() => handleDelete(invoice.id)}
-                          disabled={deletingId === invoice.id}
-                          className="p-1.5 hover:bg-destructive/20 rounded text-muted-foreground hover:text-destructive"
-                          title="Delete"
-                        >
-                          <Trash size={16} />
-                        </button>
-                        <button
-                          onClick={() =>
-                            setExpandedRow(expandedRow === invoice.id ? null : invoice.id)
-                          }
-                          className="p-1.5 hover:bg-muted rounded text-muted-foreground hover:text-foreground lg:hidden"
-                          title="More details"
-                        >
-                          <DotsThreeVertical size={16} />
-                        </button>
-                      </div>
-                    </td>
-                  </>
-                )}
+                  )}
+                </td>
+
+                {/* Actions */}
+                <td className="py-3" onClick={e => e.stopPropagation()}>
+                  <div className="flex items-center justify-end gap-1">
+                    {onEdit && (
+                      <button
+                        onClick={() => onEdit(invoice)}
+                        className="p-1.5 hover:bg-primary/10 rounded text-muted-foreground hover:text-primary"
+                        title="Edit invoice"
+                      >
+                        <PencilSimple size={16} />
+                      </button>
+                    )}
+                    <button
+                      onClick={() => onView(invoice)}
+                      className="p-1.5 hover:bg-muted rounded text-muted-foreground hover:text-foreground"
+                      title="View document"
+                    >
+                      <Eye size={16} />
+                    </button>
+                    <button
+                      onClick={() => onDownload(invoice)}
+                      className="p-1.5 hover:bg-muted rounded text-muted-foreground hover:text-foreground"
+                      title="Download"
+                    >
+                      <Download size={16} />
+                    </button>
+                    <button
+                      onClick={() => handleDelete(invoice.id)}
+                      disabled={deletingId === invoice.id}
+                      className="p-1.5 hover:bg-destructive/20 rounded text-muted-foreground hover:text-destructive disabled:opacity-40"
+                      title="Delete"
+                    >
+                      <Trash size={16} />
+                    </button>
+                  </div>
+                </td>
               </tr>
-              {/* Mobile expanded row */}
-              {expandedRow === invoice.id && (
-                <tr className="lg:hidden bg-muted/20">
-                  <td colSpan={7} className="py-3 px-4 text-sm">
-                    <div className="grid grid-cols-2 gap-3">
+
+              {/* ── Expanded row: amounts breakdown + line items ── */}
+              {expandedId === invoice.id && (
+                <tr className="bg-muted/10">
+                  <td colSpan={8} className="px-4 py-4">
+                    <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4 mb-4 text-xs">
                       <div>
-                        <span className="text-muted-foreground">Invoice #:</span>
-                        <span className="ml-2">{invoice.invoice_number || '-'}</span>
+                        <p className="text-muted-foreground mb-0.5">Net</p>
+                        <p className="font-medium tabular-nums">
+                          {formatCurrency(invoice.net_amount, invoice.currency)}
+                        </p>
                       </div>
                       <div>
-                        <span className="text-muted-foreground">Date:</span>
-                        <span className="ml-2">{formatDate(invoice.invoice_date)}</span>
+                        <p className="text-muted-foreground mb-0.5">Tax</p>
+                        <p className="font-medium tabular-nums">
+                          {formatCurrency(invoice.tax_amount, invoice.currency)}
+                        </p>
                       </div>
                       <div>
-                        <span className="text-muted-foreground">Due:</span>
-                        <span className="ml-2">{formatDate(invoice.due_date)}</span>
+                        <p className="text-muted-foreground mb-0.5">Gross</p>
+                        <p className="font-semibold tabular-nums">
+                          {formatCurrency(invoice.gross_amount, invoice.currency)}
+                        </p>
                       </div>
-                      <div>
-                        <span className="text-muted-foreground">Uploaded:</span>
-                        <span className="ml-2">{formatDate(invoice.uploaded_at)}</span>
+                      <div className="sm:hidden">
+                        <p className="text-muted-foreground mb-0.5">Date</p>
+                        <p>{formatDate(invoice.invoice_date)}</p>
                       </div>
-                      {invoice.document_category && (
-                        <div>
-                          <span className="text-muted-foreground">Category:</span>
-                          <span className="ml-2 capitalize">{invoice.document_category}</span>
-                        </div>
-                      )}
-                      {invoice.extraction_status === 'completed' && invoice.subtotal && (
-                        <div>
-                          <span className="text-muted-foreground">Subtotal:</span>
-                          <span className="ml-2">
-                            {formatCurrency(invoice.subtotal, invoice.currency)}
-                          </span>
-                        </div>
-                      )}
-                      {invoice.extraction_status === 'completed' && invoice.tax_amount && (
-                        <div>
-                          <span className="text-muted-foreground">Tax:</span>
-                          <span className="ml-2">
-                            {formatCurrency(invoice.tax_amount, invoice.currency)}
-                          </span>
+                      {invoice.contacts && (
+                        <div className="sm:hidden">
+                          <p className="text-muted-foreground mb-0.5">Contact</p>
+                          <p>{contactDisplayName(invoice)}</p>
                         </div>
                       )}
                       {invoice.notes && (
-                        <div className="col-span-2">
-                          <span className="text-muted-foreground">Notes:</span>
-                          <p className="mt-1">{invoice.notes}</p>
-                        </div>
-                      )}
-                      {invoice.line_items && invoice.line_items.length > 0 && (
-                        <div className="col-span-2">
-                          <span className="text-muted-foreground">
-                            Line Items ({invoice.line_items.length}):
-                          </span>
-                          <ul className="mt-1 space-y-1">
-                            {invoice.line_items.slice(0, 3).map((item, idx) => (
-                              <li key={idx} className="text-xs">
-                                {item.description} {item.quantity && `x${item.quantity}`} -{' '}
-                                {formatCurrency(item.total_price, invoice.currency)}
-                              </li>
-                            ))}
-                            {invoice.line_items.length > 3 && (
-                              <li className="text-xs text-muted-foreground">
-                                +{invoice.line_items.length - 3} more items...
-                              </li>
-                            )}
-                          </ul>
+                        <div className="col-span-2 sm:col-span-3 lg:col-span-5">
+                          <p className="text-muted-foreground mb-0.5">Notes</p>
+                          <p>{invoice.notes}</p>
                         </div>
                       )}
                     </div>
+
+                    {/* Line items */}
+                    {invoice.invoice_line_items && invoice.invoice_line_items.length > 0 && (
+                      <div>
+                        <p className="text-xs font-medium text-muted-foreground mb-2">
+                          Line Items ({invoice.invoice_line_items.length})
+                        </p>
+                        <table className="w-full text-xs border border-border/40 rounded">
+                          <thead>
+                            <tr className="border-b border-border/40 bg-muted/20">
+                              <th className="text-left px-3 py-2 font-medium text-muted-foreground">
+                                Description
+                              </th>
+                              <th className="text-right px-3 py-2 font-medium text-muted-foreground">
+                                Qty
+                              </th>
+                              <th className="text-right px-3 py-2 font-medium text-muted-foreground">
+                                Unit
+                              </th>
+                              <th className="text-right px-3 py-2 font-medium text-muted-foreground">
+                                Net
+                              </th>
+                              <th className="text-right px-3 py-2 font-medium text-muted-foreground">
+                                VAT
+                              </th>
+                              <th className="text-right px-3 py-2 font-medium text-muted-foreground">
+                                Gross
+                              </th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {invoice.invoice_line_items.map(li => (
+                              <tr key={li.id} className="border-b border-border/20 last:border-0">
+                                <td className="px-3 py-2">{li.description}</td>
+                                <td className="px-3 py-2 text-right tabular-nums">
+                                  {li.quantity ?? '—'}
+                                </td>
+                                <td className="px-3 py-2 text-right tabular-nums">
+                                  {formatCurrency(li.unit_cost, invoice.currency)}
+                                </td>
+                                <td className="px-3 py-2 text-right tabular-nums">
+                                  {formatCurrency(li.line_net, invoice.currency)}
+                                </td>
+                                <td className="px-3 py-2 text-right tabular-nums">
+                                  {formatCurrency(li.line_vat, invoice.currency)}
+                                </td>
+                                <td className="px-3 py-2 text-right tabular-nums font-medium">
+                                  {formatCurrency(li.line_gross, invoice.currency)}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
                   </td>
                 </tr>
               )}

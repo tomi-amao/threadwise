@@ -44,7 +44,7 @@ export type StreamStateType = {
 // Configuration from environment variables - no runtime changes allowed
 const API_URL = import.meta.env.VITE_LANGGRAPH_API_URL || 'http://localhost:2024';
 const ASSISTANT_ID = import.meta.env.VITE_LANGGRAPH_ASSISTANT_ID || 'threadwise-financial-agent';
-const AI_AGENT_API_URL = import.meta.env.VITE_AI_AGENT_API_URL || 'http://localhost:8000';
+const AI_AGENT_API_URL = import.meta.env.VITE_AI_AGENT_API_URL || 'http://localhost:2024';
 
 interface ChatState {
   threads: Thread[];

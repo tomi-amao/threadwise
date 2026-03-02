@@ -104,10 +104,10 @@ function getApiBaseUrl(): string {
   if (typeof window !== 'undefined') {
     // Client-side
     // @ts-ignore
-    return import.meta.env?.VITE_AI_AGENT_URL || 'http://localhost:8000';
+    return import.meta.env?.VITE_AI_AGENT_URL || 'http://localhost:2024';
   }
   // Server-side
-  return process.env.AI_AGENT_URL || process.env.VITE_AI_AGENT_URL || 'http://localhost:8000';
+  return process.env.AI_AGENT_URL || process.env.VITE_AI_AGENT_URL || 'http://localhost:2024';
 }
 
 /**
@@ -638,9 +638,7 @@ export async function aiCategorizeTransactions(
 /**
  * Get chart of accounts entries
  */
-export async function getChartOfAccounts(
-  accountType?: string
-): Promise<ChartOfAccountsEntry[]> {
+export async function getChartOfAccounts(accountType?: string): Promise<ChartOfAccountsEntry[]> {
   const baseUrl = getApiBaseUrl();
   const params = new URLSearchParams();
   if (accountType) params.set('account_type', accountType);

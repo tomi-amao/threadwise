@@ -27,6 +27,8 @@ from .models import (
     CanonicalProductVariant,
     CanonicalInventoryItem,
     CanonicalInventoryAdjustment,
+    CanonicalInventoryMovement,
+    InventoryMovementType,
     # Financial Domain
     CanonicalBankAccount,
     CanonicalFinancialTransaction,
@@ -74,6 +76,8 @@ __all__ = [
     "CanonicalProductVariant",
     "CanonicalInventoryItem",
     "CanonicalInventoryAdjustment",
+    "CanonicalInventoryMovement",
+    "InventoryMovementType",
     "CanonicalBankAccount",
     "CanonicalFinancialTransaction",
     "FinancialTransactionType",

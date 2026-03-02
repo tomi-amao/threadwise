@@ -17,6 +17,7 @@ import asyncio
 import json
 import logging
 from datetime import datetime, timezone
+from decimal import Decimal
 from typing import Any, Dict, List, Optional, Tuple, cast
 from uuid import UUID
 
@@ -26,12 +27,15 @@ from .models import (
     CanonicalCustomer,
     CanonicalFinancialTransaction,
     CanonicalInventoryItem,
+    CanonicalInventoryMovement,
     CanonicalLineItem,
     CanonicalOrder,
     CanonicalProduct,
     CanonicalPayment,
     CanonicalPaymentFee,
     ExpenseEnrichment,
+    FulfillmentStatus,
+    InventoryMovementType,
     ProcessingStatus,
 )
 from .normalizer import NormalizationResult
@@ -377,6 +381,21 @@ class PersistenceService:
             order_created_at=order.created_at,
         )
         
+        # Step 4: Record inventory movements if order is fulfilled
+        if order.fulfillment_status == FulfillmentStatus.FULFILLED:
+            try:
+                await self.record_sale_movements_for_order(
+                    order_id=order_id,
+                    entity_id=order.entity_id,
+                    provider=order.provider,
+                    line_items=order.line_items,
+                )
+            except Exception as e:
+                logger.warning(
+                    "Failed to record SALE inventory movements for order %s: %s",
+                    order_id, e,
+                )
+        
         return order_id
     
     async def _replace_line_items(
@@ -509,11 +528,94 @@ class PersistenceService:
     # =========================================================================
     # PRODUCT PERSISTENCE
     # =========================================================================
-    
-    async def persist_product(self, product: CanonicalProduct) -> UUID:
-        """Persist a canonical product with variants."""
 
-        logger.info(f"Persisting product {product.external_id} with {len(product.variants)} variants")
+    async def _reconcile_invoice_product(
+        self, product: CanonicalProduct
+    ) -> Optional[UUID]:
+        """Try to find an existing invoice-created product that matches this incoming product.
+
+        Matching strategy (in priority order):
+        1. SKU match: if any variant has a SKU, look for an invoice product with a
+           matching SKU in its variants JSONB.
+        2. Name match: fuzzy match on product name against invoice-created products
+           for the same entity.
+
+        Returns the UUID of the matched invoice product, or None if no match found.
+        """
+        if product.provider == "invoice":
+            # Don't reconcile invoice products against themselves
+            return None
+
+        entity_id = str(product.entity_id)
+
+        # Strategy 1: SKU-based matching
+        for variant in product.variants:
+            if variant.sku:
+                try:
+                    result = await asyncio.to_thread(
+                        lambda sku=variant.sku: self.client.table("products")
+                        .select("id")
+                        .eq("entity_id", entity_id)
+                        .eq("provider", "invoice")
+                        .contains("variants", [{"sku": sku}])
+                        .limit(1)
+                        .execute()
+                    )
+                    if result.data:
+                        logger.info(
+                            f"Reconciled product by SKU '{variant.sku}' → "
+                            f"invoice product {result.data[0]['id']}"
+                        )
+                        return UUID(result.data[0]["id"])
+                except Exception as exc:
+                    logger.debug(f"SKU reconciliation query failed: {exc}")
+
+        # Strategy 2: Name-based matching (case-insensitive, trimmed)
+        # Use ilike for fuzzy matching - the invoice product name is derived from
+        # the line item description which often matches the real product name
+        clean_name = product.name.strip()
+        if clean_name:
+            try:
+                result = await asyncio.to_thread(
+                    lambda: self.client.table("products")
+                    .select("id, name")
+                    .eq("entity_id", entity_id)
+                    .eq("provider", "invoice")
+                    .ilike("name", f"%{clean_name}%")
+                    .limit(1)
+                    .execute()
+                )
+                if result.data:
+                    logger.info(
+                        f"Reconciled product by name '{clean_name}' → "
+                        f"invoice product {result.data[0]['id']} "
+                        f"('{result.data[0]['name']}')"
+                    )
+                    return UUID(result.data[0]["id"])
+            except Exception as exc:
+                logger.debug(f"Name reconciliation query failed: {exc}")
+
+        return None
+
+    async def persist_product(self, product: CanonicalProduct) -> UUID:
+        """Persist a canonical product with variants.
+
+        Includes enrichment/reconciliation: if a bare-bones product was
+        previously created from an invoice (provider='invoice'), and this
+        incoming product from an e-commerce provider matches by name, the
+        existing record is updated (enriched) with the richer data and
+        re-assigned to the new provider. This prevents duplicates when
+        invoice-created products are later synced from Squarespace etc.
+        """
+
+        logger.info(
+            f"Persisting product {product.external_id} with "
+            f"{len(product.variants)} variants"
+        )
+
+        # --- Enrichment: reconcile with invoice-created products ---
+        enriched_existing = await self._reconcile_invoice_product(product)
+
         data = {
             "entity_id": str(product.entity_id),
             "provider": product.provider,
@@ -545,7 +647,24 @@ class PersistenceService:
                 if product.updated_at else None
             ),
         }
+
+        if enriched_existing:
+            # Update the existing invoice-created product in-place,
+            # promoting it to the real provider
+            result = await asyncio.to_thread(
+                lambda: self.client.table("products")
+                .update(data)
+                .eq("id", str(enriched_existing))
+                .execute()
+            )
+            if result.data:
+                logger.info(
+                    f"Enriched invoice product {enriched_existing} → "
+                    f"provider={product.provider}, external_id={product.external_id}"
+                )
+                return enriched_existing
         
+        # Standard upsert for new or already-provider-linked products
         result = await asyncio.to_thread(
             lambda: self.client.table("products")
             .upsert(data, on_conflict="provider,external_id,entity_id")
@@ -571,8 +690,8 @@ class PersistenceService:
         item: CanonicalInventoryItem
     ) -> UUID:
         """Persist a canonical inventory item."""
-        # Try to find linked product
-        product_id = await self._get_product_id_by_variant(
+        # Try to find linked product (also retrieves its created_at)
+        product_id, product_created_at = await self._get_product_id_by_variant(
             item.entity_id,
             item.provider,
             item.variant_external_id
@@ -582,19 +701,25 @@ class PersistenceService:
             "entity_id": str(item.entity_id),
             "product_id": str(product_id) if product_id else None,
             "provider": item.provider,
-            "external_id": item.external_id,
             "raw_event_id": str(item.raw_event_id),
-            "product_external_id": item.product_external_id,
             "variant_external_id": item.variant_external_id,
             "sku": item.sku,
-            "quantity": item.quantity,
             "is_unlimited": item.is_unlimited,
-            "metadata": item.metadata,
+            "description": item.description,
+            "category": item.category,
+            "unit_cost": float(item.unit_cost) if item.unit_cost else 0,
+            "asset_account_id": str(item.asset_account_id) if item.asset_account_id else None,
+            "cogs_account_id": str(item.cogs_account_id) if item.cogs_account_id else None,
+            # Inherit created_at from linked product so it reflects source system date
+            "created_at": (
+                product_created_at.isoformat()
+                if product_created_at else None
+            ),
         }
         
         result = await asyncio.to_thread(
             lambda: self.client.table("inventory_items")
-            .upsert(data, on_conflict="provider,external_id,entity_id")
+            .upsert(data, on_conflict="provider,variant_external_id,entity_id")
             .execute()
         )
         
@@ -613,12 +738,12 @@ class PersistenceService:
         entity_id: UUID,
         provider: str,
         variant_external_id: str
-    ) -> Optional[UUID]:
-        """Get product ID that contains a specific variant."""
+    ) -> Tuple[Optional[UUID], Optional[datetime]]:
+        """Get product ID and created_at for the product containing a specific variant."""
         # This searches the variants JSONB array
         result = await asyncio.to_thread(
             lambda: self.client.table("products")
-            .select("id")
+            .select("id, created_at")
             .eq("entity_id", str(entity_id))
             .eq("provider", provider)
             .contains("variants", json.dumps([{"external_id": variant_external_id}]))
@@ -626,9 +751,293 @@ class PersistenceService:
         )
         
         if result.data:
-            return _extract_id(result)
-        return None
+            row = result.data[0]
+            product_id = UUID(row["id"])
+            raw_ts = row.get("created_at")
+            product_created_at = (
+                datetime.fromisoformat(raw_ts) if raw_ts else None
+            )
+            return product_id, product_created_at
+        return None, None
     
+    # =========================================================================
+    # INVENTORY MOVEMENT PERSISTENCE
+    # =========================================================================
+
+    async def record_inventory_movement(
+        self,
+        movement: CanonicalInventoryMovement,
+    ) -> UUID:
+        """Record a single inventory movement in the ledger.
+
+        Resolves inventory_item_id from (entity_id, provider, variant_external_id)
+        if not already set on the movement.
+
+        Returns the UUID of the created movement row.
+        """
+        inventory_item_id = movement.inventory_item_id
+
+        if not inventory_item_id:
+            inventory_item_id = await self._get_inventory_item_id(
+                movement.entity_id,
+                movement.provider,
+                movement.variant_external_id,
+            )
+
+        if not inventory_item_id:
+            logger.warning(
+                "No inventory_item found for variant %s — skipping movement",
+                movement.variant_external_id,
+            )
+            return None  # type: ignore[return-value]
+
+        data = {
+            "inventory_item_id": str(inventory_item_id),
+            "transaction_type": movement.transaction_type.value,
+            "reference_id": str(movement.reference_id) if movement.reference_id else None,
+            "reference_table": movement.reference_table,
+            "quantity": float(movement.quantity),
+            "unit_cost": float(movement.unit_cost),
+            "notes": movement.notes,
+        }
+
+        result = await asyncio.to_thread(
+            lambda: self.client.table("inventory_movements")
+            .insert(data)
+            .execute()
+        )
+
+        if not result.data:
+            raise PersistenceError(
+                "Failed to insert inventory movement",
+                entity_type="inventory_movement",
+                external_id=movement.variant_external_id,
+            )
+
+        return _extract_id(result)
+
+    async def record_sale_movements_for_order(
+        self,
+        order_id: UUID,
+        entity_id: UUID,
+        provider: str,
+        line_items: List[CanonicalLineItem],
+    ) -> List[UUID]:
+        """Record SALE inventory movements for a fulfilled order's line items.
+
+        Creates one negative movement per line item that has a matching
+        inventory_item (resolved via variant_external_id).
+
+        Idempotent: skips if movements already exist for a given
+        (order_line_item.id, 'SALE') pair.
+
+        Args:
+            order_id: The DB order UUID (used to look up persisted line items)
+            entity_id: Entity UUID for scoping
+            provider: Provider name
+            line_items: Canonical line items from the order
+
+        Returns:
+            List of created movement UUIDs
+        """
+        # Fetch the persisted order_line_items to get their DB ids
+        persisted_items = await asyncio.to_thread(
+            lambda: self.client.table("order_line_items")
+            .select("id, variant_external_id, quantity, unit_price_amount")
+            .eq("order_id", str(order_id))
+            .execute()
+        )
+
+        if not persisted_items.data:
+            return []
+
+        movement_ids: List[UUID] = []
+
+        for row in persisted_items.data:
+            variant_ext_id = row.get("variant_external_id")
+            if not variant_ext_id:
+                continue
+
+            line_item_id = UUID(row["id"])
+
+            # Idempotency: check if a SALE movement already exists for this line item
+            existing = await asyncio.to_thread(
+                lambda lid=str(line_item_id): self.client.table("inventory_movements")
+                .select("id")
+                .eq("reference_id", lid)
+                .eq("transaction_type", "SALE")
+                .limit(1)
+                .execute()
+            )
+            if existing.data:
+                continue
+
+            inventory_item_id = await self._get_inventory_item_id(
+                entity_id, provider, variant_ext_id
+            )
+            if not inventory_item_id:
+                continue
+
+            # Fetch unit_cost from inventory_item for COGS
+            inv_item = await asyncio.to_thread(
+                lambda iid=str(inventory_item_id): self.client.table("inventory_items")
+                .select("unit_cost")
+                .eq("id", iid)
+                .limit(1)
+                .execute()
+            )
+            unit_cost = float((inv_item.data[0] if inv_item.data else {}).get("unit_cost", 0))
+
+            qty = row.get("quantity", 1)
+            data = {
+                "inventory_item_id": str(inventory_item_id),
+                "transaction_type": "SALE",
+                "reference_id": str(line_item_id),
+                "reference_table": "order_line_items",
+                "quantity": -abs(qty),  # Stock OUT → negative
+                "unit_cost": unit_cost,
+                "notes": f"Order fulfilled (order_id={order_id})",
+            }
+
+            result = await asyncio.to_thread(
+                lambda d=data: self.client.table("inventory_movements")
+                .insert(d)
+                .execute()
+            )
+            if result.data:
+                movement_ids.append(_extract_id(result))
+
+        return movement_ids
+
+    async def record_purchase_movement_for_invoice_line(
+        self,
+        invoice_line_item_id: UUID,
+        entity_id: UUID,
+        sku: Optional[str],
+        description: str,
+        quantity: float,
+        unit_cost: float,
+        category: Optional[str] = None,
+    ) -> Optional[UUID]:
+        """Record a PURCHASE inventory movement from an invoice line item.
+
+        Tries to match the invoice line item to an inventory_item by SKU.
+        If no match, the movement is skipped (item may not be tracked).
+
+        Idempotent: skips if a PURCHASE movement already exists for this line item.
+
+        Returns the movement UUID or None if skipped.
+        """
+        import re as _re
+
+        # Derive a stable, URL-safe slug from description when no explicit SKU
+        if not sku:
+            slug = _re.sub(r"[^a-z0-9]+", "-", description[:100].lower()).strip("-")[:80]
+            sku = slug or f"item-{str(invoice_line_item_id)[:8]}"
+
+        # Idempotency check
+        existing = await asyncio.to_thread(
+            lambda: self.client.table("inventory_movements")
+            .select("id")
+            .eq("reference_id", str(invoice_line_item_id))
+            .eq("transaction_type", "PURCHASE")
+            .limit(1)
+            .execute()
+        )
+        if existing.data:
+            return UUID(existing.data[0]["id"])
+
+        # Resolve inventory_item by SKU + entity_id; create one if it doesn't exist yet
+        inv_result = await asyncio.to_thread(
+            lambda: self.client.table("inventory_items")
+            .select("id")
+            .eq("entity_id", str(entity_id))
+            .eq("sku", sku)
+            .limit(1)
+            .execute()
+        )
+        if not inv_result.data:
+            logger.info(
+                "No inventory_item found for SKU %s — creating one from invoice line", sku
+            )
+            upsert_data = {
+                "entity_id": str(entity_id),
+                "provider": "manual",
+                "variant_external_id": sku,
+                "sku": sku,
+                "description": description[:255],
+                "unit_cost": unit_cost,
+                "category": category,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            }
+            upsert_result = await asyncio.to_thread(
+                lambda d=upsert_data: self.client.table("inventory_items")
+                .upsert(d, on_conflict="entity_id,provider,variant_external_id")
+                .execute()
+            )
+            if not upsert_result.data:
+                logger.warning("Failed to upsert inventory_item for SKU %s — skipping movement", sku)
+                return None
+            inventory_item_id = upsert_result.data[0]["id"]
+        else:
+            inventory_item_id = inv_result.data[0]["id"]
+
+        data = {
+            "inventory_item_id": inventory_item_id,
+            "transaction_type": "PURCHASE",
+            "reference_id": str(invoice_line_item_id),
+            "reference_table": "invoice_line_items",
+            "quantity": abs(quantity),  # Stock IN → positive
+            "unit_cost": unit_cost,
+            "notes": f"Purchase invoice line: {description[:120]}",
+        }
+
+        result = await asyncio.to_thread(
+            lambda: self.client.table("inventory_movements")
+            .insert(data)
+            .execute()
+        )
+        if not result.data:
+            return None
+
+        return _extract_id(result)
+
+    async def get_stock_level(
+        self,
+        inventory_item_id: UUID,
+    ) -> Decimal:
+        """Get current stock level for an inventory item by summing movements."""
+        result = await asyncio.to_thread(
+            lambda: self.client.table("inventory_stock_levels")
+            .select("current_quantity")
+            .eq("inventory_item_id", str(inventory_item_id))
+            .limit(1)
+            .execute()
+        )
+        if result.data:
+            return Decimal(str(result.data[0]["current_quantity"]))
+        return Decimal("0")
+
+    async def _get_inventory_item_id(
+        self,
+        entity_id: UUID,
+        provider: str,
+        variant_external_id: str,
+    ) -> Optional[UUID]:
+        """Get inventory_item UUID by natural key."""
+        result = await asyncio.to_thread(
+            lambda: self.client.table("inventory_items")
+            .select("id")
+            .eq("entity_id", str(entity_id))
+            .eq("provider", provider)
+            .eq("variant_external_id", variant_external_id)
+            .limit(1)
+            .execute()
+        )
+        if result.data:
+            return UUID(result.data[0]["id"])
+        return None
+
     # =========================================================================
     # PAYMENT PERSISTENCE
     # =========================================================================
@@ -1067,6 +1476,7 @@ class PersistenceService:
             "profile": "customers",
             "product": "products",
             "inventory_item": "inventory_items",
+            "inventory_movement": "inventory_movements",
             "payment": "payments",
             "transaction": "payments",
             "bank_account": "bank_accounts",

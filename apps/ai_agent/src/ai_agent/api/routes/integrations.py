@@ -822,27 +822,21 @@ async def get_incomplete_transactions(
                 .select("entity_id, provider") \
                 .eq("id", source_id) \
                 .execute().data
-            # Build query for transactions missing account_code in metadata
-            # We look for transactions where metadata->account_code is null
+            # Query only 'other' type transactions that need categorization
             query = client.table("financial_transactions") \
                 .select("*", count="exact") \
                 .eq("entity_id", source[0]["entity_id"]) \
                 .eq("source", source[0]["provider"]) \
-                .in_("transaction_type", ["payment", "fee", "other"])
+                .eq("transaction_type", "other")
             
             return query.order("occurred_at", desc=True) \
                 .range(offset, offset + limit - 1) \
                 .execute()
         
         result = await asyncio.to_thread(_fetch_transactions)
-        logging.info(f"Fetched {len(result.data or [])} incomplete transactions (total count: {result.count})")
+        logging.info(f"Fetched {len(result.data or [])} 'other' type transactions (total count: {result.count})")
         
-        # Filter client-side: only include rows where metadata lacks account_code
-        filtered = []
-        for row in (result.data or []):
-            meta = row.get("metadata") or {}
-            if not meta.get("account_code"):
-                filtered.append(row)
+        filtered = result.data or []
         
         transactions = [
             IncompleteTransaction(
@@ -863,7 +857,7 @@ async def get_incomplete_transactions(
         
         return IncompleteTransactionsResponse(
             transactions=transactions,
-            total_count=result.count or 0,
+            total_count=result.count or len(filtered),
         )
     
     except Exception as e:
@@ -1260,21 +1254,16 @@ async def get_integrations_summary(entity_id: Optional[str] = None):
             if entity_id_for_source:
                 try:
                     source_provider = source["provider"]
-                    # Count transactions without account_code in metadata
+                    # Count 'other' type transactions that need categorization
                     result = await asyncio.to_thread(
                         lambda eid=entity_id_for_source, sp=source_provider: sync_service.client.table("financial_transactions")
-                        .select("id, metadata", count="exact")
+                        .select("id", count="exact")
                         .eq("entity_id", eid)
                         .eq("source", sp)
-                        .in_("transaction_type", ["payment", "fee", "other"])
+                        .eq("transaction_type", "other")
                         .execute()
                     )
-                    # Filter client-side for missing account_code in metadata
-                    if result.data:
-                        uncategorized_count = sum(
-                            1 for row in result.data
-                            if not (row.get("metadata") or {}).get("account_code")
-                        )
+                    uncategorized_count = result.count or 0
                 except Exception as e:
                     logger.warning(f"Failed to get uncategorized count: {e}")
             

@@ -61,6 +61,9 @@ class RevolutNormalizer(FinancialNormalizer):
         "refund": TxnType.REFUND,
         "chargeback": TxnType.OTHER,
         "payout": TxnType.PAYMENT,
+        "charge": TxnType.FEE,
+        "merchant_payment": TxnType.RESERVE_RELEASE,
+        "merchant_reserve": TxnType.RESERVE_HOLD,
     }
 
     # MCC code ranges -> (account_code, expense_category)

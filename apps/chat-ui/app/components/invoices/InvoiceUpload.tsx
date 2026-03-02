@@ -1,9 +1,9 @@
 import React, { useCallback, useState } from 'react';
 import { CloudArrowUp, File, X, Warning } from 'phosphor-react';
-import type { UploadProgress } from '~/types/invoice';
+import type { UploadProgress, InvoiceType } from '~/types/invoice';
 
 interface InvoiceUploadProps {
-  onUpload: (files: File[]) => Promise<void>;
+  onUpload: (files: File[], invoiceType: InvoiceType) => Promise<void>;
   isUploading: boolean;
   uploadProgress: UploadProgress[];
 }
@@ -22,6 +22,7 @@ interface InvoiceUploadProps {
 export function InvoiceUpload({ onUpload, isUploading, uploadProgress }: InvoiceUploadProps) {
   const [isDragOver, setIsDragOver] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [invoiceType, setInvoiceType] = useState<InvoiceType>('PURCHASE');
 
   const validateFiles = (files: FileList | File[]): File[] => {
     const validFiles: File[] = [];
@@ -52,7 +53,7 @@ export function InvoiceUpload({ onUpload, isUploading, uploadProgress }: Invoice
 
       const validFiles = validateFiles(e.dataTransfer.files);
       if (validFiles.length > 0) {
-        await onUpload(validFiles);
+        await onUpload(validFiles, invoiceType);
       }
     },
     [onUpload]
@@ -74,7 +75,7 @@ export function InvoiceUpload({ onUpload, isUploading, uploadProgress }: Invoice
       if (e.target.files && e.target.files.length > 0) {
         const validFiles = validateFiles(e.target.files);
         if (validFiles.length > 0) {
-          await onUpload(validFiles);
+          await onUpload(validFiles, invoiceType);
         }
       }
       // Reset input to allow re-uploading same file
@@ -85,6 +86,30 @@ export function InvoiceUpload({ onUpload, isUploading, uploadProgress }: Invoice
 
   return (
     <div className="space-y-4">
+      {/* Invoice Type Selector */}
+      <div className="space-y-1.5">
+        <label className="block text-sm font-medium text-foreground">Invoice Type</label>
+        <div className="flex gap-2">
+          {(['PURCHASE', 'SALE'] as InvoiceType[]).map(type => (
+            <button
+              key={type}
+              type="button"
+              disabled={isUploading}
+              onClick={() => setInvoiceType(type)}
+              className={`flex-1 px-4 py-2.5 rounded-lg text-sm font-semibold border-2 transition-all disabled:opacity-50 ${
+                invoiceType === type
+                  ? type === 'SALE'
+                    ? 'border-blue-500 bg-blue-500/15 text-blue-400'
+                    : 'border-orange-500 bg-orange-500/15 text-orange-400'
+                  : 'border-border text-muted-foreground hover:border-muted-foreground/50 hover:bg-muted/30'
+              }`}
+            >
+              {type === 'SALE' ? 'Sale (money in)' : 'Purchase (money out)'}
+            </button>
+          ))}
+        </div>
+      </div>
+
       {/* Drop Zone */}
       <div
         onDrop={handleDrop}

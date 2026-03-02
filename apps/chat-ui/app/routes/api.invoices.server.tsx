@@ -2,188 +2,34 @@
  * Invoice API Route
  *
  * Handles invoice operations:
- * - POST: Upload, update, delete, get URL
- * - Integrates with LangGraph for AI document extraction
+ * - POST upload: forwards file to AI Agent for extraction and record creation
+ * - POST updateStatus: patches invoice status
+ * - POST delete: removes invoice record
+ * - POST getUrl / download: signed URL from Supabase Storage
  */
 
 import type { ActionFunctionArgs } from 'react-router';
 import { redirect } from 'react-router';
 import {
-  createInvoice,
-  updateInvoice,
   deleteInvoice,
   getInvoice,
   getInvoiceUrl,
   listInvoices,
   getInvoiceStats,
+  updateInvoiceStatus,
 } from '~/lib/api/invoices.server';
-import { embedInvoiceFile } from '~/lib/api/embeddings.server';
 import { getServerSupabaseClient } from '~/lib/supabase';
 
-// LangGraph API URL - check both server and Vite env vars
-const LANGGRAPH_API_URL =
-  process.env.LANGGRAPH_API_URL || process.env.VITE_LANGGRAPH_API_URL || 'http://localhost:2024';
+// AI Agent base URL
+const AI_AGENT_URL =
+  process.env.AI_AGENT_URL || process.env.VITE_AI_AGENT_URL || 'http://localhost:2024';
 
 // Helper to return JSON responses
 function json(data: unknown, init?: ResponseInit) {
   return new Response(JSON.stringify(data), {
     ...init,
-    headers: {
-      'Content-Type': 'application/json',
-      ...init?.headers,
-    },
+    headers: { 'Content-Type': 'application/json', ...init?.headers },
   });
-}
-
-// Use shared Supabase client for storage operations
-const getSupabaseClient = getServerSupabaseClient;
-
-// Extracted document data from LangGraph
-interface ExtractedDocumentData {
-  document_category: string;
-  vendor_name: string | null;
-  invoice_number: string | null;
-  invoice_date: string | null;
-  due_date: string | null;
-  currency: string;
-  subtotal: number | null;
-  tax_amount: number | null;
-  total_amount: number | null;
-  line_items: Array<{
-    description: string;
-    quantity: number | null;
-    unit_price: number | null;
-    total_price: number | null;
-  }>;
-  confidence_score: number;
-}
-
-// Call LangGraph server to extract document data
-async function extractDocumentData(
-  base64Content: string,
-  mimeType: string,
-  fileName: string
-): Promise<{ data: ExtractedDocumentData | null; error: string | null }> {
-  try {
-    // Create a thread for this extraction
-    console.debug('[extractDocumentData] Start', {
-      fileName,
-      mimeType,
-      base64Length: base64Content.length,
-    });
-
-    const model_content_type = mimeType === 'application/pdf' ? 'file' : 'image';
-
-    const threadResponse = await fetch(`${LANGGRAPH_API_URL}/threads`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ metadata: { source: 'invoice_upload', fileName } }),
-    });
-
-    console.debug('[extractDocumentData] Thread response status:', threadResponse.status);
-
-    if (!threadResponse.ok) {
-      console.error('Failed to create thread:', await threadResponse.text());
-      return { data: null, error: 'Failed to create extraction thread' };
-    }
-
-    const thread = await threadResponse.json();
-    console.debug('[extractDocumentData] Thread created:', thread);
-
-    // Send the file to LangGraph for extraction
-    // The message includes a file attachment that will trigger the document_extraction pathway
-    const runResponse = await fetch(`${LANGGRAPH_API_URL}/threads/${thread.thread_id}/runs`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        assistant_id: 'threadwise-financial-agent',
-        input: {
-          messages: [
-            {
-              role: 'human',
-              content: [
-                {
-                  type: 'text',
-                  text: `Please extract all invoice information from this document: ${fileName}`,
-                },
-                {
-                  type: model_content_type,
-                  source_type: 'base64',
-                  mime_type: mimeType,
-                  data: base64Content,
-                },
-              ],
-            },
-          ],
-          model: 'chat', // Use local model for extraction
-        },
-        config: {
-          configurable: {
-            thread_id: thread.thread_id,
-          },
-        },
-      }),
-    });
-
-    console.debug('[extractDocumentData] Run response status:', runResponse.status);
-
-    if (!runResponse.ok) {
-      console.error('Failed to run extraction:', await runResponse.text());
-      return { data: null, error: 'Failed to run document extraction' };
-    }
-
-    // Wait for the run to complete and get results
-    const run = await runResponse.json();
-
-    // Poll for completion (with timeout)
-    const maxWaitTime = 60000; // 60 seconds
-    const pollInterval = 1000; // 1 second
-    let elapsed = 0;
-
-    while (elapsed < maxWaitTime) {
-      const statusResponse = await fetch(
-        `${LANGGRAPH_API_URL}/threads/${thread.thread_id}/runs/${run.run_id}`
-      );
-
-      console.debug('[extractDocumentData] Polling run status:', statusResponse.status);
-
-      if (!statusResponse.ok) {
-        console.error('Failed to check run status:', await statusResponse.text());
-        break;
-      }
-
-      const runStatus = await statusResponse.json();
-      console.debug('[extractDocumentData] Run status:', runStatus.status);
-
-      if (runStatus.status === 'success') {
-        // Get the final state to extract document data
-        const stateResponse = await fetch(`${LANGGRAPH_API_URL}/threads/${thread.thread_id}/state`);
-        console.debug('[extractDocumentData] State response status:', stateResponse.status);
-
-        if (stateResponse.ok) {
-          const state = await stateResponse.json();
-          // The extracted_document field contains our structured data
-          if (state.values?.extracted_document) {
-            return { data: state.values.extracted_document, error: null };
-          }
-        }
-        break;
-      } else if (runStatus.status === 'error') {
-        console.error('Extraction run failed:', runStatus.error);
-        return { data: null, error: 'Document extraction failed' };
-      }
-
-      // Wait before polling again
-      await new Promise(resolve => setTimeout(resolve, pollInterval));
-      elapsed += pollInterval;
-    }
-    console.warn('[extractDocumentData] Extraction timed out');
-
-    return { data: null, error: 'Extraction timed out' };
-  } catch (error) {
-    console.error('Error calling LangGraph:', error);
-    return { data: null, error: error instanceof Error ? error.message : 'Unknown error' };
-  }
 }
 
 export async function action({ request }: ActionFunctionArgs) {
@@ -198,210 +44,92 @@ export async function action({ request }: ActionFunctionArgs) {
           return json({ error: 'No file provided' }, { status: 400 });
         }
 
-        // Validate file type
         if (file.type !== 'application/pdf' && !file.type.startsWith('image/')) {
           return json({ error: 'Only PDF and image files are allowed' }, { status: 400 });
         }
 
-        // Validate file size (10MB max)
         if (file.size > 10 * 1024 * 1024) {
           return json({ error: 'File size exceeds 10MB limit' }, { status: 400 });
         }
 
-        // Upload to Supabase Storage
-        const supabase = getSupabaseClient();
+        const entityId = (formData.get('entity_id') as string | null) ?? undefined;
+        if (!entityId) {
+          return json(
+            { error: 'entity_id is required. Ensure you are logged in.' },
+            { status: 400 }
+          );
+        }
+
+        // ---- 1. Store file in Supabase Storage for viewing/download ----
+        const supabase = getServerSupabaseClient();
         const timestamp = Date.now();
         const sanitizedName = file.name.replace(/[^a-zA-Z0-9.-]/g, '_');
-        const filePath = `uploads/${timestamp}-${sanitizedName}`;
+        const storagePath = `${entityId ?? 'general'}/${timestamp}-${sanitizedName}`;
 
-        // Convert File to ArrayBuffer for upload
         const arrayBuffer = await file.arrayBuffer();
         const uint8Array = new Uint8Array(arrayBuffer);
 
-        const { data: uploadData, error: uploadError } = await supabase.storage
+        const { error: storageError } = await supabase.storage
           .from('invoices')
-          .upload(filePath, uint8Array, {
+          .upload(storagePath, uint8Array, {
             contentType: file.type,
             upsert: false,
           });
 
-        if (uploadError) {
-          console.error('Upload error:', uploadError);
-          return json({ error: uploadError.message }, { status: 500 });
+        if (storageError) {
+          console.error('Storage upload failed:', storageError);
+          return json({ error: `File storage failed: ${storageError.message}` }, { status: 500 });
         }
 
-        // Create invoice record with initial extraction status
-        const { invoice, error: createError } = await createInvoice({
-          file_name: file.name,
-          file_path: uploadData.path,
-          file_size: file.size,
-          mime_type: file.type,
-          status: 'pending',
+        // ---- 2. Forward to AI Agent for extraction + record creation ----
+        const agentForm = new FormData();
+        agentForm.append('file', new Blob([uint8Array], { type: file.type }), file.name);
+        if (entityId) agentForm.append('entity_id', entityId);
+        agentForm.append('file_path', storagePath);
+
+        const invoiceType = formData.get('invoice_type') as string | null;
+        if (invoiceType) agentForm.append('invoice_type', invoiceType);
+
+        const agentResponse = await fetch(`${AI_AGENT_URL}/accounting/invoices/process`, {
+          method: 'POST',
+          body: agentForm,
         });
 
-        if (createError) {
-          // Try to delete uploaded file if record creation fails
-          await supabase.storage.from('invoices').remove([uploadData.path]);
-          return json({ error: createError }, { status: 500 });
+        if (!agentResponse.ok) {
+          const errText = await agentResponse.text();
+          console.error('AI Agent error:', errText);
+          return json({ error: 'AI processing failed', detail: errText }, { status: 502 });
         }
 
-        console.debug(`Invoice created with ID: ${invoice?.id}`);
+        const result = await agentResponse.json();
+        return json({ success: true, ...result });
+      }
 
-        // Convert file to base64 for LangGraph extraction
-        const base64Content = Buffer.from(uint8Array).toString('base64');
-
-        // Call LangGraph for document extraction (async, don't block response)
-        // We'll update the invoice record with extracted data when complete
-        extractDocumentData(base64Content, file.type, file.name)
-          .then(async ({ data: extractedData, error: extractionError }) => {
-            if (extractedData && invoice) {
-              // Update invoice with extracted data
-              const updatePayload: Record<string, unknown> = {
-                extraction_status: 'completed',
-                extraction_confidence: extractedData.confidence_score,
-                document_category: extractedData.document_category,
-              };
-
-              // Only update fields if extracted successfully
-              if (extractedData.vendor_name) {
-                updatePayload.vendor_name = extractedData.vendor_name;
-              }
-              if (extractedData.invoice_number) {
-                updatePayload.invoice_number = extractedData.invoice_number;
-              }
-              if (extractedData.invoice_date) {
-                updatePayload.invoice_date = extractedData.invoice_date;
-              }
-              if (extractedData.due_date) {
-                updatePayload.due_date = extractedData.due_date;
-              }
-              if (extractedData.total_amount !== null) {
-                updatePayload.amount = extractedData.total_amount;
-              }
-              if (extractedData.currency) {
-                updatePayload.currency = extractedData.currency;
-              }
-              if (extractedData.subtotal !== null) {
-                updatePayload.subtotal = extractedData.subtotal;
-              }
-              if (extractedData.tax_amount !== null) {
-                updatePayload.tax_amount = extractedData.tax_amount;
-              }
-              if (extractedData.line_items && extractedData.line_items.length > 0) {
-                updatePayload.line_items = extractedData.line_items;
-              }
-
-              await updateInvoice(invoice.id, updatePayload);
-              console.log(`Invoice ${invoice.id} updated with extracted data`);
-            } else if (extractionError) {
-              // Mark extraction as failed
-              if (invoice) {
-                await updateInvoice(invoice.id, {
-                  extraction_status: 'failed',
-                });
-              }
-              console.error(`Extraction failed for invoice ${invoice?.id}:`, extractionError);
-            }
-          })
-          .catch(err => {
-            console.error('Extraction background task error:', err);
-            if (invoice) {
-              updateInvoice(invoice.id, { extraction_status: 'failed' }).catch(() => {});
-            }
-          });
-
-        // Update initial status to processing
-        if (invoice) {
-          await updateInvoice(invoice.id, { extraction_status: 'processing' });
+      case 'updateStatus': {
+        const invoiceId = formData.get('invoiceId') as string;
+        const status = formData.get('status') as string;
+        if (!invoiceId || !status) {
+          return json({ error: 'invoiceId and status are required' }, { status: 400 });
         }
 
-        // Get signed URL for embedding
-        const supabaseForUrl = getSupabaseClient();
-        const { data: signedUrlData } = await supabaseForUrl.storage
-          .from('invoices')
-          .createSignedUrl(uploadData.path, 3600);
+        const { invoice, error } = await updateInvoiceStatus(invoiceId, {
+          status: status as import('~/types/invoice').InvoiceStatus,
+        });
 
-        // Embed the file asynchronously (don't block the response)
-        let embeddingStatus: 'pending' | 'success' | 'failed' = 'pending';
-        if (signedUrlData?.signedUrl) {
-          embedInvoiceFile(signedUrlData.signedUrl, file.type)
-            .then(result => {
-              if (result.success) {
-                console.log(`Embedding succeeded for invoice ${invoice?.id}`);
-              } else {
-                console.error(`Embedding failed for invoice ${invoice?.id}:`, result.error);
-              }
-            })
-            .catch(err => {
-              console.error('Embedding background task error:', err);
+        if (error) return json({ error }, { status: 500 });
+
+        // When marked as paid, create the payment settlement journal in the AI agent.
+        // Non-fatal — the status change succeeds regardless of journal creation.
+        if (status === 'PAID' && invoice?.entity_id) {
+          try {
+            await fetch(`${AI_AGENT_URL}/accounting/journals/invoice-payment`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ entity_id: invoice.entity_id, invoice_id: invoiceId }),
             });
-          embeddingStatus = 'pending';
-        } else {
-          console.warn('Could not get signed URL for embedding');
-          embeddingStatus = 'failed';
-        }
-
-        return json({
-          success: true,
-          invoice: { ...invoice, extraction_status: 'processing' },
-          embeddingStatus,
-        });
-      }
-
-      case 'getStatus': {
-        // Poll for invoice processing status - used to check if extraction/embedding is complete
-        const invoiceId = formData.get('invoiceId') as string;
-        if (!invoiceId) {
-          return json({ error: 'Invoice ID required' }, { status: 400 });
-        }
-
-        const { invoice, error } = await getInvoice(invoiceId);
-
-        if (error || !invoice) {
-          return json({ error: error || 'Invoice not found' }, { status: 404 });
-        }
-
-        return json({
-          success: true,
-          invoice,
-          isProcessing:
-            invoice.extraction_status === 'processing' || invoice.extraction_status === 'pending',
-        });
-      }
-
-      case 'update': {
-        const invoiceId = formData.get('invoiceId') as string;
-        if (!invoiceId) {
-          return json({ error: 'Invoice ID required' }, { status: 400 });
-        }
-
-        const updateData: Record<string, string | number | undefined> = {};
-
-        const vendor_name = formData.get('vendor_name');
-        if (vendor_name) updateData.vendor_name = vendor_name as string;
-
-        const invoice_number = formData.get('invoice_number');
-        if (invoice_number) updateData.invoice_number = invoice_number as string;
-
-        const amount = formData.get('amount');
-        if (amount) updateData.amount = parseFloat(amount as string);
-
-        const status = formData.get('status');
-        if (status) updateData.status = status as string;
-
-        const invoice_date = formData.get('invoice_date');
-        if (invoice_date) updateData.invoice_date = invoice_date as string;
-
-        const due_date = formData.get('due_date');
-        if (due_date) updateData.due_date = due_date as string;
-
-        const notes = formData.get('notes');
-        if (notes) updateData.notes = notes as string;
-
-        const { invoice, error } = await updateInvoice(invoiceId, updateData);
-
-        if (error) {
-          return json({ error }, { status: 500 });
+          } catch {
+            // Intentionally swallowed — journal can be recreated later if needed
+          }
         }
 
         return json({ success: true, invoice });
@@ -414,11 +142,7 @@ export async function action({ request }: ActionFunctionArgs) {
         }
 
         const { success, error } = await deleteInvoice(invoiceId);
-
-        if (error) {
-          return json({ error }, { status: 500 });
-        }
-
+        if (error) return json({ error }, { status: 500 });
         return json({ success: true });
       }
 
@@ -428,19 +152,16 @@ export async function action({ request }: ActionFunctionArgs) {
           return json({ error: 'Invoice ID required' }, { status: 400 });
         }
 
-        // Get invoice to get file path
-        const { invoices } = await listInvoices();
-        const invoice = invoices.find(i => i.id === invoiceId);
+        const { invoice, error } = await getInvoice(invoiceId);
+        if (error || !invoice) return json({ error: error ?? 'Not found' }, { status: 404 });
 
-        if (!invoice) {
-          return json({ error: 'Invoice not found' }, { status: 404 });
-        }
+        // file_path holds the Supabase storage path; source is now the platform label
+        const storagePath = invoice.file_path;
+        if (!storagePath)
+          return json({ error: 'No file attached to this invoice' }, { status: 404 });
 
-        const signedUrl = await getInvoiceUrl(invoice.file_path);
-
-        if (!signedUrl) {
-          return json({ error: 'Failed to generate URL' }, { status: 500 });
-        }
+        const signedUrl = await getInvoiceUrl(storagePath);
+        if (!signedUrl) return json({ error: 'Failed to generate URL' }, { status: 500 });
 
         return json({ success: true, signedUrl });
       }
@@ -451,21 +172,97 @@ export async function action({ request }: ActionFunctionArgs) {
           return json({ error: 'Invoice ID required' }, { status: 400 });
         }
 
-        const { invoices } = await listInvoices();
-        const invoice = invoices.find(i => i.id === invoiceId);
+        const { invoice, error } = await getInvoice(invoiceId);
+        if (error || !invoice) return json({ error: error ?? 'Not found' }, { status: 404 });
 
-        if (!invoice) {
-          return json({ error: 'Invoice not found' }, { status: 404 });
-        }
+        const storagePath = invoice.file_path;
+        if (!storagePath)
+          return json({ error: 'No file attached to this invoice' }, { status: 404 });
 
-        const signedUrl = await getInvoiceUrl(invoice.file_path, 60);
+        const signedUrl = await getInvoiceUrl(storagePath, 60);
+        if (!signedUrl) return json({ error: 'Failed to generate download URL' }, { status: 500 });
 
-        if (!signedUrl) {
-          return json({ error: 'Failed to generate download URL' }, { status: 500 });
-        }
-
-        // Redirect to signed URL for download
         return redirect(signedUrl);
+      }
+
+      case 'createProducts': {
+        const invoiceId = formData.get('invoiceId') as string;
+        const entityId = formData.get('entity_id') as string;
+        const lineItemIdsJson = formData.get('lineItemIds') as string;
+        const overridesJson = formData.get('overrides') as string | null;
+
+        if (!invoiceId || !entityId || !lineItemIdsJson) {
+          return json(
+            { error: 'invoiceId, entity_id, and lineItemIds are required' },
+            { status: 400 }
+          );
+        }
+
+        let lineItemIds: string[];
+        try {
+          lineItemIds = JSON.parse(lineItemIdsJson);
+        } catch {
+          return json({ error: 'lineItemIds must be valid JSON array' }, { status: 400 });
+        }
+
+        let overrides: Record<string, { name: string; sku: string }> | undefined;
+        if (overridesJson) {
+          try {
+            overrides = JSON.parse(overridesJson);
+          } catch {
+            // ignore malformed overrides — not fatal
+          }
+        }
+
+        const agentResp = await fetch(`${AI_AGENT_URL}/accounting/invoices/${invoiceId}/products`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ entity_id: entityId, line_item_ids: lineItemIds, overrides }),
+        });
+
+        if (!agentResp.ok) {
+          const errText = await agentResp.text();
+          return json({ error: 'Product creation failed', detail: errText }, { status: 502 });
+        }
+
+        const result = await agentResp.json();
+        return json({ success: true, ...result });
+      }
+
+      case 'updateInvoice': {
+        const invoiceId = formData.get('invoiceId') as string;
+        if (!invoiceId) {
+          return json({ error: 'invoiceId is required' }, { status: 400 });
+        }
+
+        const body: Record<string, unknown> = {};
+        const invoiceType = formData.get('invoice_type') as string | null;
+        const notes = formData.get('notes') as string | null;
+        const lineGlJson = formData.get('line_item_gl_accounts') as string | null;
+
+        if (invoiceType) body.invoice_type = invoiceType;
+        if (notes !== null && notes !== undefined) body.notes = notes;
+        if (lineGlJson) {
+          try {
+            body.line_item_gl_accounts = JSON.parse(lineGlJson);
+          } catch {
+            return json({ error: 'line_item_gl_accounts must be valid JSON' }, { status: 400 });
+          }
+        }
+
+        const agentResp = await fetch(`${AI_AGENT_URL}/accounting/invoices/${invoiceId}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+
+        if (!agentResp.ok) {
+          const errText = await agentResp.text();
+          return json({ error: 'Invoice update failed', detail: errText }, { status: 502 });
+        }
+
+        const result = await agentResp.json();
+        return json({ success: true, invoice: result });
       }
 
       default:
@@ -480,9 +277,8 @@ export async function action({ request }: ActionFunctionArgs) {
   }
 }
 
-// Loader for fetching invoices
+// Loader for fetching invoices list + stats
 export async function loader() {
   const [{ invoices }, stats] = await Promise.all([listInvoices(), getInvoiceStats()]);
-
   return json({ invoices, stats });
 }
