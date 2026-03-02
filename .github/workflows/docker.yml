@@ -1,0 +1,208 @@
+name: Docker Build & Push
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+    paths:
+      - 'apps/**'
+      - 'docker-compose*.yml'
+      - '.github/workflows/docker.yml'
+  pull_request:
+    branches:
+      - main
+      - develop
+    paths:
+      - 'apps/**'
+      - 'docker-compose*.yml'
+      - '.github/workflows/docker.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_PREFIX: ${{ github.repository }}
+
+jobs:
+  build-chat-ui:
+    name: Build Chat UI Docker Image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Container Registry
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/chat-ui
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,prefix={{branch}}-
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./apps/chat-ui/Dockerfile
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            VITE_API_URL=${{ secrets.VITE_API_URL || 'http://localhost:8000' }}
+            VITE_SUPABASE_URL=${{ secrets.VITE_SUPABASE_URL }}
+            VITE_SUPABASE_ANON_KEY=${{ secrets.VITE_SUPABASE_ANON_KEY }}
+
+  build-ai-agent:
+    name: Build AI Agent Docker Image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Container Registry
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/ai-agent
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,prefix={{branch}}-
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./apps/ai_agent
+          file: ./apps/ai_agent/Dockerfile
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  docker-compose-test:
+    name: Test Docker Compose Setup
+    runs-on: ubuntu-latest
+    needs: [build-chat-ui, build-ai-agent]
+    if: github.event_name == 'pull_request'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Create .env file for testing
+        run: |
+          cat > .env << EOF
+          OPENAI_API_KEY=test-key
+          SUPABASE_URL=http://localhost:8000
+          SUPABASE_ANON_KEY=test-key
+          DATABASE_URL=postgresql://user:pass@localhost:5432/test
+          REDIS_URL=redis://localhost:6379
+          EOF
+
+      - name: Validate docker-compose configuration
+        run: |
+          docker-compose -f docker-compose.yml config
+
+      - name: Validate docker-compose.dev configuration
+        run: |
+          docker-compose -f docker-compose.yml -f docker-compose.dev.yml config
+
+  security-scan:
+    name: Security Scan Docker Images
+    runs-on: ubuntu-latest
+    needs: [build-chat-ui, build-ai-agent]
+    if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
+
+    strategy:
+      matrix:
+        image: [chat-ui, ai-agent]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build image for scanning
+        uses: docker/build-push-action@v5
+        with:
+          context: ${{ matrix.image == 'chat-ui' && '.' || './apps/ai_agent' }}
+          file: ${{ matrix.image == 'chat-ui' && './apps/chat-ui/Dockerfile' || './apps/ai_agent/Dockerfile' }}
+          push: false
+          load: true
+          tags: ${{ matrix.image }}:scan
+
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ matrix.image }}:scan
+          format: 'sarif'
+          output: 'trivy-results-${{ matrix.image }}.sarif'
+          severity: 'CRITICAL,HIGH'
+
+      - name: Upload Trivy results to GitHub Security
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: 'trivy-results-${{ matrix.image }}.sarif'
+          category: 'trivy-${{ matrix.image }}'
+
+  docker-success:
+    name: Docker Build Success
+    runs-on: ubuntu-latest
+    needs: [build-chat-ui, build-ai-agent, docker-compose-test]
+    if: always()
+    steps:
+      - name: Check all jobs status
+        run: |
+          if [[ "${{ needs.build-chat-ui.result }}" != "success" ]] || [[ "${{ needs.build-ai-agent.result }}" != "success" ]]; then
+            echo "One or more Docker build jobs failed"
+            exit 1
+          fi
+          echo "All Docker builds passed successfully!"
