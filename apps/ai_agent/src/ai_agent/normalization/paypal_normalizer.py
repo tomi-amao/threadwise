@@ -199,18 +199,47 @@ class PayPalNormalizer(FinancialNormalizer):
                 counterparty_name = full if full else None
 
             # -----------------------------------------------------------------
-            # Description — fold reference (transaction_id) into description
+            # Description — build a rich, human-readable description
+            # using cart item names, counterparty, and subject/note fields.
+            # Falls back to event code + reference only when nothing better
+            # is available.
             # -----------------------------------------------------------------
-            description = (
+            cart_info = payload.get("cart_info", {})
+            item_details = cart_info.get("item_details", [])
+
+            # Best source: cart item names / descriptions
+            item_names = [
+                (item.get("item_description") or item.get("item_name") or "").strip()
+                for item in item_details
+                if item.get("item_name") or item.get("item_description")
+            ]
+            # Deduplicate while preserving order
+            seen: set = set()
+            unique_item_names: List[str] = []
+            for n in item_names:
+                if n and n not in seen:
+                    seen.add(n)
+                    unique_item_names.append(n)
+
+            subject_or_note = (
                 txn_info.get("transaction_subject")
                 or txn_info.get("transaction_note")
-                or event_code
             )
+
+            if unique_item_names:
+                description = "; ".join(unique_item_names)
+            elif subject_or_note:
+                description = subject_or_note
+            else:
+                description = event_code
+
+            # Append counterparty if available
+            if counterparty_name:
+                description = f"{description} — {counterparty_name}"
+
             reference = txn_info.get("transaction_id")
             if reference:
-                description = (
-                    f"{description} | Ref: {reference}" if description else reference
-                )
+                description = f"{description} | Ref: {reference}"
 
             # -----------------------------------------------------------------
             # Base amount / FX rate
@@ -236,16 +265,75 @@ class PayPalNormalizer(FinancialNormalizer):
                 "transaction_status": txn_info.get("transaction_status"),
             }
 
+            # Invoice reference — critical for invoice matching
+            invoice_id = txn_info.get("invoice_id")
+            if invoice_id:
+                metadata["invoice_id"] = invoice_id
+
             fee_amount = txn_info.get("fee_amount")
             if fee_amount:
                 metadata["fee_amount"] = fee_amount
 
-            if payer_info:
-                metadata["payer_info"] = payer_info
-
             ending_balance = txn_info.get("ending_balance")
             if ending_balance:
                 metadata["ending_balance"] = ending_balance
+
+            # Payer info — extract useful fields (not raw object dump)
+            if payer_info:
+                payer_email = payer_info.get("email_address")
+                if payer_email:
+                    metadata["payer_email"] = payer_email
+
+                payer_full_name = (
+                    payer_name.get("alternate_full_name")
+                    or f"{payer_name.get('given_name', '')} {payer_name.get('surname', '')}".strip()
+                    or None
+                )
+                if payer_full_name:
+                    metadata["payer_name"] = payer_full_name
+
+                payer_country = payer_info.get("country_code")
+                if payer_country:
+                    metadata["payer_country"] = payer_country
+
+            # Cart info — simplified item details and invoice numbers
+            if item_details:
+                metadata["cart_items"] = [
+                    {
+                        "name": item.get("item_name"),
+                        "description": item.get("item_description"),
+                        "quantity": item.get("item_quantity"),
+                        "unit_price": (item.get("item_unit_price") or {}).get("value"),
+                        "amount": (item.get("item_amount") or {}).get("value"),
+                        "invoice_number": item.get("invoice_number"),
+                    }
+                    for item in item_details
+                    if item.get("item_name")
+                ]
+
+                # Deduplicated invoice numbers for easy lookup
+                invoice_numbers = list({
+                    item.get("invoice_number")
+                    for item in item_details
+                    if item.get("invoice_number")
+                })
+                if invoice_numbers:
+                    metadata["invoice_numbers"] = invoice_numbers
+
+            paypal_invoice_id = cart_info.get("paypal_invoice_id")
+            if paypal_invoice_id:
+                metadata["paypal_invoice_id"] = paypal_invoice_id
+
+            # Shipping info — simplified
+            shipping_info = payload.get("shipping_info", {})
+            if shipping_info and shipping_info.get("name"):
+                shipping_address = shipping_info.get("address", {})
+                metadata["shipping"] = {
+                    "name": shipping_info.get("name"),
+                    "city": shipping_address.get("city"),
+                    "country_code": shipping_address.get("country_code"),
+                    "postal_code": shipping_address.get("postal_code"),
+                }
 
             # -----------------------------------------------------------------
             # Build canonical model

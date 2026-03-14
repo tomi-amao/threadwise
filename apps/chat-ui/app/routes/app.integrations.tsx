@@ -51,7 +51,7 @@ import {
 import { SyncProgressToast } from '~/components/integrations/SyncProgressToast';
 import { NormalizationProgressToast } from '~/components/integrations/NormalizationProgressToast';
 import { IncompleteTransactionsModal } from '~/components/integrations/IncompleteTransactionsModal';
-import { JournalCreationModal } from '~/components/integrations/JournalCreationModal';
+import { JournalGenerationModal } from '~/components/integrations/JournalGenerationModal';
 
 // Provider configuration
 const PROVIDERS = {
@@ -216,7 +216,6 @@ function IntegrationCard({
   onReprocessFailed,
   onRemove,
   onViewUncategorized,
-  onCreateJournals,
   isSyncing,
   syncingEndpoint,
   isValidatingApiKey,
@@ -233,7 +232,6 @@ function IntegrationCard({
   onReprocessFailed: () => void;
   onRemove: () => void;
   onViewUncategorized: () => void;
-  onCreateJournals: () => void;
   isSyncing: boolean;
   syncingEndpoint: string | null;
   isValidatingApiKey: boolean;
@@ -593,21 +591,6 @@ function IntegrationCard({
             )}
           </Button>
           <div className="flex items-center gap-2">
-            {/* Create Journals button - visible when data has been synced and entity exists */}
-            {integration.entity_id &&
-              (integration.sync_status === 'completed' ||
-                (integration.stats &&
-                  Object.values(integration.stats).reduce((a, b) => a + b, 0) > 0)) && (
-                <Button
-                  onClick={onCreateJournals}
-                  variant="outline"
-                  size="sm"
-                  className="gap-1.5 border-violet-500/30 text-violet-400 hover:bg-violet-500/10 hover:text-violet-300"
-                >
-                  <BookOpen size={14} weight="duotone" />
-                  Create Journals
-                </Button>
-              )}
             {/* Load Data button (normalization) - visible when data has been synced */}
             {(integration.sync_status === 'completed' ||
               (integration.stats &&
@@ -1079,7 +1062,6 @@ export default function IntegrationsPage() {
   } | null>(null);
   const [journalModalSource, setJournalModalSource] = useState<{
     entityId: string;
-    providerName: string;
   } | null>(null);
 
   // Fetch data
@@ -1302,17 +1284,30 @@ export default function IntegrationsPage() {
               Connect your external services to sync data automatically
             </p>
           </div>
-          <Button
-            onClick={() => setShowAddForm(!showAddForm)}
-            className={cn(
-              'bg-gradient-to-r from-primary to-primary/90',
-              'hover:from-primary/90 hover:to-primary/80',
-              'shadow-lg shadow-primary/20'
+          <div className="flex items-center gap-3">
+            {/* Generate Journals button — global, not per-integration */}
+            {entity?.id && integrations.length > 0 && (
+              <Button
+                onClick={() => setJournalModalSource({ entityId: entity.id })}
+                variant="outline"
+                className="gap-2 border-violet-500/30 text-violet-400 hover:bg-violet-500/10 hover:text-violet-300"
+              >
+                <BookOpen size={18} weight="duotone" />
+                Generate Journals
+              </Button>
             )}
-          >
-            <Plus size={18} weight="bold" className="mr-2" />
-            Add Integration
-          </Button>
+            <Button
+              onClick={() => setShowAddForm(!showAddForm)}
+              className={cn(
+                'bg-gradient-to-r from-primary to-primary/90',
+                'hover:from-primary/90 hover:to-primary/80',
+                'shadow-lg shadow-primary/20'
+              )}
+            >
+              <Plus size={18} weight="bold" className="mr-2" />
+              Add Integration
+            </Button>
+          </div>
         </div>
 
         {/* Add Form */}
@@ -1376,21 +1371,6 @@ export default function IntegrationsPage() {
                     entityId: integration.entity_id ?? undefined,
                   })
                 }
-                onCreateJournals={() => {
-                  if (integration.entity_id) {
-                    const providerConfig = {
-                      squarespace: 'Squarespace',
-                      revolut: 'Revolut',
-                      paypal: 'PayPal',
-                    } as const;
-                    setJournalModalSource({
-                      entityId: integration.entity_id,
-                      providerName:
-                        providerConfig[integration.provider as keyof typeof providerConfig] ||
-                        integration.provider,
-                    });
-                  }
-                }}
                 onLoadData={mode => handleLoadData(integration.id, mode)}
                 onReprocessFailed={() => handleReprocessFailed(integration.id)}
                 onRemove={() => handleRemove(integration.id)}
@@ -1444,12 +1424,11 @@ export default function IntegrationsPage() {
           />
         )}
 
-        {/* Journal Creation Modal */}
+        {/* Journal Generation Modal */}
         {journalModalSource && (
-          <JournalCreationModal
+          <JournalGenerationModal
             isOpen={true}
             entityId={journalModalSource.entityId}
-            providerName={journalModalSource.providerName}
             onClose={() => {
               setJournalModalSource(null);
               fetchData();

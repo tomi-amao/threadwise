@@ -151,6 +151,37 @@ export async function updateInvoiceStatus(
 }
 
 /**
+ * Check whether a financial transaction exists that is matched to the given invoice.
+ * Uses metadata.invoice_id to find transactions referencing the invoice number.
+ */
+export async function findMatchingTransaction(
+  invoiceNumber: string,
+  entityId: string
+): Promise<{ transactionId: string | null; found: boolean }> {
+  if (!invoiceNumber || !entityId) {
+    return { transactionId: null, found: false };
+  }
+
+  const supabase = getSupabaseClient();
+
+  const { data, error } = await supabase
+    .from('financial_transactions')
+    .select('id')
+    .eq('entity_id', entityId)
+    .filter('metadata->>invoice_id', 'eq', invoiceNumber)
+    .is('excluded_reason', null)
+    .limit(1)
+    .maybeSingle();
+
+  if (error) {
+    console.error('Error checking matching transaction:', error);
+    return { transactionId: null, found: false };
+  }
+
+  return { transactionId: data?.id ?? null, found: !!data };
+}
+
+/**
  * Delete invoice metadata record (storage file handled separately).
  */
 export async function deleteInvoice(

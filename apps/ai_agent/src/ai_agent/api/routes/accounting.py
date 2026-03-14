@@ -2,16 +2,16 @@
 
 Provides endpoints for:
 - Chart of accounts management
-- Clearing balance computation
-- Reconciliation
-- Journal creation (accrual + settlement + sale)
+- Cross-provider duplicate detection
+- Invoice matching
+- Journal creation (accrual + settlement + expense + purchase + sale)
 - Journal listing and reversal
 - Invoice ingestion (AI extraction → contacts → invoices → journals)
 - Contacts management
 """
 
 import logging
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
@@ -20,6 +20,7 @@ from pydantic import BaseModel, Field
 from ...services.reconciliation_service import reconciliation_service
 from ...services.journal_service import journal_service, JournalError
 from ...services.invoice_service import invoice_service
+from ...services.paypal_cleaning_service import paypal_cleaning_service
 
 logger = logging.getLogger(__name__)
 
@@ -35,27 +36,10 @@ class SeedChartRequest(BaseModel):
     entity_id: str = Field(..., description="Entity ID to seed accounts for")
 
 
-class ClearingBalanceRequest(BaseModel):
-    entity_id: str
-    currency: Optional[str] = None
-
-
-class ReconcileRequest(BaseModel):
-    entity_id: str
-    currency: Optional[str] = None
-
-
 class AccrueRequest(BaseModel):
     entity_id: str
-    order_ids: Optional[List[str]] = Field(
-        None, description="Specific order IDs. If omitted, finds all unaccrued completed orders."
-    )
-
-
-class SettleRequest(BaseModel):
-    entity_id: str
-    match_ids: Optional[List[str]] = Field(
-        None, description="Specific match IDs. If omitted, finds all unsettled matches."
+    payment_ids: Optional[List[str]] = Field(
+        None, description="Specific payment IDs. If omitted, finds all un-accrued captured payments."
     )
 
 
@@ -65,6 +49,10 @@ class ReverseJournalRequest(BaseModel):
 
 class DetectDuplicatesRequest(BaseModel):
     entity_id: str
+    auto_journal: bool = Field(
+        False,
+        description="If true, auto-create payment journals for invoices matched to PAID status",
+    )
 
 
 class PurchaseInvoiceRequest(BaseModel):
@@ -117,6 +105,24 @@ class ExpenseJournalRequest(BaseModel):
     )
 
 
+class GenerateAllJournalsRequest(BaseModel):
+    entity_id: str = Field(..., description="Entity ID to generate journals for")
+    scope: Optional[str] = Field(
+        None,
+        description=(
+            "Which journals to create: 'payments', 'transactions', 'invoices', or omit for all"
+        ),
+    )
+
+
+class CleanPayPalRequest(BaseModel):
+    entity_id: str
+
+
+class ReconcileInvoicesRequest(BaseModel):
+    entity_id: str
+
+
 # =============================================================================
 # CHART OF ACCOUNTS
 # =============================================================================
@@ -145,75 +151,82 @@ async def seed_chart_of_accounts(request: SeedChartRequest):
 
 
 # =============================================================================
-# CLEARING BALANCE
+# PAYPAL CLEANING
 # =============================================================================
 
 
-@router.get("/clearing-balance")
-async def get_clearing_balance(entity_id: str, currency: Optional[str] = None):
-    """Compute the clearing account balance.
+@router.post("/clean-paypal")
+async def clean_paypal_transactions(request: CleanPayPalRequest):
+    """Run the PayPal transaction cleaning pipeline.
 
-    Returns the net balance of the Payment Gateway Clearing account (1200).
-    A positive balance means expected but unsettled funds.
+    Groups PayPal transactions, classifies noise vs real economic events,
+    excludes internal/conversion noise, calculates FX rates, and matches
+    to Revolut transactions. Should be run before journal creation.
     """
     try:
-        result = await reconciliation_service.compute_clearing_balance(
-            UUID(entity_id), currency
+        result = await paypal_cleaning_service.clean_paypal_transactions(
+            UUID(request.entity_id)
         )
         return result
     except Exception as e:
-        logger.error(f"Error computing clearing balance: {e}")
+        logger.error(f"Error cleaning PayPal transactions: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
 # =============================================================================
-# RECONCILIATION
+# CROSS-PROVIDER DETECTION & INVOICE MATCHING
 # =============================================================================
 
 
-@router.post("/reconcile")
-async def run_reconciliation(request: ReconcileRequest):
-    """Run automated reconciliation matching.
-
-    Matches bank payout transactions against payment records.
-    """
+@router.post("/reconcile-invoices")
+async def reconcile_invoices(request: ReconcileInvoicesRequest):
+    """Auto-match open invoices to financial transactions."""
     try:
-        result = await reconciliation_service.run_reconciliation(
-            UUID(request.entity_id), request.currency
+        result = await reconciliation_service.reconcile_invoice_payments(
+            UUID(request.entity_id)
         )
         return result
     except Exception as e:
-        logger.error(f"Error running reconciliation: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.get("/reconciliation-matches")
-async def list_reconciliation_matches(
-    entity_id: str,
-    status_filter: Optional[str] = None,
-    limit: int = 100,
-):
-    """List reconciliation matches with optional status filter."""
-    try:
-        matches = await reconciliation_service.get_reconciliation_matches(
-            UUID(entity_id), status_filter, limit
-        )
-        return {"entity_id": entity_id, "matches": matches, "count": len(matches)}
-    except Exception as e:
-        logger.error(f"Error listing reconciliation matches: {e}")
+        logger.error(f"Error reconciling invoices: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/detect-duplicates")
 async def detect_duplicates(request: DetectDuplicatesRequest):
-    """Detect cross-provider duplicate transactions.
+    """Detect cross-provider duplicate transactions, enrich, and match invoices.
 
-    Finds transactions that appear in both Revolut and PayPal.
+    Finds transactions that appear in both Revolut and PayPal, enriches
+    the Revolut transaction with PayPal details (invoice_id, cart, payer,
+    shipping), and auto-updates matching invoice statuses.
+
+    If auto_journal=true, also creates payment journals for invoices
+    that are matched to PAID status.
     """
     try:
         result = await reconciliation_service.detect_cross_provider_duplicates(
             UUID(request.entity_id)
         )
+
+        # Auto-create payment journals for newly PAID invoices
+        if request.auto_journal and result.get("invoice_updates"):
+            journals_created = 0
+            journal_errors = []
+            for inv in result["invoice_updates"]:
+                if inv["new_status"] == "PAID":
+                    try:
+                        await journal_service.create_invoice_payment_journal(
+                            UUID(request.entity_id), UUID(inv["invoice_id"])
+                        )
+                        journals_created += 1
+                    except (JournalError, Exception) as e:
+                        journal_errors.append({
+                            "invoice_id": inv["invoice_id"],
+                            "error": str(e),
+                        })
+            result["journals_created"] = journals_created
+            if journal_errors:
+                result["journal_errors"] = journal_errors
+
         return result
     except Exception as e:
         logger.error(f"Error detecting duplicates: {e}")
@@ -226,43 +239,24 @@ async def detect_duplicates(request: DetectDuplicatesRequest):
 
 
 @router.post("/journals/accrue")
-async def accrue_orders(request: AccrueRequest):
-    """Generate accrual journals for completed orders.
+async def accrue_payments(request: AccrueRequest):
+    """Generate accrual journals for captured payments.
 
     Each accrual journal:
-    - DEBIT  Payment Gateway Clearing (1200) = grand_total
-    - CREDIT Revenue (4000)                  = subtotal - discounts
-    - CREDIT Shipping Revenue (4100)         = shipping_total
-    - CREDIT Tax Payable (2100)              = tax_total
+    - DEBIT  Payment Gateway Clearing (1012) = net_amount
+    - DEBIT  Bank Charges (8020)             = fee_amount
+    - CREDIT Revenue (4020)                  = subtotal - discounts
+    - CREDIT Revenue (4020)                  = shipping_total
+    - CREDIT Tax Payable (2030)              = tax_total
     """
     try:
-        order_ids = [UUID(oid) for oid in request.order_ids] if request.order_ids else None
-        result = await journal_service.accrue_orders(UUID(request.entity_id), order_ids)
+        payment_ids = [UUID(pid) for pid in request.payment_ids] if request.payment_ids else None
+        result = await journal_service.auto_journal_payments(UUID(request.entity_id), payment_ids)
         return result
     except JournalError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.error(f"Error creating accrual journals: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.post("/journals/settle")
-async def settle_matches(request: SettleRequest):
-    """Generate settlement journals for reconciled payouts.
-
-    Each settlement journal:
-    - DEBIT  Cash account (1000/1100)         = payout amount
-    - DEBIT  Processing Fees Expense (5000)   = fee amount
-    - CREDIT Payment Gateway Clearing (1200)  = payout + fees
-    """
-    try:
-        match_ids = [UUID(mid) for mid in request.match_ids] if request.match_ids else None
-        result = await journal_service.settle_matches(UUID(request.entity_id), match_ids)
-        return result
-    except JournalError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        logger.error(f"Error creating settlement journals: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -281,6 +275,23 @@ async def list_journals(
         return {"entity_id": entity_id, "journals": journals, "count": len(journals)}
     except Exception as e:
         logger.error(f"Error listing journals: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/journals/review-summary")
+async def get_review_summary(entity_id: str):
+    """Return items needing human review after journal generation.
+
+    Returns:
+    - ``draft_journals``: Journals marked draft because the automation could
+      not confidently categorise the transaction.
+    - ``summary``: High-level counts for badge display in the UI.
+    """
+    try:
+        result = await journal_service.get_review_summary(UUID(entity_id))
+        return result
+    except Exception as e:
+        logger.error(f"Error getting review summary: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -368,6 +379,32 @@ async def create_expense_journals(request: ExpenseJournalRequest):
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.error(f"Error creating expense journals: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/journals/generate-all")
+async def generate_all_journals(request: GenerateAllJournalsRequest):
+    """Run the journal generation pipeline.
+
+    Executes journal-generating steps in dependency order. Always runs
+    cross-provider duplicate detection and invoice matching first, then
+    creates journals based on the ``scope`` parameter:
+
+    - ``payments`` — accrual journals from captured payments
+    - ``transactions`` — settlement + expense journals from financial transactions
+    - ``invoices`` — purchase / sale / payment journals from invoices
+    - omit or ``all`` — run every scope
+
+    Each step is independent-on-failure: if one step errors, the pipeline
+    continues with the remaining steps.
+    """
+    try:
+        result = await journal_service.generate_all_journals(
+            UUID(request.entity_id), scope=request.scope
+        )
+        return result
+    except Exception as e:
+        logger.error(f"Error generating journals: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 

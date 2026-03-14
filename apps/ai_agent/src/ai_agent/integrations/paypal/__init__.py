@@ -27,6 +27,9 @@ ENDPOINTS = {
     "transactions": f"{PAYPAL_BASE_URL}/v1/reporting/transactions",
 }
 
+# PayPal Transaction Search API enforces a maximum 31-day date range per request
+MAX_DATE_WINDOW_DAYS = 31
+
 
 class PayPalAdapter:
     """Adapter for PayPal Transaction Search API.
@@ -240,18 +243,25 @@ class PayPalAdapter:
         self,
         endpoint: str,
         cursor: Optional[str] = None,
+        window_start: Optional[datetime] = None,
+        window_end: Optional[datetime] = None,
     ) -> PaginatedResult:
-        """Fetch a single page of data from an endpoint.
+        """Fetch a single page of data from an endpoint within a date window.
 
         PayPal Transaction Search uses page-number based pagination.
         The cursor is a string representation of the 1-based page number.
 
-        When no cursor is provided, defaults to page 1 with a 30-day
-        lookback window.
+        ``window_start`` and ``window_end`` must span at most 31 days — the
+        PayPal API enforces this limit and returns 400 for wider ranges.
+        When not provided they default to the most-recent ``MAX_DATE_WINDOW_DAYS``
+        window, which is only safe for single-window use; prefer calling via
+        ``stream_endpoint`` which handles windowing automatically.
 
         Args:
             endpoint: Endpoint name (``transactions``)
             cursor: Page number as a string (1-based), or None for first page
+            window_start: Start of the 31-day date window (UTC)
+            window_end: End of the 31-day date window (UTC)
 
         Returns:
             PaginatedResult with items and next cursor
@@ -266,21 +276,27 @@ class PayPalAdapter:
         params: Dict[str, Any] = {
             "page_size": self.page_size,
             "page": page,
+            "balance_affecting_records_only": "Y",
+            "fields": "transaction_info,payer_info,shipping_info,auction_info,cart_info,incentive_info,store_info",
         }
 
-        # Date range for transaction search (uses configured lookback_days)
+        # Date range for transaction search.
+        # PayPal enforces a hard 31-day maximum per request; callers must
+        # pass pre-computed windows via window_start/window_end.
         if endpoint == "transactions":
-            now = datetime.now(timezone.utc)
-            start = now - timedelta(days=self.lookback_days)
-            params["start_date"] = start.strftime("%Y-%m-%dT%H:%M:%S%z")
-            params["end_date"] = now.strftime("%Y-%m-%dT%H:%M:%S%z")
+            if window_start is None or window_end is None:
+                now = datetime.now(timezone.utc)
+                window_end = now
+                window_start = now - timedelta(days=MAX_DATE_WINDOW_DAYS)
+            params["start_date"] = window_start.strftime("%Y-%m-%dT%H:%M:%S%z")
+            params["end_date"] = window_end.strftime("%Y-%m-%dT%H:%M:%S%z")
 
         logger.info(
-            "Fetching %s page %d (cursor: %s, lookback: %d days)",
+            "Fetching %s page %d (window: %s to %s)",
             endpoint,
             page,
-            cursor or "start",
-            self.lookback_days,
+            window_start.strftime("%Y-%m-%d") if window_start else "n/a",
+            window_end.strftime("%Y-%m-%d") if window_end else "n/a",
         )
 
         response = await self._make_request(url, params)
@@ -314,61 +330,99 @@ class PayPalAdapter:
     ) -> AsyncIterator[RawEventRecord]:
         """Stream all items from an endpoint as raw event records.
 
+        Splits the configured ``lookback_days`` period into ``MAX_DATE_WINDOW_DAYS``
+        (31-day) windows to comply with PayPal's per-request date-range limit.
+        Within each window all pages are exhausted before moving to the next.
+
         Yields items one by one for memory efficiency.
         Never transforms data - exact API payloads are stored.
 
         Args:
             endpoint: Endpoint name
-            start_cursor: Optional page number string to resume from
+            start_cursor: Ignored (kept for API compatibility); windowing always
+                          starts from the oldest window.
 
         Yields:
             RawEventRecord for each item
         """
         entity_type = self._get_entity_type(endpoint)
-        cursor = start_cursor
         page_count = 0
         total_items = 0
 
-        while True:
-            page_count += 1
+        # Build contiguous 31-day windows covering the full lookback period,
+        # ordered from oldest to most recent.
+        now = datetime.now(timezone.utc)
+        lookback_start = now - timedelta(days=self.lookback_days)
 
-            try:
-                result = await self.fetch_page(endpoint, cursor)
-            except httpx.HTTPStatusError as e:
-                logger.error(
-                    "HTTP error fetching %s: %s",
-                    endpoint,
-                    e.response.status_code,
-                )
-                raise
-            except Exception as e:
-                logger.error("Error fetching %s: %s", endpoint, e)
-                raise
-
-            for item in result.items:
-                total_items += 1
-
-                yield RawEventRecord(
-                    provider="paypal",
-                    entity_type=entity_type,
-                    external_id=self._extract_external_id(item, entity_type),
-                    payload=item,  # Never transform - exact API payload
-                    occurred_at=self._extract_occurred_at(item, entity_type),
-                    fetched_at=result.fetched_at,
-                )
-
-            logger.info(
-                "Processed page %d of %s (%d items, %d total)",
-                page_count,
-                endpoint,
-                len(result.items),
-                total_items,
+        windows: list[tuple[datetime, datetime]] = []
+        window_end = now
+        while window_end > lookback_start:
+            window_start = max(
+                window_end - timedelta(days=MAX_DATE_WINDOW_DAYS),
+                lookback_start,
             )
+            windows.append((window_start, window_end))
+            window_end = window_start
 
-            if not result.has_more or not result.cursor:
-                break
+        windows.reverse()  # oldest first
 
-            cursor = result.cursor
+        logger.info(
+            "Streaming %s over %d date windows (%d-day lookback)",
+            endpoint,
+            len(windows),
+            self.lookback_days,
+        )
+
+        for win_start, win_end in windows:
+            page = 1
+
+            while True:
+                page_count += 1
+
+                try:
+                    result = await self.fetch_page(
+                        endpoint,
+                        cursor=str(page),
+                        window_start=win_start,
+                        window_end=win_end,
+                    )
+                except httpx.HTTPStatusError as e:
+                    logger.error(
+                        "HTTP error fetching %s: %s",
+                        endpoint,
+                        e.response.status_code,
+                    )
+                    raise
+                except Exception as e:
+                    logger.error("Error fetching %s: %s", endpoint, e)
+                    raise
+
+                for item in result.items:
+                    total_items += 1
+
+                    yield RawEventRecord(
+                        provider="paypal",
+                        entity_type=entity_type,
+                        external_id=self._extract_external_id(item, entity_type),
+                        payload=item,  # Never transform - exact API payload
+                        occurred_at=self._extract_occurred_at(item, entity_type),
+                        fetched_at=result.fetched_at,
+                    )
+
+                logger.info(
+                    "Processed page %d of %s window %s-%s (%d items, %d total)",
+                    page,
+                    endpoint,
+                    win_start.strftime("%Y-%m-%d"),
+                    win_end.strftime("%Y-%m-%d"),
+                    len(result.items),
+                    total_items,
+                )
+
+                if not result.has_more:
+                    break
+
+                page += 1
 
         logger.info(
             "Completed streaming %s: %d items across %d pages",

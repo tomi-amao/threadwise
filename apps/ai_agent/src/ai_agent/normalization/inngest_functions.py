@@ -58,6 +58,15 @@ ENTITY_TYPE_ORDER = [
     "bank_account", "financial_transaction", "expense",
 ]
 
+# Dependency tiers: types within the same tier share no FK dependencies and
+# can be processed in parallel.  Tiers must still be executed in order.
+ENTITY_TYPE_TIERS: List[List[str]] = [
+    ["profile", "product", "bank_account"],       # Tier 0 — no dependencies
+    ["inventory_item", "order"],                   # Tier 1 — depends on profile/product
+    ["transaction", "financial_transaction"],       # Tier 2 — depends on order/bank_account
+    ["expense"],                                   # Tier 3 — depends on financial_transaction
+]
+
 
 def get_normalizer(provider: str, entity_id: UUID):
     """Get the appropriate normalizer for a provider."""
@@ -65,6 +74,93 @@ def get_normalizer(provider: str, entity_id: UUID):
     if not normalizer_class:
         raise ValueError(f"No normalizer found for provider: {provider}")
     return normalizer_class(entity_id)
+
+
+# =============================================================================
+# PARALLEL BATCH HELPER
+# =============================================================================
+
+
+async def _process_batch_parallel(
+    pending_events: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """Normalize and persist a list of raw events in parallel.
+
+    Replaces the old sequential ``step.invoke`` loop inside ``normalize_batch``.
+    One ``step.run`` wrapping this function costs a single Inngest round-trip
+    regardless of how many events are in the batch.
+
+    Args:
+        pending_events: Raw event dicts fetched from ``external_raw_events``.
+
+    Returns:
+        Aggregated result dict with ``completed``, ``failed``, ``skipped`` counts
+        and an ``errors`` list for any failures.
+    """
+    # Pre-fetch entity_ids once per unique source (avoid N+1 DB round-trips)
+    entity_id_cache: Dict[str, Optional[str]] = {}
+    unique_sources = {ev["source_id"] for ev in pending_events}
+    for sid in unique_sources:
+        entity_id_cache[sid] = await _get_entity_id_from_source(sid)
+
+    async def _process_one(raw_event: Dict[str, Any]) -> Dict[str, Any]:
+        raw_event_id = UUID(raw_event["id"])
+
+        if raw_event.get("processing_status") == "completed":
+            return {"status": "skipped", "raw_event_id": str(raw_event_id), "error": None}
+
+        entity_id_str = entity_id_cache.get(raw_event["source_id"])
+        if not entity_id_str:
+            error = f"Could not determine entity_id for source: {raw_event['source_id']}"
+            return {"status": "failed", "raw_event_id": str(raw_event_id), "error": error}
+
+        entity_id = UUID(entity_id_str)
+        await persistence_service.mark_processing(raw_event_id)
+
+        persist_result = await _persist_event(
+            provider=raw_event["provider"],
+            entity_type=raw_event["entity_type"],
+            external_id=raw_event["external_id"],
+            payload=raw_event["payload"],
+            raw_event_id=raw_event_id,
+            entity_id=entity_id,
+        )
+
+        if persist_result.get("skipped"):
+            return {"status": "skipped", "raw_event_id": str(raw_event_id), "error": None}
+
+        return {
+            "status": "completed" if persist_result["success"] else "failed",
+            "raw_event_id": str(raw_event_id),
+            "error": persist_result.get("error"),
+        }
+
+    per_event_results = await asyncio.gather(
+        *[_process_one(ev) for ev in pending_events],
+        return_exceptions=True,
+    )
+
+    aggregated: Dict[str, Any] = {"completed": 0, "failed": 0, "skipped": 0, "errors": []}
+    for i, result in enumerate(per_event_results):
+        if isinstance(result, Exception):
+            aggregated["failed"] += 1
+            aggregated["errors"].append({
+                "raw_event_id": pending_events[i].get("id"),
+                "error": str(result),
+            })
+        elif result["status"] == "completed":
+            aggregated["completed"] += 1
+        elif result["status"] == "skipped":
+            aggregated["skipped"] += 1
+        else:
+            aggregated["failed"] += 1
+            if result.get("error"):
+                aggregated["errors"].append({
+                    "raw_event_id": result["raw_event_id"],
+                    "error": result["error"],
+                })
+
+    return aggregated
 
 
 # =============================================================================
@@ -229,82 +325,21 @@ async def normalize_batch(ctx: inngest.Context) -> Dict[str, Any]:
             }
         
         ctx.logger.info(f"Found {len(pending_events)} pending events")
+
+        # Step 2: Process all events in parallel inside a single step.
+        # This replaces the old sequential step.invoke-per-event loop and
+        # reduces N Inngest round-trips down to 1.
+        results = await ctx.step.run(
+            "process-batch-parallel",
+            lambda evts=pending_events: _process_batch_parallel(evts),
+        )
         
-        # Step 2: Process each event
-        results = {
-            "completed": 0,
-            "failed": 0,
-            "skipped": 0,
-            "errors": []
-        }
-        
-        for i, raw_event in enumerate(pending_events):
-            raw_event_id = UUID(raw_event["id"])
-            
-            try:
-                event_result = await ctx.step.invoke(
-                    f"normalize-{i}-{raw_event['external_id'][:8]}",
-                    function=normalize_raw_event,
-                    data={
-                        "raw_event_id": str(raw_event_id),
-                        "force": False
-                    }
-                )
-                
-                if event_result.get("status") == "completed":
-                    results["completed"] += 1
-                elif event_result.get("status") == "skipped":
-                    results["skipped"] += 1
-                else:
-                    results["failed"] += 1
-                    results["errors"].append({
-                        "raw_event_id": str(raw_event_id),
-                        "error": event_result.get("error")
-                    })
-                    
-            except Exception as e:
-                results["failed"] += 1
-                results["errors"].append({
-                    "raw_event_id": str(raw_event_id),
-                    "error": str(e)
-                })
-            
-            # Publish progress update if we have a channel
-            if channel_source_id and entity_type:
-                total_done = results["completed"] + results["failed"] + results["skipped"]
-                # Use total_pending_count from source for accurate denominator
-                effective_total = total_pending_count if total_pending_count else len(pending_events)
-                try:
-                    channel = get_normalization_channel(channel_source_id)
-                    await realtime.publish(
-                        client=inngest_client,
-                        channel=channel,
-                        topic="progress",
-                        data=NormalizationProgressData(
-                            entity_type=entity_type,
-                            status="processing",
-                            events_processed=cumulative_processed + total_done,
-                            events_total=effective_total,
-                            events_succeeded=cumulative_succeeded + results["completed"],
-                            events_failed=cumulative_failed + results["failed"],
-                            error=None,
-                            timestamp=datetime.now().isoformat(),
-                        ),
-                    )
-                except Exception as pub_err:
-                    ctx.logger.warning(f"Failed to publish progress: {pub_err}")
-            
-            # No artificial delay — rely on Inngest concurrency controls
-        
-        # Publish completion/progress for this batch
+        # Step 3: Publish progress/completion for this batch
         if channel_source_id and entity_type:
             effective_total = total_pending_count if total_pending_count else len(pending_events)
             total_done = results["completed"] + results["failed"] + results["skipped"]
             final_processed = cumulative_processed + total_done
-            
-            # Only mark as "completed" if ALL events for this entity type are done
             is_final_batch = final_processed >= effective_total
-            
             try:
                 channel = get_normalization_channel(channel_source_id)
                 await realtime.publish(
@@ -324,12 +359,12 @@ async def normalize_batch(ctx: inngest.Context) -> Dict[str, Any]:
                 )
             except Exception as pub_err:
                 ctx.logger.warning(f"Failed to publish completion: {pub_err}")
-        
+
         return {
             "status": "completed",
             "events_total": len(pending_events),
             **results,
-            "processed_at": datetime.now().isoformat()
+            "processed_at": datetime.now().isoformat(),
         }
         
     except Exception as e:
@@ -420,47 +455,31 @@ async def normalize_source(ctx: inngest.Context) -> Dict[str, Any]:
             )
             ctx.logger.info(f"Hard mode: reset {reset_count} events to pending")
         
-        # Step 2: Process each entity type in dependency order
-        all_results = {}
+        # Step 2: Build dependency-ordered tiers filtered to this provider's entity types.
+        # Entity types within each tier have no FK dependencies on each other and
+        # can be processed in parallel.  Tiers are still executed sequentially.
+        entity_type_set = set(entity_types_to_process)
+        filtered_tiers = [
+            [et for et in tier if et in entity_type_set]
+            for tier in ENTITY_TYPE_TIERS
+        ]
+        filtered_tiers = [t for t in filtered_tiers if t]  # drop empty tiers
+
+        all_results: Dict[str, Any] = {}
         total_succeeded = 0
         total_failed = 0
         completed_types = 0
-        
-        for entity_type in entity_types_to_process:
-            # Publish progress for starting this entity type
-            await realtime.publish(
-                client=inngest_client,
-                channel=channel,
-                topic="progress",
-                data=NormalizationProgressData(
-                    entity_type=entity_type,
-                    status="starting",
-                    events_processed=0,
-                    events_total=0,
-                    events_succeeded=0,
-                    events_failed=0,
-                    error=None,
-                    timestamp=datetime.now().isoformat(),
-                ),
-            )
-            
-            # Count pending events for this type
-            pending_count = await ctx.step.run(
-                f"count-pending-{entity_type}",
-                lambda et=entity_type: _count_pending_events(
-                    entity_type=et,
-                    source_id=source_id
-                )
-            )
-            
-            if pending_count == 0:
+
+        for tier_idx, tier_entity_types in enumerate(filtered_tiers):
+            # Publish "starting" for every type in this tier
+            for entity_type in tier_entity_types:
                 await realtime.publish(
                     client=inngest_client,
                     channel=channel,
                     topic="progress",
                     data=NormalizationProgressData(
                         entity_type=entity_type,
-                        status="completed",
+                        status="starting",
                         events_processed=0,
                         events_total=0,
                         events_succeeded=0,
@@ -469,53 +488,101 @@ async def normalize_source(ctx: inngest.Context) -> Dict[str, Any]:
                         timestamp=datetime.now().isoformat(),
                     ),
                 )
-                completed_types += 1
-                all_results[entity_type] = {
-                    "completed": 0, "failed": 0, "skipped": 0, "events_total": 0
-                }
-                continue
-            
-            # Process in batches
-            type_results = {"completed": 0, "failed": 0, "skipped": 0, "events_total": 0}
-            offset_batch = 0
-            
-            while True:
-                batch_result = await ctx.step.invoke(
-                    f"normalize-{entity_type}-batch-{offset_batch}",
-                    function=normalize_batch,
-                    data={
-                        "entity_type": entity_type,
-                        "source_id": source_id,
-                        "limit": batch_size,
-                        "source_id_for_channel": source_id,
-                        "total_pending_count": pending_count,
-                        "cumulative_processed": type_results["completed"] + type_results["failed"] + type_results["skipped"],
-                        "cumulative_succeeded": type_results["completed"],
-                        "cumulative_failed": type_results["failed"],
+
+            # Count pending events for all types in this tier in parallel
+            count_results = await ctx.group.parallel(
+                tuple(
+                    lambda et=et: ctx.step.run(
+                        f"count-pending-{et}",
+                        lambda e=et: _count_pending_events(entity_type=e, source_id=source_id),
+                    )
+                    for et in tier_entity_types
+                )
+            )
+            tier_pending_counts = dict(zip(tier_entity_types, count_results))
+
+            # Publish "completed" for types with nothing to process
+            for entity_type in tier_entity_types:
+                if tier_pending_counts[entity_type] == 0:
+                    await realtime.publish(
+                        client=inngest_client,
+                        channel=channel,
+                        topic="progress",
+                        data=NormalizationProgressData(
+                            entity_type=entity_type,
+                            status="completed",
+                            events_processed=0,
+                            events_total=0,
+                            events_succeeded=0,
+                            events_failed=0,
+                            error=None,
+                            timestamp=datetime.now().isoformat(),
+                        ),
+                    )
+                    completed_types += 1
+                    all_results[entity_type] = {
+                        "completed": 0, "failed": 0, "skipped": 0, "events_total": 0
                     }
+
+            # Active types are those with pending events
+            active_types: Dict[str, int] = {
+                et: tier_pending_counts[et]
+                for et in tier_entity_types
+                if tier_pending_counts[et] > 0
+            }
+            type_results: Dict[str, Dict[str, Any]] = {
+                et: {"completed": 0, "failed": 0, "skipped": 0, "events_total": 0}
+                for et in active_types
+            }
+            type_offsets: Dict[str, int] = {et: 0 for et in active_types}
+
+            # Batch-processing rounds: invoke all active types in parallel per round,
+            # dropping types from the active set once their last batch is consumed.
+            while active_types:
+                invoke_tasks = tuple(
+                    lambda et=et, cnt=cnt, offs=type_offsets[et]: ctx.step.invoke(
+                        f"normalize-{et}-batch-{offs}",
+                        function=normalize_batch,
+                        data={
+                            "entity_type": et,
+                            "source_id": source_id,
+                            "limit": batch_size,
+                            "source_id_for_channel": source_id,
+                            "total_pending_count": cnt,
+                            "cumulative_processed": (
+                                type_results[et]["completed"]
+                                + type_results[et]["failed"]
+                                + type_results[et]["skipped"]
+                            ),
+                            "cumulative_succeeded": type_results[et]["completed"],
+                            "cumulative_failed": type_results[et]["failed"],
+                        },
+                    )
+                    for et, cnt in active_types.items()
                 )
-                
-                batch_total = batch_result.get("events_total", 0)
-                type_results["completed"] += batch_result.get("completed", 0)
-                type_results["failed"] += batch_result.get("failed", 0)
-                type_results["skipped"] += batch_result.get("skipped", 0)
-                type_results["events_total"] += batch_total
-                
-                if batch_total < batch_size:
-                    break
-                
-                offset_batch += 1
-                await ctx.step.sleep(
-                    f"delay-batch-{entity_type}-{offset_batch}",
-                    timedelta(milliseconds=200)
-                )
-            
-            all_results[entity_type] = type_results
-            total_succeeded += type_results["completed"]
-            total_failed += type_results["failed"]
-            completed_types += 1
-            
-            # Publish overall status update
+                batch_results_list = await ctx.group.parallel(invoke_tasks)
+
+                finished: List[str] = []
+                for et, batch_result in zip(list(active_types.keys()), batch_results_list):
+                    batch_total = batch_result.get("events_total", 0)
+                    type_results[et]["completed"] += batch_result.get("completed", 0)
+                    type_results[et]["failed"] += batch_result.get("failed", 0)
+                    type_results[et]["skipped"] += batch_result.get("skipped", 0)
+                    type_results[et]["events_total"] += batch_total
+                    type_offsets[et] += 1
+                    if batch_total < batch_size:
+                        finished.append(et)
+
+                for et in finished:
+                    del active_types[et]
+
+            for entity_type in [et for et in tier_entity_types if tier_pending_counts[et] > 0]:
+                all_results[entity_type] = type_results[entity_type]
+                total_succeeded += type_results[entity_type]["completed"]
+                total_failed += type_results[entity_type]["failed"]
+                completed_types += 1
+
+            # Publish overall status after completing this tier
             await realtime.publish(
                 client=inngest_client,
                 channel=channel,
@@ -531,11 +598,6 @@ async def normalize_source(ctx: inngest.Context) -> Dict[str, Any]:
                     error=None,
                     timestamp=datetime.now().isoformat(),
                 ),
-            )
-            
-            await ctx.step.sleep(
-                f"delay-after-{entity_type}",
-                timedelta(seconds=1)
             )
         
         # Publish final completion status
@@ -738,32 +800,31 @@ async def reprocess_failed_events(ctx: inngest.Context) -> Dict[str, Any]:
         
         ctx.logger.info(f"Found {len(failed_events)} failed events to retry")
         
-        results = {"retried": 0, "succeeded": 0, "failed_again": 0}
-        
-        for raw_event in failed_events:
-            raw_event_id = raw_event["id"]
-            
-            event_result = await ctx.step.invoke(
-                f"retry-{raw_event_id[:8]}",
-                function=normalize_raw_event,
-                data={
-                    "raw_event_id": raw_event_id,
-                    "force": True
-                }
+        # Retry all failed events in parallel
+        retry_results = await ctx.group.parallel(
+            tuple(
+                lambda ev=ev: ctx.step.invoke(
+                    f"retry-{ev['id'][:8]}",
+                    function=normalize_raw_event,
+                    data={"raw_event_id": ev["id"], "force": True},
+                )
+                for ev in failed_events
             )
-            
-            results["retried"] += 1
-            if event_result.get("status") == "completed":
-                results["succeeded"] += 1
-            else:
-                results["failed_again"] += 1
-        
+        )
+
+        succeeded = sum(1 for r in retry_results if r.get("status") == "completed")
+        results = {
+            "retried": len(failed_events),
+            "succeeded": succeeded,
+            "failed_again": len(failed_events) - succeeded,
+        }
+
         return {
             "status": "completed",
             **results,
-            "processed_at": datetime.now().isoformat()
+            "processed_at": datetime.now().isoformat(),
         }
-        
+
     except Exception as e:
         ctx.logger.error(f"Error reprocessing failed events: {str(e)}")
         raise
@@ -798,37 +859,39 @@ async def reprocess_stuck_processing_events(ctx: inngest.Context) -> Dict[str, A
         
         ctx.logger.info(f"Found {len(stuck_events)} stuck events to reset")
         
-        results = {"reset": 0, "succeeded": 0, "failed_again": 0}
-        
-        for raw_event in stuck_events:
-            raw_event_id = raw_event["id"]
-            
-            # Reset the event status to pending
-            await ctx.step.run(
-                f"reset-{raw_event_id[:8]}",
-                lambda: _reset_event_to_pending(raw_event_id)
+        # Reset all stuck events to pending in parallel, then reprocess in parallel
+        await ctx.group.parallel(
+            tuple(
+                lambda ev=ev: ctx.step.run(
+                    f"reset-{ev['id'][:8]}",
+                    lambda e=ev["id"]: _reset_event_to_pending(e),
+                )
+                for ev in stuck_events
             )
-            results["reset"] += 1
-            
-            # Then reprocess it
-            event_result = await ctx.step.invoke(
-                f"reprocess-{raw_event_id[:8]}",
-                function=normalize_raw_event,
-                data={
-                    "raw_event_id": raw_event_id,
-                    "force": True
-                }
+        )
+
+        reprocess_results = await ctx.group.parallel(
+            tuple(
+                lambda ev=ev: ctx.step.invoke(
+                    f"reprocess-{ev['id'][:8]}",
+                    function=normalize_raw_event,
+                    data={"raw_event_id": ev["id"], "force": True},
+                )
+                for ev in stuck_events
             )
-            
-            if event_result.get("status") == "completed":
-                results["succeeded"] += 1
-            else:
-                results["failed_again"] += 1
-        
+        )
+
+        succeeded = sum(1 for r in reprocess_results if r.get("status") == "completed")
+        results = {
+            "reset": len(stuck_events),
+            "succeeded": succeeded,
+            "failed_again": len(stuck_events) - succeeded,
+        }
+
         return {
             "status": "completed",
             **results,
-            "processed_at": datetime.now().isoformat()
+            "processed_at": datetime.now().isoformat(),
         }
         
     except Exception as e:
@@ -867,32 +930,31 @@ async def reprocess_failed_manual(ctx: inngest.Context) -> Dict[str, Any]:
                 "message": "No failed events to reprocess"
             }
         
-        results = {"retried": 0, "succeeded": 0, "failed_again": 0}
-        
-        for raw_event in failed_events:
-            raw_event_id = raw_event["id"]
-            
-            event_result = await ctx.step.invoke(
-                f"retry-{raw_event_id[:8]}",
-                function=normalize_raw_event,
-                data={
-                    "raw_event_id": raw_event_id,
-                    "force": True
-                }
+        # Retry all failed events in parallel
+        retry_results = await ctx.group.parallel(
+            tuple(
+                lambda ev=ev: ctx.step.invoke(
+                    f"retry-{ev['id'][:8]}",
+                    function=normalize_raw_event,
+                    data={"raw_event_id": ev["id"], "force": True},
+                )
+                for ev in failed_events
             )
-            
-            results["retried"] += 1
-            if event_result.get("status") == "completed":
-                results["succeeded"] += 1
-            else:
-                results["failed_again"] += 1
-        
+        )
+
+        succeeded = sum(1 for r in retry_results if r.get("status") == "completed")
+        results = {
+            "retried": len(failed_events),
+            "succeeded": succeeded,
+            "failed_again": len(failed_events) - succeeded,
+        }
+
         return {
             "status": "completed",
             **results,
-            "processed_at": datetime.now().isoformat()
+            "processed_at": datetime.now().isoformat(),
         }
-        
+
     except Exception as e:
         ctx.logger.error(f"Error in manual reprocessing: {str(e)}")
         raise

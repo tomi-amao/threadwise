@@ -12,6 +12,7 @@ import type { ActionFunctionArgs } from 'react-router';
 import { redirect } from 'react-router';
 import {
   deleteInvoice,
+  findMatchingTransaction,
   getInvoice,
   getInvoiceUrl,
   listInvoices,
@@ -110,6 +111,31 @@ export async function action({ request }: ActionFunctionArgs) {
         const status = formData.get('status') as string;
         if (!invoiceId || !status) {
           return json({ error: 'invoiceId and status are required' }, { status: 400 });
+        }
+
+        // Before marking as PAID, verify a matching financial transaction exists.
+        // This prevents marking an invoice paid when the actual payment hasn't been imported.
+        if (status === 'PAID') {
+          const { invoice: inv, error: fetchErr } = await getInvoice(invoiceId);
+          if (fetchErr || !inv) {
+            return json({ error: fetchErr ?? 'Invoice not found' }, { status: 404 });
+          }
+
+          const { found } = await findMatchingTransaction(
+            inv.invoice_number ?? '',
+            inv.entity_id ?? ''
+          );
+
+          if (!found) {
+            return json(
+              {
+                error:
+                  'No matching financial transaction found for this invoice. ' +
+                  'Please ensure the payment has been imported and matched before marking as paid.',
+              },
+              { status: 422 }
+            );
+          }
         }
 
         const { invoice, error } = await updateInvoiceStatus(invoiceId, {

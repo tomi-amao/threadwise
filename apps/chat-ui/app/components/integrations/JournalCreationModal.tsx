@@ -2,12 +2,9 @@
  * Journal Creation Modal
  *
  * Provides one-click journal creation from canonical financial data.
- * Three journal types available:
- * - Accrue Orders: Revenue recognition from completed orders
- * - Settle Payouts: Settlement from reconciled bank payouts
+ * Two journal types available:
+ * - Accrue Payments: Revenue recognition from captured payments
  * - Journal Expenses: Expense recording from categorized bank transactions
- *
- * Each action auto-discovers eligible records and creates journals in batch.
  */
 
 import React, { useState, useCallback } from 'react';
@@ -16,7 +13,6 @@ import {
   X,
   BookOpen,
   ShoppingCart,
-  Bank,
   Receipt,
   ArrowsClockwise,
   CheckCircle,
@@ -25,12 +21,7 @@ import {
 } from 'phosphor-react';
 import { Button } from '~/components/ui/button';
 import { cn } from '~/lib/utils';
-import {
-  accrueOrders,
-  settleMatches,
-  journalExpenses,
-  type BatchJournalResult,
-} from '~/lib/api/accounting';
+import { accruePayments, journalExpenses, type BatchJournalResult } from '~/lib/api/accounting';
 
 // =============================================================================
 // TYPES
@@ -43,7 +34,7 @@ interface JournalCreationModalProps {
   providerName: string;
 }
 
-type JournalAction = 'accrue' | 'settle' | 'expense';
+type JournalAction = 'accrue' | 'expense';
 
 interface ActionState {
   loading: boolean;
@@ -72,21 +63,15 @@ const JOURNAL_ACTIONS: Array<{
 }> = [
   {
     key: 'accrue',
-    title: 'Accrue Orders',
-    description: 'Create revenue recognition journals from completed orders.',
-    detailLines: ['DR 1200 Payment Gateway Clearing', 'CR 4000 Revenue / 4100 Shipping / 2100 Tax'],
+    title: 'Accrue Payments',
+    description: 'Create revenue recognition journals from captured payments.',
+    detailLines: [
+      'DR 1012 Clearing (net) + DR 8020 Bank Charges (fees)',
+      'CR 4020 Revenue / Shipping / 2030 Tax',
+    ],
     icon: ShoppingCart,
     iconColor: 'text-blue-400',
     bgColor: 'bg-blue-500/10',
-  },
-  {
-    key: 'settle',
-    title: 'Settle Payouts',
-    description: 'Create settlement journals from reconciled bank payouts.',
-    detailLines: ['DR 1000/1100 Cash + 5000 Processing Fees', 'CR 1200 Payment Gateway Clearing'],
-    icon: Bank,
-    iconColor: 'text-emerald-400',
-    bgColor: 'bg-emerald-500/10',
   },
   {
     key: 'expense',
@@ -111,7 +96,6 @@ export function JournalCreationModal({
 }: JournalCreationModalProps) {
   const [actionStates, setActionStates] = useState<Record<JournalAction, ActionState>>({
     accrue: { ...INITIAL_ACTION_STATE },
-    settle: { ...INITIAL_ACTION_STATE },
     expense: { ...INITIAL_ACTION_STATE },
   });
 
@@ -129,10 +113,7 @@ export function JournalCreationModal({
         let result: BatchJournalResult;
         switch (action) {
           case 'accrue':
-            result = await accrueOrders(entityId);
-            break;
-          case 'settle':
-            result = await settleMatches(entityId);
+            result = await accruePayments(entityId);
             break;
           case 'expense':
             result = await journalExpenses(entityId);

@@ -69,64 +69,64 @@ class RevolutNormalizer(FinancialNormalizer):
     # MCC code ranges -> (account_code, expense_category)
     MCC_ACCOUNT_MAP: Dict[Tuple[int, int], Tuple[str, str]] = {
         # COGS-related
-        (5000, 5099): ("5000", "product_purchase"),
-        (5100, 5199): ("5100", "materials"),
-        (5200, 5699): ("5000", "product_purchase"),
+        (5000, 5099): ("5010", "product_purchase"),
+        (5100, 5199): ("5010", "materials"),
+        (5200, 5699): ("5010", "product_purchase"),
         # Marketing & Advertising
-        (7311, 7311): ("6100", "marketing"),
-        (7399, 7399): ("6100", "marketing"),
-        (5961, 5969): ("6100", "marketing"),
+        (7311, 7311): ("6010", "marketing"),
+        (7399, 7399): ("6010", "marketing"),
+        (5961, 5969): ("6010", "marketing"),
         # Shipping & Delivery
-        (4214, 4215): ("6200", "outbound_shipping"),
-        (4511, 4511): ("6200", "outbound_shipping"),
-        (4210, 4215): ("6200", "outbound_shipping"),
+        (4214, 4215): ("6020", "outbound_shipping"),
+        (4511, 4511): ("6020", "outbound_shipping"),
+        (4210, 4215): ("6020", "outbound_shipping"),
         # Software & Subscriptions
-        (7372, 7372): ("6300", "software"),
-        (5045, 5045): ("6300", "software"),
-        (5734, 5734): ("6300", "software"),
+        (7372, 7372): ("7070", "software"),
+        (5045, 5045): ("7070", "software"),
+        (5734, 5734): ("7070", "software"),
         # Professional Services
-        (8111, 8111): ("6600", "professional_services"),
-        (8931, 8931): ("6600", "professional_services"),
-        (8999, 8999): ("6600", "professional_services"),
+        (8111, 8111): ("7060", "professional_services"),
+        (8931, 8931): ("7060", "professional_services"),
+        (8999, 8999): ("7060", "professional_services"),
         # Insurance
-        (6300, 6300): ("6700", "insurance"),
+        (6300, 6300): ("7050", "insurance"),
         # Office Supplies
-        (5943, 5943): ("6800", "office_supplies"),
-        (5111, 5111): ("6800", "office_supplies"),
-        (5112, 5112): ("6800", "office_supplies"),
+        (5943, 5943): ("7090", "office_supplies"),
+        (5111, 5111): ("7090", "office_supplies"),
+        (5112, 5112): ("7090", "office_supplies"),
         # Banking & Financial
-        (6012, 6012): ("6900", "bank_charges"),
-        (6011, 6011): ("6900", "bank_charges"),
+        (6012, 6012): ("8020", "bank_charges"),
+        (6011, 6011): ("8020", "bank_charges"),
     }
 
     # Known merchant name overrides (lowercase prefix match)
     MERCHANT_NAME_OVERRIDES: Dict[str, Tuple[str, str]] = {
-        "google ads": ("6100", "marketing"),
-        "meta ads": ("6100", "marketing"),
-        "facebook": ("6100", "marketing"),
-        "instagram": ("6100", "marketing"),
-        "tiktok": ("6100", "marketing"),
-        "mailchimp": ("6100", "marketing"),
-        "klaviyo": ("6100", "marketing"),
-        "royal mail": ("6200", "outbound_shipping"),
-        "evri": ("6200", "outbound_shipping"),
-        "hermes": ("6200", "outbound_shipping"),
-        "dhl": ("6200", "outbound_shipping"),
-        "ups": ("6200", "outbound_shipping"),
-        "fedex": ("6200", "outbound_shipping"),
-        "dpd": ("6200", "outbound_shipping"),
-        "shopify": ("6300", "software"),
-        "squarespace": ("6300", "software"),
-        "notion": ("6300", "software"),
-        "figma": ("6300", "software"),
-        "canva": ("6300", "software"),
-        "adobe": ("6300", "software"),
-        "slack": ("6300", "software"),
-        "zoom": ("6300", "software"),
-        "google workspace": ("6300", "software"),
-        "microsoft": ("6300", "software"),
-        "xero": ("6300", "software"),
-        "quickbooks": ("6300", "software"),
+        "google ads": ("6010", "marketing"),
+        "meta ads": ("6010", "marketing"),
+        "facebook": ("6010", "marketing"),
+        "instagram": ("6010", "marketing"),
+        "tiktok": ("6010", "marketing"),
+        "mailchimp": ("6010", "marketing"),
+        "klaviyo": ("6010", "marketing"),
+        "royal mail": ("6020", "outbound_shipping"),
+        "evri": ("6020", "outbound_shipping"),
+        "hermes": ("6020", "outbound_shipping"),
+        "dhl": ("6020", "outbound_shipping"),
+        "ups": ("6020", "outbound_shipping"),
+        "fedex": ("6020", "outbound_shipping"),
+        "dpd": ("6020", "outbound_shipping"),
+        "shopify": ("7070", "software"),
+        "squarespace": ("7070", "software"),
+        "notion": ("7070", "software"),
+        "figma": ("7070", "software"),
+        "canva": ("7070", "software"),
+        "adobe": ("7070", "software"),
+        "slack": ("7070", "software"),
+        "zoom": ("7070", "software"),
+        "google workspace": ("7070", "software"),
+        "microsoft": ("7070", "software"),
+        "xero": ("7070", "software"),
+        "quickbooks": ("7070", "software"),
     }
 
     # =========================================================================
@@ -177,8 +177,8 @@ class RevolutNormalizer(FinancialNormalizer):
             except (ValueError, TypeError):
                 pass
 
-        # 3. Default to miscellaneous expense
-        return "6999", "miscellaneous"
+        # 3. Default — leave uncategorised (journal service will keyword-match)
+        return None, None
 
     # =========================================================================
     # BANK ACCOUNT NORMALIZATION
@@ -332,15 +332,41 @@ class RevolutNormalizer(FinancialNormalizer):
 
         direction = TxnDirection.IN if float(amount_raw) > 0 else TxnDirection.OUT
 
-        # Base amount: if currency == GBP it's the same; otherwise derive
+        # Determine currency representation and FX rate.
+        #
+        # Revolut reports the *settled* amount on the leg (e.g. GBP debited from
+        # the account).  When the merchant charged in a foreign currency the leg
+        # also carries bill_amount / bill_currency (e.g. USD 1649.55 billed,
+        # settled as GBP 1233.43).  In that case we store the transaction as the
+        # *billed* currency (USD) with the GBP leg as base_amount, so that the
+        # record can be matched 1-to-1 against PayPal transactions which always
+        # record the original billed amount.
         base_currency = "GBP"
-        if currency == base_currency:
+        bill_amount_raw = primary_leg.get("bill_amount")
+        bill_currency_raw = (
+            str(primary_leg.get("bill_currency", "")).upper()
+            if primary_leg.get("bill_currency") else None
+        )
+
+        if (
+            currency == base_currency
+            and bill_amount_raw is not None
+            and bill_currency_raw
+            and bill_currency_raw != base_currency
+        ):
+            # Foreign-currency card payment auto-converted to GBP:
+            # use bill currency (e.g. USD) as primary, GBP leg as base.
+            foreign_amount = Decimal(str(abs(bill_amount_raw)))
+            base_amount = amount_value                          # GBP settlement
+            fx_rate = foreign_amount / base_amount if base_amount else None
+            currency = bill_currency_raw                        # e.g. "USD"
+            amount_value = foreign_amount                       # e.g. 1649.55
+        elif currency == base_currency:
             fx_rate = None
             base_amount = amount_value
         else:
-            bill_amount = primary_leg.get("bill_amount")
-            if bill_amount is not None and primary_leg.get("bill_currency", "").upper() == base_currency:
-                base_amount = Decimal(str(abs(bill_amount)))
+            if bill_amount_raw is not None and bill_currency_raw == base_currency:
+                base_amount = Decimal(str(abs(bill_amount_raw)))
                 fx_rate = amount_value / base_amount if base_amount else None
             else:
                 # Best-effort: store same amount, flag for review
@@ -400,6 +426,14 @@ class RevolutNormalizer(FinancialNormalizer):
             metadata["counterparty"] = counterparty
         if payload.get("card"):
             metadata["card"] = payload["card"]
+
+        # Always persist bill (original charge) amount and currency in metadata.
+        # bill_amount_raw / bill_currency_raw were extracted above; they are also
+        # stored here for reference even when they are already the primary
+        # currency (so downstream code can always find them in one place).
+        if bill_amount_raw is not None and bill_currency_raw:
+            metadata["bill_amount"] = float(abs(bill_amount_raw))
+            metadata["bill_currency"] = bill_currency_raw  # already upper-cased
 
         canonical = CanonicalFinancialTransaction(
             provider=self.provider,
@@ -732,35 +766,35 @@ class RevolutNormalizer(FinancialNormalizer):
         # Based on Revolut's expense categories (names come from splits[].category.name)
         # The normalizer lowercases and replaces spaces/& with _ before matching.
         category_map = {
-            "marketing": ("6100", "marketing"),
-            "advertising": ("6100", "marketing"),
-            "shipping": ("6200", "outbound_shipping"),
-            "postage_&_shipping": ("6200", "outbound_shipping"),
-            "software": ("6300", "software"),
-            "subscriptions": ("6300", "software"),
-            "saas": ("6300", "software"),
-            "rent": ("6400", "rent"),
-            "utilities": ("6400", "utilities"),
-            "salaries": ("6500", "payroll"),
-            "contractors": ("6500", "contractors"),
-            "legal": ("6600", "professional_services"),
-            "accounting": ("6600", "professional_services"),
-            "professional_services": ("6600", "professional_services"),
-            "insurance": ("6700", "insurance"),
-            "office_supplies": ("6800", "office_supplies"),
-            "office": ("6800", "office_supplies"),
-            "printing_&_stationery": ("6800", "office_supplies"),
-            "stationery": ("6800", "office_supplies"),
-            "travel": ("6800", "travel"),
-            "meals": ("6800", "meals"),
-            "food_&_drink": ("6800", "meals"),
-            "groceries": ("6800", "meals"),
-            "entertainment": ("6800", "entertainment"),
-            "bank_fees": ("6900", "bank_charges"),
-            "bank_charges": ("6900", "bank_charges"),
-            "materials": ("5100", "materials"),
-            "inventory": ("5000", "product_purchase"),
-            "accounts_payable": ("2000", "accounts_payable"),
+            "marketing": ("6010", "marketing"),
+            "advertising": ("6012", "marketing"),
+            "shipping": ("6020", "outbound_shipping"),
+            "postage_&_shipping": ("6020", "outbound_shipping"),
+            "software": ("7070", "software"),
+            "subscriptions": ("7070", "software"),
+            "saas": ("7070", "software"),
+            "rent": ("7030", "rent"),
+            "utilities": ("7040", "utilities"),
+            "salaries": ("7014", "payroll"),
+            "contractors": ("7060", "contractors"),
+            "legal": ("7062", "professional_services"),
+            "accounting": ("7061", "professional_services"),
+            "professional_services": ("7060", "professional_services"),
+            "insurance": ("7050", "insurance"),
+            "office_supplies": ("7090", "office_supplies"),
+            "office": ("7090", "office_supplies"),
+            "printing_&_stationery": ("7090", "office_supplies"),
+            "stationery": ("7090", "office_supplies"),
+            "travel": ("7100", "travel"),
+            "meals": ("7100", "meals"),
+            "food_&_drink": ("7100", "meals"),
+            "groceries": ("7100", "meals"),
+            "entertainment": ("7100", "entertainment"),
+            "bank_fees": ("8020", "bank_charges"),
+            "bank_charges": ("8020", "bank_charges"),
+            "materials": ("5010", "materials"),
+            "inventory": ("5010", "product_purchase"),
+            "accounts_payable": ("2010", "accounts_payable"),
         }
 
         if revolut_category:
@@ -778,5 +812,5 @@ class RevolutNormalizer(FinancialNormalizer):
             except (ValueError, TypeError):
                 pass
 
-        # 4. Default to miscellaneous
-        return "6999", "miscellaneous"
+        # 4. Default — leave uncategorised for journal service to handle
+        return None, None
