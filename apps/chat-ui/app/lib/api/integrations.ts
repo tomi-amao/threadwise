@@ -190,13 +190,18 @@ export async function triggerSync(
     if (!response.ok) {
       const errorText = await response.text();
       console.error('Failed to trigger sync:', response.status, errorText);
-      return null;
+      let detail = `HTTP ${response.status}`;
+      try {
+        const parsed = JSON.parse(errorText);
+        detail = parsed.detail || detail;
+      } catch {}
+      throw new Error(detail);
     }
 
     return await response.json();
   } catch (error) {
     console.error('Error triggering sync:', error);
-    return null;
+    throw error;
   }
 }
 

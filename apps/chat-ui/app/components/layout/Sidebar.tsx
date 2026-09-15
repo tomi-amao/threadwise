@@ -13,6 +13,7 @@ import {
   ChatCircle,
   FileText,
   ChartBar,
+  ArrowsLeftRight,
   PlugsConnected,
   User,
   SignOut,
@@ -20,6 +21,13 @@ import {
   Sparkle,
   CaretLeft,
   CaretRight,
+  ShoppingCart,
+  Package,
+  Users,
+  Wrench,
+  BookOpen,
+  Scales,
+  StackSimple,
 } from 'phosphor-react';
 import { useAuth } from '~/providers/AuthProvider';
 import { useSidebar } from '~/providers/SidebarProvider';
@@ -130,15 +138,96 @@ export function Sidebar({ className }: SidebarProps) {
             onClick={closeMobile}
           />
           <NavItem
+            to="/transactions"
+            icon={<ArrowsLeftRight size={20} weight="duotone" />}
+            label="Transactions"
+            collapsed={collapsed}
+            onClick={closeMobile}
+          />
+          <NavItem
             to="/reports"
             icon={<ChartBar size={20} weight="duotone" />}
             label="Financial Reports"
             collapsed={collapsed}
             onClick={closeMobile}
           />
+          <NavItem
+            to="/journals"
+            icon={<BookOpen size={20} weight="duotone" />}
+            label="Journal Entries"
+            collapsed={collapsed}
+            onClick={closeMobile}
+          />
+          <NavItem
+            to="/tax"
+            icon={<Scales size={20} weight="duotone" />}
+            label="Tax"
+            collapsed={collapsed}
+            onClick={closeMobile}
+          />
         </div>
 
-        {/* Integrations Section */}
+        {/* Commerce Section */}
+        <div className="mb-4">
+          {!collapsed && (
+            <p className="px-4 py-2 text-xs font-semibold text-sidebar-foreground/50 uppercase tracking-wider">
+              Commerce
+            </p>
+          )}
+          <NavItem
+            to="/orders"
+            icon={<ShoppingCart size={20} weight="duotone" />}
+            label="Orders"
+            collapsed={collapsed}
+            onClick={closeMobile}
+          />
+          <NavItem
+            to="/products"
+            icon={<Package size={20} weight="duotone" />}
+            label="Products"
+            collapsed={collapsed}
+            onClick={closeMobile}
+          />
+          <NavItem
+            to="/collections"
+            icon={<StackSimple size={20} weight="duotone" />}
+            label="Collections"
+            collapsed={collapsed}
+            onClick={closeMobile}
+          />
+          <NavItem
+            to="/inventory"
+            icon={<Package size={20} weight="fill" />}
+            label="Inventory"
+            collapsed={collapsed}
+            onClick={closeMobile}
+          />
+          <NavItem
+            to="/customers"
+            icon={<Users size={20} weight="duotone" />}
+            label="Customers"
+            collapsed={collapsed}
+            onClick={closeMobile}
+          />
+        </div>
+
+        {/* Tools Section */}
+        <div className="mb-4">
+          {!collapsed && (
+            <p className="px-4 py-2 text-xs font-semibold text-sidebar-foreground/50 uppercase tracking-wider">
+              Tools
+            </p>
+          )}
+          <NavItem
+            to="/reclassification"
+            icon={<Wrench size={20} weight="duotone" />}
+            label="Reclassification"
+            collapsed={collapsed}
+            onClick={closeMobile}
+          />
+        </div>
+
+        {/* Data Sources Section */}
         <div className="mb-4">
           {!collapsed && (
             <p className="px-4 py-2 text-xs font-semibold text-sidebar-foreground/50 uppercase tracking-wider">

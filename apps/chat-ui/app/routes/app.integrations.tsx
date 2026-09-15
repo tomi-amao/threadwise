@@ -33,6 +33,7 @@ import {
   CaretDown,
   CurrencyCircleDollar,
   BookOpen,
+  ShoppingBag,
 } from 'phosphor-react';
 import { Button } from '~/components/ui/button';
 import { Input } from '~/components/ui/input';
@@ -78,6 +79,14 @@ const PROVIDERS = {
     color: 'indigo',
     credentialType: 'compound' as const,
   },
+  shopify: {
+    name: 'Shopify',
+    icon: <ShoppingBag size={24} weight="duotone" className="text-green-400" />,
+    description: 'Sync products, orders, customers, inventory, and payment fees from Shopify',
+    endpoints: ['products', 'orders', 'customers', 'inventory', 'balance_transactions'],
+    color: 'green',
+    credentialType: 'compound' as const,
+  },
 };
 
 // Endpoint icons for visual distinction
@@ -87,7 +96,9 @@ const endpointIcons: Record<string, React.ReactNode> = {
   inventory: <Cube size={14} weight="duotone" />,
   store_pages: <FileText size={14} weight="duotone" />,
   profiles: <UserCircle size={14} weight="duotone" />,
+  customers: <UserCircle size={14} weight="duotone" />,
   transactions: <Coins size={14} weight="duotone" />,
+  balance_transactions: <Coins size={14} weight="duotone" />,
   accounts: <Buildings size={14} weight="duotone" />,
   expenses: <Coins size={14} weight="duotone" />,
 };
@@ -240,8 +251,14 @@ function IntegrationCard({
   isRemoving: boolean;
 }) {
   const providerConfig = PROVIDERS[integration.provider as keyof typeof PROVIDERS];
+  const isCompound =
+    providerConfig &&
+    'credentialType' in providerConfig &&
+    providerConfig.credentialType === 'compound';
   const [showUpdateApiKey, setShowUpdateApiKey] = useState(false);
   const [newApiKey, setNewApiKey] = useState('');
+  const [newClientId, setNewClientId] = useState('');
+  const [newClientSecret, setNewClientSecret] = useState('');
 
   // Format relative time
   const formatRelativeTime = (dateStr: string | null) => {
@@ -334,33 +351,74 @@ function IntegrationCard({
               onClick={() => setShowUpdateApiKey(true)}
               className="mt-2 text-xs text-orange-400 hover:text-orange-300 underline"
             >
-              Update API Key
+              {isCompound ? 'Update Credentials' : 'Update API Key'}
             </button>
           </div>
         )}
 
         {/* Update API Key Form */}
         {showUpdateApiKey && (
-          <div className="mb-4 p-3 rounded-xl bg-muted/50 border border-border">
-            <p className="text-sm font-medium text-foreground mb-2">Update API Key</p>
-            <div className="flex gap-2">
+          <div className="mb-4 p-3 rounded-xl bg-muted/50 border border-border space-y-2">
+            <p className="text-sm font-medium text-foreground">
+              {isCompound ? 'Update Credentials' : 'Update API Key'}
+            </p>
+            {isCompound ? (
+              <>
+                <Input
+                  placeholder={integration.provider === 'shopify' ? 'Client ID' : 'Client ID'}
+                  value={newClientId}
+                  onChange={e => setNewClientId(e.target.value)}
+                  className="text-sm"
+                />
+                <Input
+                  type="password"
+                  placeholder={integration.provider === 'shopify' ? 'Client Secret' : 'Secret'}
+                  value={newClientSecret}
+                  onChange={e => setNewClientSecret(e.target.value)}
+                  className="text-sm"
+                />
+              </>
+            ) : (
               <Input
                 type="password"
                 placeholder="Enter new API key"
                 value={newApiKey}
                 onChange={e => setNewApiKey(e.target.value)}
-                className="flex-1 text-sm"
+                className="text-sm"
               />
+            )}
+            <div className="flex gap-2 pt-1">
               <Button
                 size="sm"
                 onClick={() => {
-                  if (newApiKey.trim()) {
-                    onUpdateApiKey(newApiKey.trim());
-                    setNewApiKey('');
-                    setShowUpdateApiKey(false);
+                  if (isCompound) {
+                    if (newClientId.trim() && newClientSecret.trim()) {
+                      const payload =
+                        integration.provider === 'shopify'
+                          ? JSON.stringify({
+                              client_id: newClientId.trim(),
+                              client_secret: newClientSecret.trim(),
+                            })
+                          : JSON.stringify({
+                              client_id: newClientId.trim(),
+                              secret: newClientSecret.trim(),
+                            });
+                      onUpdateApiKey(payload);
+                      setNewClientId('');
+                      setNewClientSecret('');
+                      setShowUpdateApiKey(false);
+                    }
+                  } else {
+                    if (newApiKey.trim()) {
+                      onUpdateApiKey(newApiKey.trim());
+                      setNewApiKey('');
+                      setShowUpdateApiKey(false);
+                    }
                   }
                 }}
-                disabled={!newApiKey.trim()}
+                disabled={
+                  isCompound ? !newClientId.trim() || !newClientSecret.trim() : !newApiKey.trim()
+                }
               >
                 Save
               </Button>
@@ -370,6 +428,8 @@ function IntegrationCard({
                 onClick={() => {
                   setShowUpdateApiKey(false);
                   setNewApiKey('');
+                  setNewClientId('');
+                  setNewClientSecret('');
                 }}
               >
                 Cancel
@@ -547,7 +607,7 @@ function IntegrationCard({
                       )}
                     </span>
                     <span className="text-sm font-medium text-foreground capitalize">
-                      {endpoint}
+                      {endpoint.replace(/_/g, ' ')}
                     </span>
                     {stat !== undefined && (
                       <span className="text-xs text-muted-foreground bg-muted px-1.5 py-0.5 rounded-md">
@@ -782,7 +842,11 @@ function AddIntegrationForm({
         setError('Please fill in both Client ID and Secret');
         return;
       }
-      resolvedApiKey = JSON.stringify({ client_id: clientId, secret: clientSecret });
+      resolvedApiKey = JSON.stringify(
+        provider === 'shopify'
+          ? { client_id: clientId, client_secret: clientSecret }
+          : { client_id: clientId, secret: clientSecret }
+      );
     } else if (!apiKey) {
       setError('Please fill in the API key');
       return;
@@ -874,7 +938,9 @@ function AddIntegrationForm({
               ? 'Site ID'
               : provider === 'revolut'
                 ? 'Business ID'
-                : 'Account Email'}
+                : provider === 'shopify'
+                  ? 'Shop Domain'
+                  : 'Account Email'}
             <span className="text-destructive ml-1">*</span>
           </label>
           <Input
@@ -883,7 +949,9 @@ function AddIntegrationForm({
                 ? 'Enter your Squarespace site ID'
                 : provider === 'revolut'
                   ? 'Enter your Revolut business ID'
-                  : 'Enter your PayPal account email'
+                  : provider === 'shopify'
+                    ? 'mystore.myshopify.com'
+                    : 'Enter your PayPal account email'
             }
             value={externalAccountId}
             onChange={e => setExternalAccountId(e.target.value)}
@@ -913,7 +981,11 @@ function AddIntegrationForm({
                 <span className="text-destructive ml-1">*</span>
               </label>
               <Input
-                placeholder="Enter your PayPal Client ID"
+                placeholder={
+                  provider === 'shopify'
+                    ? 'Enter your Shopify Client ID'
+                    : 'Enter your PayPal Client ID'
+                }
                 value={clientId}
                 onChange={e => setClientId(e.target.value)}
                 className="h-11"
@@ -927,7 +999,11 @@ function AddIntegrationForm({
               <div className="relative">
                 <Input
                   type={showApiKey ? 'text' : 'password'}
-                  placeholder="Enter your PayPal Secret"
+                  placeholder={
+                    provider === 'shopify'
+                      ? 'Enter your Shopify Client Secret'
+                      : 'Enter your PayPal Secret'
+                  }
                   value={clientSecret}
                   onChange={e => setClientSecret(e.target.value)}
                   className="pr-10 h-11"
@@ -941,8 +1017,9 @@ function AddIntegrationForm({
                 </button>
               </div>
               <p className="text-xs text-muted-foreground mt-2">
-                Get your Client ID and Secret from the PayPal Developer Dashboard under REST API
-                apps
+                {provider === 'shopify'
+                  ? 'Get your Client ID and Client Secret from Shopify Partners → Apps → App setup'
+                  : 'Get your Client ID and Secret from the PayPal Developer Dashboard under REST API apps'}
               </p>
             </div>
           </>
@@ -971,7 +1048,9 @@ function AddIntegrationForm({
             <p className="text-xs text-muted-foreground mt-2">
               {provider === 'squarespace'
                 ? 'Generate an API key from Squarespace Settings → Advanced → Developer API Keys'
-                : 'Get your API key from Revolut Business Settings'}
+                : provider === 'shopify'
+                  ? 'Generate an Admin API access token from Shopify Admin → Apps → Develop apps'
+                  : 'Get your API key from Revolut Business Settings'}
             </p>
           </div>
         )}
@@ -1151,13 +1230,17 @@ export default function IntegrationsPage() {
       }
     } catch (error) {
       console.error('Failed to trigger sync:', error);
-      const message = endpoint ? `Failed to trigger ${endpoint}` : 'Failed to trigger sync';
-
-      if (endpoint) {
-        toast.error(message, { id: `sync-${sourceId}-${endpoint}` });
-      } else {
-        toast.error(message, { id: `sync-${sourceId}` });
-      }
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      const isInngestDown =
+        errorMsg.includes('never received response') || errorMsg.includes('sending events');
+      const message = isInngestDown
+        ? 'Sync server (Inngest) is not running — start it and try again'
+        : endpoint
+          ? `Failed to trigger ${endpoint}`
+          : 'Failed to trigger sync';
+      const toastId = endpoint ? `sync-${sourceId}-${endpoint}` : `sync-${sourceId}`;
+      toast.error(message, { id: toastId, duration: isInngestDown ? 8000 : 4000 });
+      setActiveSyncSource(null);
     } finally {
       setSyncingIds(prev => {
         const next = new Set(prev);
