@@ -228,6 +228,7 @@ from .paypal_sync_functions import PAYPAL_SYNC_FUNCTIONS
 
 # Import normalization functions
 from ...normalization.inngest_functions import NORMALIZATION_FUNCTIONS
+from .shopify_sync_functions import SHOPIFY_SYNC_FUNCTIONS
 
 # Export all functions for registration
 FUNCTIONS = [
@@ -237,5 +238,6 @@ FUNCTIONS = [
     *SYNC_FUNCTIONS,  # Include external sync functions
     *REVOLUT_SYNC_FUNCTIONS,  # Include Revolut sync functions
     *PAYPAL_SYNC_FUNCTIONS,  # Include PayPal sync functions
+    *SHOPIFY_SYNC_FUNCTIONS,  # Include Shopify sync functions
     *NORMALIZATION_FUNCTIONS,  # Include normalization functions
 ]

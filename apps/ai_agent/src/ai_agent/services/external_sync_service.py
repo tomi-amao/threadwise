@@ -369,9 +369,18 @@ class ExternalSyncService:
         """
         if not events:
             return 0
-        
+
         now = datetime.now(timezone.utc).isoformat()
-        
+
+        # Inventory levels are a live snapshot, not an immutable record — re-fetching
+        # one always represents "this is the current stock right now" and must be
+        # re-applied. Without this, upserting an already-`completed` raw event only
+        # refreshes its payload/fetched_at (see the on_conflict clause below), so a
+        # soft-mode normalization pass — which skips anything already `completed` —
+        # would silently keep serving the stale quantity from the first time this
+        # (inventory_item_id, location_id) was ever synced, no matter how many times
+        # it's re-synced afterwards. Forcing it back to `pending` on every fetch
+        # ensures each sync's fresh quantity actually reaches `inventory_items`.
         data = [
             {
                 "source_id": source_id,
@@ -380,20 +389,30 @@ class ExternalSyncService:
                 "external_id": event["external_id"],
                 "payload": event["payload"],
                 "occurred_at": (
-                    event["occurred_at"].isoformat() 
+                    event["occurred_at"].isoformat()
                     if event.get("occurred_at") else None
                 ),
                 "fetched_at": now,
+                **(
+                    {
+                        "processing_status": "pending",
+                        "processing_error": None,
+                        "processing_error_details": None,
+                        "processed_at": None,
+                    }
+                    if event["entity_type"] == "inventory_item"
+                    else {}
+                ),
             }
             for event in events
         ]
-        
+
         result = await asyncio.to_thread(
             lambda: self.client.table("external_raw_events")
             .upsert(data, on_conflict="provider,entity_type,external_id")
             .execute()
         )
-        
+
         return len(result.data) if result.data else 0
     
     async def get_raw_events(

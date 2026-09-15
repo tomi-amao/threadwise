@@ -52,12 +52,26 @@ class PayPalNormalizer(FinancialNormalizer):
         "T0001": TxnType.PAYMENT,
         "T0002": TxnType.PAYMENT,
         "T0003": TxnType.PAYMENT,
+        # T0006 = invoice-based payment. Can be IN (client pays TBA) or OUT (TBA pays invoice).
+        # Historically mapped to FEE which caused fee,in for incoming invoices — corrected to PAYMENT.
+        "T0006": TxnType.PAYMENT,
+        # T0007 = payment sent to merchant
+        "T0007": TxnType.PAYMENT,
+        # T0011 = send money / mass pay (generic outbound payment to individual or supplier)
+        "T0011": TxnType.PAYMENT,
         "T0400": TxnType.REFUND,
+        # T0600 = general withdrawal (PayPal balance → external bank). Always an internal transfer.
+        # The cleaning service excludes matched T0600s (paired with Revolut receipt).
+        # Unmatched T0600s represent real outflows from PayPal to a non-tracked account.
+        "T0600": TxnType.TRANSFER,
         "T0700": TxnType.TRANSFER,
-        "T0803": TxnType.OTHER,       # chargeback
+        "T0803": TxnType.OTHER,       # chargeback reversal debit
+        "T1000": TxnType.PAYMENT,     # consumer-initiated payment
         "T1106": TxnType.FX_CONVERSION,
-        "T1107": TxnType.FX_CONVERSION,
-        "T0006": TxnType.FEE,
+        # T1107 = chargeback reversal / non-bank reversal. NOT an FX conversion.
+        # The cleaning service handles T1107+T0600 chargeback pairs (excludes both).
+        # Unmatched T1107s are treated as payments; direction is set from the raw amount sign.
+        "T1107": TxnType.PAYMENT,
     }
 
     # =========================================================================
@@ -165,6 +179,27 @@ class PayPalNormalizer(FinancialNormalizer):
             )
 
             # -----------------------------------------------------------------
+            # Declined / voided / failed detection
+            # PayPal transaction_status codes that indicate no real movement:
+            #   D = Denied   V = Voided   F = Failed/Reversed
+            # We still persist these for audit, but mark them excluded so
+            # they never appear in journals or cash-flow reports.
+            # -----------------------------------------------------------------
+            PAYPAL_DECLINED_STATUSES = {"D", "V", "F"}
+            paypal_status = str(txn_info.get("transaction_status") or "").upper()
+            txn_excluded_reason: Optional[str] = None
+            txn_model_status = TxnStatus.PENDING
+            if paypal_status in PAYPAL_DECLINED_STATUSES:
+                status_labels = {"D": "Denied", "V": "Voided", "F": "Failed/Reversed"}
+                label = status_labels.get(paypal_status, paypal_status)
+                txn_excluded_reason = (
+                    f"PayPal transaction status '{label}' ({paypal_status}) — "
+                    "no money movement occurred; excluded from business records"
+                )
+                txn_model_status = TxnStatus.EXCLUDED
+                warnings.append(f"Transaction excluded: PayPal status={paypal_status} ({label})")
+
+            # -----------------------------------------------------------------
             # Timestamps
             # -----------------------------------------------------------------
             occurred_at = (
@@ -249,12 +284,18 @@ class PayPalNormalizer(FinancialNormalizer):
                 fx_rate = None
                 base_amount = amount_value
             else:
-                # PayPal may not surface a converted GBP amount here;
-                # best-effort: mark for review
-                base_amount = amount_value
+                # PayPal Transaction Search API does not return a converted
+                # GBP amount.  Setting base_amount to the raw foreign-currency
+                # value (the prior behaviour) caused those amounts to be treated
+                # as GBP in cash-flow reports.  Instead, leave both fields NULL
+                # so that a downstream FX enrichment step or manual correction
+                # must fill them in before the transaction can be accurately
+                # reported.
+                base_amount = None
                 fx_rate = None
                 warnings.append(
-                    f"Could not derive GBP base_amount for {currency} PayPal transaction"
+                    f"Foreign-currency transaction ({currency} {amount_value}): "
+                    f"base_amount and fx_rate left NULL — FX enrichment required"
                 )
 
             # -----------------------------------------------------------------
@@ -357,6 +398,8 @@ class PayPalNormalizer(FinancialNormalizer):
                 base_currency_code=base_currency,
                 fx_rate=fx_rate,
                 base_amount=base_amount,
+                status=txn_model_status,
+                excluded_reason=txn_excluded_reason,
                 metadata=metadata,
             )
 

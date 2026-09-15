@@ -15,7 +15,8 @@ each group into one of several patterns, and applies the appropriate updates:
 * **Pattern H** — T1501 anomalous internal transactions
 
 Additionally handles:
-* T0600 withdrawals (kept as-is — real outflows)
+* T0600 withdrawals (kept as transfer; same-period income pairs flagged with
+  ``t0600_personal_candidate`` metadata for human review — see Phase 2.5)
 * T1107 chargeback credit refunds paired with T0600 (net-zero pair → exclude both)
 * T1105 passthrough funding (personal funding noise → exclude)
 """
@@ -128,6 +129,11 @@ class PayPalCleaningService:
 
         # ── Phase 2: T1107 + T0600 chargeback-refund pairs ───────────────
         processed_ids |= await self._handle_t1107_t0600_pairs(paypal_txns, summary)
+
+        # ── Phase 2.5: Flag T0600 personal income-withdrawal pairs ───────
+        # Does NOT add to processed_ids — transactions still flow through
+        # normal cleaning; the metadata flag surfaces them for human review.
+        await self._flag_t0600_income_pairs(paypal_txns, summary)
 
         # ── Phase 3: Group remaining PayPal txns ─────────────────────────
         remaining = [t for t in paypal_txns if t["id"] not in processed_ids]
@@ -246,6 +252,12 @@ class PayPalCleaningService:
     # PHASE 2 — T1107 + T0600 CHARGEBACK-REFUND PAIRS
     # =====================================================================
 
+    # Fee tolerance for T0600 personal withdrawal detection.
+    # PayPal deducts its fees before releasing funds; the withdrawal is
+    # therefore slightly less than the gross income received.
+    _T0600_FEE_TOLERANCE_PCT: Decimal = Decimal("0.15")  # 15% covers PayPal fees + multi-day batches
+    _T0600_INCOME_WINDOW_DAYS: int = 5  # days before T0600 to search for matching income
+
     async def _handle_t1107_t0600_pairs(
         self,
         paypal_txns: List[Dict[str, Any]],
@@ -308,6 +320,118 @@ class PayPalCleaningService:
                     break
 
         return ids
+
+    # =====================================================================
+    # PHASE 2.5 — T0600 PERSONAL INCOME-WITHDRAWAL PAIR DETECTION
+    # =====================================================================
+
+    async def _flag_t0600_income_pairs(
+        self,
+        paypal_txns: List[Dict[str, Any]],
+        summary: Dict[str, int],
+    ) -> None:
+        """Detect T0600 withdrawals that likely represent personal income being swept to bank.
+
+        When a personal PayPal account receives income (e.g. content-creation
+        fees) and the owner immediately withdraws via T0600 to their personal
+        bank, both the inbound payment and the T0600 should be excluded from
+        the business books.  This cannot be automated without knowing which
+        counterparties are personal, so this method flags the candidates with
+        ``t0600_personal_candidate`` metadata for human review.
+
+        Detection rule:
+        - For each T0600 OUT, sum all IN payments within
+          ``_T0600_INCOME_WINDOW_DAYS`` days before the withdrawal date.
+        - If sum(income) ≈ T0600 amount (within ``_T0600_FEE_TOLERANCE_PCT``),
+          flag both sides as candidates.
+        """
+        t0600_outs = [
+            t for t in paypal_txns
+            if _event_code(t) == "T0600" and t.get("direction") == "out"
+        ]
+        income_ins = [t for t in paypal_txns if t.get("direction") == "in"]
+
+        for withdrawal in t0600_outs:
+            w_date = _parse_dt(
+                withdrawal.get("occurred_at") or withdrawal.get("created_at")
+            )
+            w_amount = _dec(withdrawal.get("amount"))
+
+            if not w_date or w_amount == 0:
+                continue
+
+            window_start = w_date - timedelta(days=self._T0600_INCOME_WINDOW_DAYS)
+            # Allow a 1-day grace window after the withdrawal (same-day or next-day)
+            window_end = w_date + timedelta(days=1)
+
+            window_income = [
+                i for i in income_ins
+                if (
+                    _parse_dt(
+                        i.get("occurred_at") or i.get("created_at")
+                    ) or datetime.min.replace(tzinfo=timezone.utc)
+                ) >= window_start
+                and (
+                    _parse_dt(
+                        i.get("occurred_at") or i.get("created_at")
+                    ) or datetime.max.replace(tzinfo=timezone.utc)
+                ) <= window_end
+            ]
+
+            if not window_income:
+                continue
+
+            total_income = sum(_dec(i.get("amount")) for i in window_income)
+            diff = abs(total_income - w_amount)
+            tolerance = w_amount * self._T0600_FEE_TOLERANCE_PCT
+
+            if diff > tolerance:
+                continue
+
+            # Candidate pair found — flag for human review
+            income_ids = [i["id"] for i in window_income]
+            income_summary = "; ".join(
+                f"{i.get('counterparty_name') or 'unknown'} "
+                f"{i.get('currency_code', 'GBP')}{i.get('amount')}"
+                for i in window_income
+            )
+
+            await self._enrich_transaction_metadata(
+                withdrawal["id"],
+                {
+                    "t0600_personal_candidate": True,
+                    "review_reason": (
+                        f"T0600 {w_amount} matches sum of {len(window_income)} "
+                        f"income transaction(s) in prior {self._T0600_INCOME_WINDOW_DAYS}d "
+                        f"(total {total_income}): {income_summary}"
+                    ),
+                    "paired_income_ids": income_ids,
+                },
+            )
+
+            for income in window_income:
+                await self._enrich_transaction_metadata(
+                    income["id"],
+                    {
+                        "t0600_personal_candidate": True,
+                        "review_reason": (
+                            f"Income may be a personal PayPal receipt swept via "
+                            f"T0600 {withdrawal['id'][:8]} on "
+                            f"{w_date.strftime('%Y-%m-%d')}"
+                        ),
+                        "paired_t0600_id": withdrawal["id"],
+                    },
+                )
+
+            logger.warning(
+                "T0600 personal candidate: withdrawal %s (%s) matched %d income "
+                "transaction(s) totalling %s — manual review required",
+                withdrawal["id"][:8],
+                w_amount,
+                len(window_income),
+                total_income,
+            )
+            summary["t0600_personal_candidates"] += 1
 
     # =====================================================================
     # PHASE 3 — GROUP CLASSIFICATION

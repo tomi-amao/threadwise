@@ -336,46 +336,53 @@ class CanonicalPaymentFee(BaseModel):
     gross_fee: Money
     refunded_fee: Money
     net_fee: Money
-    
+
+    # Base-currency equivalent (GBP). None until FX rate is known.
+    base_fee_amount: Optional[Decimal] = Field(default=None, description="Fee in base currency (GBP)")
+
     # Provider-specific extras
     metadata: Dict[str, Any] = Field(default_factory=dict, description="Provider-specific fields")
 
 
 class CanonicalPayment(CanonicalBase):
     """Canonical payment model.
-    
+
     Represents a payment transaction.
     Only contains fields universal to every provider.
     Provider-specific data lives in metadata.
     """
-    
+
     entity_id: UUID = Field(description="Parent entity ID for multi-tenant scoping")
-    
+
     # Order reference
     order_external_id: Optional[str] = None
-    
+
     # Payment details
     amount: Money
     refunded_amount: Optional[Money] = None
     net_amount: Optional[Money] = None
     status: PaymentStatus = PaymentStatus.PENDING
-    
+
+    # Base-currency equivalent (GBP). None for same-currency payments until computed.
+    base_amount: Optional[Decimal] = Field(default=None, description="Payment amount in base currency (GBP)")
+    fx_rate: Optional[Decimal] = Field(default=None, description="Exchange rate: base_amount = amount * fx_rate. None if same currency.")
+
     # Payment gateway
     gateway: Optional[str] = Field(default=None, description="Payment gateway/processor (e.g. STRIPE, SQUARE)")
     external_payment_id: Optional[str] = Field(default=None, description="Payment transaction ID from the gateway")
-    
+
     # Payment method
     payment_method: Optional[str] = None
-    
+
     # Transaction IDs (legacy, kept for backward compatibility)
     transaction_id: Optional[str] = None
-    
+
     # Timing
     paid_on: Optional[datetime] = Field(default=None, description="When the payment was actually made")
-    
+
     # Processing fees
     fees: List[CanonicalPaymentFee] = Field(default_factory=list, description="Processing fees for this payment")
-    
+
     # Provider-specific extras
     metadata: Dict[str, Any] = Field(default_factory=dict, description="Provider-specific fields")
 
@@ -405,7 +412,9 @@ class CanonicalProductVariant(BaseModel):
     # Inventory
     quantity: int = 0
     is_unlimited: bool = False
-    
+    inventory_item_id: Optional[str] = None  # Provider's internal inventory item ID (e.g. Shopify inventory_item_id)
+    unit_cost: Optional[Decimal] = None
+
     # Attributes (size, color, etc.)
     attributes: Dict[str, str] = Field(default_factory=dict)
 
@@ -448,24 +457,28 @@ class InventoryMovementType(str, Enum):
 
 class CanonicalInventoryItem(CanonicalBase):
     """Canonical inventory item model.
-    
+
     Represents inventory for a specific product variant.
     Only contains fields universal to every provider.
-    
-    Stock quantity is tracked via the inventory_movements ledger,
-    not stored directly on this record.
+
+    available_quantity is a snapshot from the last sync.
+    Changes are also written to the inventory_movements ledger.
     """
-    
+
     # Entity scoping
     entity_id: UUID
-    
+
     # Product reference
     variant_external_id: str
     sku: Optional[str] = None
-    
+
     # Flags
     is_unlimited: bool = False
-    
+
+    # Stock snapshot (updated on every sync)
+    available_quantity: Optional[int] = None
+    location_external_id: Optional[str] = None  # Provider location ID (e.g. Shopify location_id)
+
     # Item details
     description: Optional[str] = None
     category: Optional[str] = None

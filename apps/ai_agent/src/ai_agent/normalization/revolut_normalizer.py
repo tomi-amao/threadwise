@@ -306,6 +306,11 @@ class RevolutNormalizer(FinancialNormalizer):
     # Standard (non-FX) transaction
     # -------------------------------------------------------------------------
 
+    # Revolut transaction states that indicate no real money movement occurred.
+    # Transactions in these states are persisted but immediately excluded so
+    # they never appear in reports or journals.
+    _DECLINED_STATES: frozenset = frozenset({"declined", "failed", "reverted"})
+
     def _normalize_standard_transaction(
         self,
         external_id: str,
@@ -435,6 +440,20 @@ class RevolutNormalizer(FinancialNormalizer):
             metadata["bill_amount"] = float(abs(bill_amount_raw))
             metadata["bill_currency"] = bill_currency_raw  # already upper-cased
 
+        # Detect declined / failed transactions and mark for exclusion.
+        # We still persist the record so audit trails are complete, but it
+        # will never flow into journals or cash-flow reports.
+        revolut_state = (payload.get("state") or "").lower()
+        excluded_reason: Optional[str] = None
+        txn_status = TxnStatus.PENDING
+        if revolut_state in self._DECLINED_STATES:
+            excluded_reason = (
+                f"Revolut transaction state '{revolut_state}' — "
+                "no money movement occurred; excluded from business records"
+            )
+            txn_status = TxnStatus.EXCLUDED
+            warnings.append(f"Transaction excluded: state={revolut_state}")
+
         canonical = CanonicalFinancialTransaction(
             provider=self.provider,
             external_id=external_id,
@@ -454,6 +473,8 @@ class RevolutNormalizer(FinancialNormalizer):
             base_currency_code=base_currency,
             fx_rate=fx_rate,
             base_amount=base_amount,
+            status=txn_status,
+            excluded_reason=excluded_reason,
             metadata=metadata,
         )
 
@@ -546,6 +567,17 @@ class RevolutNormalizer(FinancialNormalizer):
 
             description = leg.get("description") or f"FX {currency}"
 
+            # Declined FX transactions (e.g. failed exchange) should be excluded.
+            revolut_state = (payload.get("state") or "").lower()
+            fx_excluded_reason: Optional[str] = None
+            fx_status = TxnStatus.PENDING
+            if revolut_state in self._DECLINED_STATES:
+                fx_excluded_reason = (
+                    f"Revolut FX transaction state '{revolut_state}' — "
+                    "no money movement occurred; excluded from business records"
+                )
+                fx_status = TxnStatus.EXCLUDED
+
             canonical = CanonicalFinancialTransaction(
                 provider=self.provider,
                 external_id=ext_txn_id,
@@ -565,6 +597,8 @@ class RevolutNormalizer(FinancialNormalizer):
                 base_currency_code=base_currency,
                 fx_rate=fx_rate,
                 base_amount=base_amount,
+                status=fx_status,
+                excluded_reason=fx_excluded_reason,
                 metadata=metadata,
             )
             canonicals.append(canonical)

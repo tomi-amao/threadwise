@@ -12,6 +12,7 @@ from .events import (
     send_squarespace_sync_event,
     send_revolut_sync_event,
     send_paypal_sync_event,
+    send_shopify_sync_event,
 )
 from .sync_functions import (
     squarespace_sync_all,
@@ -21,6 +22,7 @@ from .sync_functions import (
 )
 from .revolut_sync_functions import REVOLUT_SYNC_FUNCTIONS
 from .paypal_sync_functions import PAYPAL_SYNC_FUNCTIONS
+from .shopify_sync_functions import SHOPIFY_SYNC_FUNCTIONS
 
 # Import normalization functions and triggers
 from ...normalization.inngest_functions import (
@@ -30,6 +32,7 @@ from ...normalization.inngest_functions import (
     normalize_after_sync,
     normalize_after_revolut_sync,
     normalize_after_paypal_sync,
+    normalize_after_shopify_sync,
     reprocess_failed_events,
     reprocess_stuck_processing_events,
     reprocess_failed_manual,
@@ -65,6 +68,7 @@ __all__ = [
     "SYNC_FUNCTIONS",
     "REVOLUT_SYNC_FUNCTIONS",
     "PAYPAL_SYNC_FUNCTIONS",
+    "SHOPIFY_SYNC_FUNCTIONS",
     # Normalization functions
     "normalize_raw_event",
     "normalize_batch",
@@ -72,6 +76,7 @@ __all__ = [
     "normalize_after_sync",
     "normalize_after_revolut_sync",
     "normalize_after_paypal_sync",
+    "normalize_after_shopify_sync",
     "reprocess_failed_events",
     "reprocess_stuck_processing_events",
     "reprocess_failed_manual",
@@ -87,4 +92,5 @@ __all__ = [
     "send_squarespace_sync_event",
     "send_revolut_sync_event",
     "send_paypal_sync_event",
+    "send_shopify_sync_event",
 ]

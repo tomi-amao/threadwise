@@ -35,6 +35,7 @@ from .persistence import persistence_service
 from .squarespace_normalizer import SquarespaceNormalizer
 from .revolut_normalizer import RevolutNormalizer
 from .paypal_normalizer import PayPalNormalizer
+from .shopify_normalizer import ShopifyNormalizer
 from .utils import extract_id, extract_row, extract_rows
 
 logger = logging.getLogger(__name__)
@@ -45,26 +46,36 @@ inngest_client = get_client()
 # Batch size for processing
 BATCH_SIZE = 50
 
+# Max concurrent persistence calls within one _process_batch_parallel batch.
+# Each event does several sequential Supabase round-trips via asyncio.to_thread;
+# gathering an entire 100-event batch unbounded fans out 100+ concurrent threads/
+# connections and reliably hits OS-level limits (observed as "Resource temporarily
+# unavailable" / "Broken pipe" errors, silently marking otherwise-fine events as
+# failed). Capping concurrency keeps throughput while staying within those limits.
+BATCH_CONCURRENCY = 10
+
 # Supported providers and their normalizers
 PROVIDER_NORMALIZERS = {
     "squarespace": SquarespaceNormalizer,
     "revolut": RevolutNormalizer,
     "paypal": PayPalNormalizer,
+    "shopify": ShopifyNormalizer,
 }
 
 # Entity type processing order (respects foreign key dependencies)
 ENTITY_TYPE_ORDER = [
-    "profile", "product", "inventory_item", "order", "transaction",
-    "bank_account", "financial_transaction", "expense",
+    "profile", "product", "customer", "inventory_item", "order", "transaction",
+    "bank_account", "financial_transaction", "expense", "payment_transaction",
+    "order_transaction",
 ]
 
 # Dependency tiers: types within the same tier share no FK dependencies and
 # can be processed in parallel.  Tiers must still be executed in order.
 ENTITY_TYPE_TIERS: List[List[str]] = [
-    ["profile", "product", "bank_account"],       # Tier 0 — no dependencies
-    ["inventory_item", "order"],                   # Tier 1 — depends on profile/product
-    ["transaction", "financial_transaction"],       # Tier 2 — depends on order/bank_account
-    ["expense"],                                   # Tier 3 — depends on financial_transaction
+    ["profile", "product", "customer", "bank_account"],  # Tier 0 — no dependencies
+    ["inventory_item", "order"],                          # Tier 1 — depends on profile/product
+    ["transaction", "financial_transaction", "payment_transaction", "order_transaction"],  # Tier 2 — depends on order/bank_account
+    ["expense"],                                          # Tier 3 — depends on financial_transaction
 ]
 
 
@@ -103,6 +114,8 @@ async def _process_batch_parallel(
     for sid in unique_sources:
         entity_id_cache[sid] = await _get_entity_id_from_source(sid)
 
+    semaphore = asyncio.Semaphore(BATCH_CONCURRENCY)
+
     async def _process_one(raw_event: Dict[str, Any]) -> Dict[str, Any]:
         raw_event_id = UUID(raw_event["id"])
 
@@ -115,16 +128,18 @@ async def _process_batch_parallel(
             return {"status": "failed", "raw_event_id": str(raw_event_id), "error": error}
 
         entity_id = UUID(entity_id_str)
-        await persistence_service.mark_processing(raw_event_id)
 
-        persist_result = await _persist_event(
-            provider=raw_event["provider"],
-            entity_type=raw_event["entity_type"],
-            external_id=raw_event["external_id"],
-            payload=raw_event["payload"],
-            raw_event_id=raw_event_id,
-            entity_id=entity_id,
-        )
+        async with semaphore:
+            await persistence_service.mark_processing(raw_event_id)
+
+            persist_result = await _persist_event(
+                provider=raw_event["provider"],
+                entity_type=raw_event["entity_type"],
+                external_id=raw_event["external_id"],
+                payload=raw_event["payload"],
+                raw_event_id=raw_event_id,
+                entity_id=entity_id,
+            )
 
         if persist_result.get("skipped"):
             return {"status": "skipped", "raw_event_id": str(raw_event_id), "error": None}
@@ -778,6 +793,45 @@ async def normalize_after_paypal_sync(ctx: inngest.Context) -> Dict[str, Any]:
 
 
 @inngest_client.create_function(
+    fn_id="normalize_after_shopify_sync",
+    trigger=inngest.TriggerEvent(event="shopify/sync.completed"),
+    retries=2,
+)
+async def normalize_after_shopify_sync(ctx: inngest.Context) -> Dict[str, Any]:
+    """Trigger normalization after a Shopify sync completes."""
+    try:
+        event_data = ctx.event.data
+        source_id = event_data.get("source_id")
+        total_items = event_data.get("total_items", 0)
+
+        ctx.logger.info(
+            f"Triggering normalization after Shopify sync for source {source_id} "
+            f"({total_items} items)"
+        )
+
+        result = await ctx.step.invoke(
+            "normalize-source-after-shopify-sync",
+            function=normalize_source,
+            data={
+                "source_id": source_id,
+                "mode": "soft",
+                "batch_size": 100,
+            }
+        )
+
+        return {
+            "status": "completed",
+            "source_id": source_id,
+            "normalization_result": result,
+            "processed_at": datetime.now().isoformat()
+        }
+
+    except Exception as e:
+        ctx.logger.error(f"Error in post-Shopify-sync normalization: {str(e)}")
+        raise
+
+
+@inngest_client.create_function(
     fn_id="reprocess_failed_events",
     trigger=inngest.TriggerCron(cron="0 */6 * * *"),  # Every 6 hours
 )
@@ -1367,6 +1421,7 @@ NORMALIZATION_FUNCTIONS = [
     normalize_after_sync,
     normalize_after_revolut_sync,
     normalize_after_paypal_sync,
+    normalize_after_shopify_sync,
     reprocess_failed_events,
     reprocess_stuck_processing_events,
     reprocess_failed_manual,

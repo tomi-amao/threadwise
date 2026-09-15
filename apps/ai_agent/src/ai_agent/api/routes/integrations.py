@@ -469,6 +469,9 @@ async def validate_api_key(source_id: str):
             is_valid, error_message = await _validate_revolut_api_key(api_key)
         elif provider == "paypal":
             is_valid, error_message = await _validate_paypal_api_key(api_key)
+        elif provider == "shopify":
+            shop_domain = source.get("external_account_id", "")
+            is_valid, error_message = await _validate_shopify_api_key(api_key, shop_domain)
         else:
             error_message = f"Unknown provider: {provider}"
         
@@ -596,6 +599,52 @@ async def _validate_paypal_api_key(api_key: str) -> tuple[bool, Optional[str]]:
                 return False, f"PayPal API returned status {response.status_code}"
     except json.JSONDecodeError:
         return False, "PayPal credentials must be valid JSON: {\"client_id\":\"...\",\"secret\":\"...\"}"
+    except httpx.TimeoutException:
+        return False, "Request timed out - check your network connection"
+    except Exception as e:
+        return False, f"Connection error: {str(e)}"
+
+
+async def _validate_shopify_api_key(
+    api_key: str, shop_domain: str
+) -> tuple[bool, Optional[str]]:
+    """Validate Shopify credentials via OAuth 2.0 client credentials grant."""
+    import httpx
+    import json
+
+    if not shop_domain:
+        return False, "Shop domain is required - set it as the Account ID when creating the source"
+
+    try:
+        creds = json.loads(api_key)
+        client_id = creds.get("client_id")
+        client_secret = creds.get("client_secret")
+
+        if not client_id or not client_secret:
+            return False, "Shopify credentials must include 'client_id' and 'client_secret'"
+
+        token_url = f"https://{shop_domain}/admin/oauth/access_token"
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(
+                token_url,
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+                data={
+                    "grant_type": "client_credentials",
+                    "client_id": client_id,
+                    "client_secret": client_secret,
+                },
+            )
+        if resp.status_code == 200:
+            return True, None
+        elif resp.status_code == 401:
+            return False, "Invalid client_id or client_secret - authentication failed"
+        elif resp.status_code == 404:
+            return False, f"Shop not found: {shop_domain}"
+        else:
+            logger.error(f"Shopify API validation failed with status {resp.status_code}: {resp.text}")
+            return False, f"Shopify API returned status {resp.status_code} "
+    except json.JSONDecodeError:
+        return False, 'Credentials must be valid JSON: {"client_id":"...","client_secret":"..."}'
     except httpx.TimeoutException:
         return False, "Request timed out - check your network connection"
     except Exception as e:
@@ -1265,7 +1314,8 @@ async def get_integrations_summary(entity_id: Optional[str] = None):
                     )
                     uncategorized_count = result.count or 0
                 except Exception as e:
-                    logger.warning(f"Failed to get uncategorized count: {e}")
+                    # logger.warning(f"Failed to get uncategorized count: {e}")
+                    pass
             
             # Extract entity name from joined data
             entity_name = None

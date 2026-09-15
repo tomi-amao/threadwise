@@ -275,3 +275,46 @@ async def send_paypal_sync_event(
     except Exception as e:
         logger.error(f"Failed to send PayPal sync event: {str(e)}")
         return False
+
+
+async def send_shopify_sync_event(
+    source_id: str,
+    endpoint: Optional[str] = None,
+    cursor: Optional[str] = None,
+) -> bool:
+    """Send a Shopify sync event to trigger data extraction.
+
+    Args:
+        source_id: The external source ID to sync
+        endpoint: Optional specific endpoint to sync
+        cursor: Optional cursor to resume pagination
+
+    Returns:
+        True if event was sent successfully, False otherwise
+    """
+    try:
+        client = get_client()
+
+        if endpoint:
+            event_name = "shopify/sync.endpoint"
+            event_data = {
+                "source_id": source_id,
+                "endpoint": endpoint,
+                "cursor": cursor,
+                "timestamp": datetime.now().isoformat(),
+            }
+        else:
+            event_name = "shopify/sync.requested"
+            event_data = {
+                "source_id": source_id,
+                "timestamp": datetime.now().isoformat(),
+            }
+
+        await client.send({"name": event_name, "data": event_data})
+
+        logger.info(f"Sent Shopify sync event for source {source_id}")
+        return True
+
+    except Exception as e:
+        logger.error(f"Failed to send Shopify sync event: {str(e)}")
+        return False

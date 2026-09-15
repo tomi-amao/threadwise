@@ -16,6 +16,7 @@ The persistence layer MUST:
 import asyncio
 import json
 import logging
+import os
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any, Dict, List, Optional, Tuple, cast
@@ -36,6 +37,7 @@ from .models import (
     ExpenseEnrichment,
     FulfillmentStatus,
     InventoryMovementType,
+    OrderStatus,
     ProcessingStatus,
 )
 from .normalizer import NormalizationResult
@@ -76,6 +78,10 @@ class PersistenceService:
     def __init__(self):
         """Initialize the persistence service."""
         self._client = None
+        self._allow_unit_cost_overwrite = (
+            os.getenv("SHOPIFY_ALLOW_UNIT_COST_OVERWRITE", "false").lower()
+            == "true"
+        )
     
     @property
     def client(self):
@@ -138,6 +144,7 @@ class PersistenceService:
             canonical = result.canonical
             
             # Handle lists of canonical objects (e.g., multiple payments from one transaction)
+            canonical_id: Optional[UUID]
             if isinstance(canonical, list):
                 canonical_ids = []
                 for item in canonical:
@@ -395,7 +402,46 @@ class PersistenceService:
                     "Failed to record SALE inventory movements for order %s: %s",
                     order_id, e,
                 )
-        
+
+            # Step 5: Recognise the cost of those goods in the same period the
+            # revenue lands. Imported here rather than at module scope to keep
+            # the normalisation layer free of a hard dependency on the
+            # accounting services.
+            #
+            # Deliberately non-fatal: a ledger problem must never block an order
+            # from syncing. The journal is idempotent on (entity, order), so the
+            # next sync of the same order will post it if this attempt failed.
+            try:
+                from ..services.journal_service import journal_service
+
+                await journal_service.create_inventory_cogs_journal(
+                    entity_id=order.entity_id,
+                    order_id=order_id,
+                )
+            except Exception as e:
+                logger.warning(
+                    "Failed to post COGS journal for order %s: %s",
+                    order_id, e,
+                )
+
+        # Step 6: Reverse revenue/cost/stock when a sync reports a refund.
+        # Independent of fulfillment_status — a refund is a separate state and
+        # can happen regardless of whether the order ever shipped. Non-fatal
+        # and idempotent for the same reasons as step 5.
+        if order.status == OrderStatus.REFUNDED:
+            try:
+                from ..services.journal_service import journal_service
+
+                await journal_service.create_refund_reversal_journal(
+                    entity_id=order.entity_id,
+                    order_id=order_id,
+                )
+            except Exception as e:
+                logger.warning(
+                    "Failed to post refund reversal for order %s: %s",
+                    order_id, e,
+                )
+
         return order_id
     
     async def _replace_line_items(
@@ -597,7 +643,11 @@ class PersistenceService:
 
         return None
 
-    async def persist_product(self, product: CanonicalProduct) -> UUID:
+    async def persist_product(
+        self,
+        product: CanonicalProduct,
+        allow_unit_cost_overwrite: Optional[bool] = None,
+    ) -> UUID:
         """Persist a canonical product with variants.
 
         Includes enrichment/reconciliation: if a bare-bones product was
@@ -612,6 +662,9 @@ class PersistenceService:
             f"Persisting product {product.external_id} with "
             f"{len(product.variants)} variants"
         )
+
+        if allow_unit_cost_overwrite is None:
+            allow_unit_cost_overwrite = self._allow_unit_cost_overwrite
 
         # --- Enrichment: reconcile with invoice-created products ---
         enriched_existing = await self._reconcile_invoice_product(product)
@@ -678,9 +731,100 @@ class PersistenceService:
                 external_id=product.external_id,
                 raw_event_id=product.raw_event_id
             )
-        
-        return _extract_id(result)
-    
+
+        product_db_id = _extract_id(result)
+
+        # Ensure an inventory_item stub exists for every variant.
+        # Shopify cost sync behavior:
+        # - fill missing/null/zero unit_cost values from Shopify when available
+        # - never overwrite non-zero unit_cost unless explicit override is enabled
+        # Invoice-derived costs remain authoritative by default.
+        for variant in product.variants:
+            if not variant.external_id:
+                continue
+
+            incoming_cost = variant.unit_cost if variant.unit_cost and variant.unit_cost > 0 else None
+            base_updates = {
+                "product_id": str(product_db_id),
+                "sku": variant.sku,
+                "is_unlimited": variant.is_unlimited,
+                "raw_event_id": str(product.raw_event_id),
+                "variant_external_id": variant.external_id,
+            }
+            if variant.inventory_item_id:
+                base_updates["shopify_inventory_item_id"] = variant.inventory_item_id
+            stub = {
+                "entity_id": str(product.entity_id),
+                "provider": product.provider,
+                # Must be set explicitly: the column defaults to 'ledger', so a new
+                # Shopify stub would otherwise derive on-hand from movements it has
+                # none of, reporting 0 stock while Shopify holds real quantities.
+                "quantity_source": (
+                    "shopify" if product.provider == "shopify" else "ledger"
+                ),
+                **base_updates,
+                "unit_cost": float(incoming_cost) if incoming_cost else 0,
+            }
+
+            try:
+                existing = await asyncio.to_thread(
+                    lambda: self.client.table("inventory_items")
+                    .select("id, unit_cost")
+                    .eq("entity_id", str(product.entity_id))
+                    .eq("provider", product.provider)
+                    .eq("variant_external_id", variant.external_id)
+                    .limit(1)
+                    .execute()
+                )
+
+                # If no stub is keyed by variant_id yet, a prior inventory-only sync
+                # (before this product ever synced) may have already created a bare
+                # row keyed by shopify_inventory_item_id. Adopt that row — filling in
+                # product_id/sku/variant_external_id — instead of inserting a
+                # duplicate that would never get linked to a product.
+                if not existing.data and variant.inventory_item_id:
+                    existing = await asyncio.to_thread(
+                        lambda: self.client.table("inventory_items")
+                        .select("id, unit_cost")
+                        .eq("entity_id", str(product.entity_id))
+                        .eq("provider", product.provider)
+                        .eq("shopify_inventory_item_id", variant.inventory_item_id)
+                        .limit(1)
+                        .execute()
+                    )
+
+                if not existing.data:
+                    await asyncio.to_thread(
+                        lambda d=stub: self.client.table("inventory_items")
+                        .insert(d)
+                        .execute()
+                    )
+                    continue
+
+                row = existing.data[0]
+                existing_cost_raw = row.get("unit_cost")
+                existing_cost = Decimal(str(existing_cost_raw or "0"))
+
+                if incoming_cost is not None:
+                    if allow_unit_cost_overwrite:
+                        base_updates["unit_cost"] = float(incoming_cost)
+                    elif existing_cost <= 0:
+                        base_updates["unit_cost"] = float(incoming_cost)
+
+                await asyncio.to_thread(
+                    lambda d=base_updates, row_id=row["id"]: self.client.table("inventory_items")
+                    .update(d)
+                    .eq("id", row_id)
+                    .execute()
+                )
+            except Exception as e:
+                logger.warning(
+                    "Failed to upsert inventory_item stub for variant %s: %s",
+                    variant.external_id, e,
+                )
+
+        return product_db_id
+
     # =========================================================================
     # INVENTORY PERSISTENCE
     # =========================================================================
@@ -688,8 +832,68 @@ class PersistenceService:
     async def persist_inventory_item(
         self,
         item: CanonicalInventoryItem
-    ) -> UUID:
-        """Persist a canonical inventory item."""
+    ) -> Optional[UUID]:
+        """Persist a canonical inventory item.
+
+        Returns None when the record was deliberately skipped (see the Shopify
+        branch below) — the raw event is still treated as successfully processed.
+        """
+        # --- Shopify inventory-level sync ------------------------------------------
+        # For Shopify, `available_quantity` (kept fresh by every sync) IS the on-hand
+        # number the app displays — there's no separate ledger reconciliation to do.
+        # `item.variant_external_id` is Shopify's inventory_item_id (set by the
+        # normalizer from the inventory_levels payload); match it directly against
+        # the dedicated column populated at product-sync time.
+        # Covers untracked items too (available_quantity is None, is_unlimited=True):
+        # those must also never create an orphan row.
+        if item.provider == "shopify":
+            existing = await asyncio.to_thread(
+                lambda: self.client.table("inventory_items")
+                .select("id, unit_cost")
+                .eq("provider", "shopify")
+                .eq("shopify_inventory_item_id", item.variant_external_id)
+                .eq("entity_id", str(item.entity_id))
+                .execute()
+            )
+            if existing.data:
+                inventory_item_uuid = UUID(existing.data[0]["id"])
+                updates: Dict[str, Any] = {
+                    "is_unlimited": item.is_unlimited,
+                    "raw_event_id": str(item.raw_event_id),
+                }
+                if item.available_quantity is not None:
+                    updates["available_quantity"] = item.available_quantity
+                incoming_cost = item.unit_cost if item.unit_cost and item.unit_cost > 0 else None
+                existing_cost = Decimal(str(existing.data[0].get("unit_cost") or "0"))
+                if incoming_cost is not None:
+                    if self._allow_unit_cost_overwrite or existing_cost <= 0:
+                        updates["unit_cost"] = float(incoming_cost)
+
+                await asyncio.to_thread(
+                    lambda iid=str(inventory_item_uuid), d=updates: (
+                        self.client.table("inventory_items")
+                        .update(d)
+                        .eq("id", iid)
+                        .execute()
+                    )
+                )
+                return inventory_item_uuid
+
+            # No stub exists for this Shopify inventory level, which means no synced
+            # product owns it — it belongs to an archived/unsynced Shopify product.
+            # Skip it rather than creating a bare, product-less row: those orphans
+            # are not useful inventory, they can never be linked to anything, and
+            # they used to accumulate on every sync (125 of them). If the product is
+            # later synced, persist_product creates the stub and the next inventory
+            # sync populates it via the shopify_inventory_item_id match above.
+            logger.debug(
+                "Skipping Shopify inventory level %s — no product-linked "
+                "inventory_item exists for it",
+                item.variant_external_id,
+            )
+            return None
+        # --- End Shopify inventory-level sync ---------------------------------------
+
         # Try to find linked product (also retrieves its created_at)
         product_id, product_created_at = await self._get_product_id_by_variant(
             item.entity_id,
@@ -705,6 +909,7 @@ class PersistenceService:
             "variant_external_id": item.variant_external_id,
             "sku": item.sku,
             "is_unlimited": item.is_unlimited,
+            "available_quantity": item.available_quantity if item.available_quantity is not None else 0,
             "description": item.description,
             "category": item.category,
             "unit_cost": float(item.unit_cost) if item.unit_cost else 0,
@@ -716,13 +921,47 @@ class PersistenceService:
                 if product_created_at else None
             ),
         }
-        
+        # NB: Shopify never reaches here — it always returns early above, either
+        # updating an existing product-linked row or skipping. This path is for
+        # ledger-sourced providers (invoice/manual/squarespace) only.
+
+        # Fetch current row before upserting so quantity deltas and cost precedence
+        # rules can be applied safely.
+        previous_qty: int = 0
+        existing_unit_cost: Decimal = Decimal("0")
+        has_existing_row = False
+        existing = await asyncio.to_thread(
+            lambda: self.client.table("inventory_items")
+            .select("available_quantity, unit_cost")
+            .eq("provider", item.provider)
+            .eq("variant_external_id", item.variant_external_id)
+            .eq("entity_id", str(item.entity_id))
+            .execute()
+        )
+        if existing.data:
+            has_existing_row = True
+            if item.available_quantity is not None:
+                previous_qty = existing.data[0].get("available_quantity") or 0
+            existing_unit_cost = Decimal(str(existing.data[0].get("unit_cost") or "0"))
+
+        if item.provider == "shopify":
+            incoming_cost = item.unit_cost if item.unit_cost and item.unit_cost > 0 else None
+            if has_existing_row:
+                if incoming_cost is None:
+                    data["unit_cost"] = float(existing_unit_cost)
+                elif self._allow_unit_cost_overwrite or existing_unit_cost <= 0:
+                    data["unit_cost"] = float(incoming_cost)
+                else:
+                    data["unit_cost"] = float(existing_unit_cost)
+            elif incoming_cost is not None:
+                data["unit_cost"] = float(incoming_cost)
+
         result = await asyncio.to_thread(
             lambda: self.client.table("inventory_items")
             .upsert(data, on_conflict="provider,variant_external_id,entity_id")
             .execute()
         )
-        
+
         if not result.data:
             raise PersistenceError(
                 "Failed to upsert inventory item",
@@ -730,8 +969,34 @@ class PersistenceService:
                 external_id=item.external_id,
                 raw_event_id=item.raw_event_id
             )
-        
-        return _extract_id(result)
+
+        inventory_item_uuid = _extract_id(result)
+
+        # Record a movement when the quantity has changed
+        new_qty = item.available_quantity if item.available_quantity is not None else 0
+        if item.available_quantity is not None and new_qty != previous_qty:
+            delta = new_qty - previous_qty
+            try:
+                await self.record_inventory_movement(
+                    CanonicalInventoryMovement(
+                        inventory_item_id=inventory_item_uuid,
+                        entity_id=item.entity_id,
+                        provider=item.provider,
+                        variant_external_id=item.variant_external_id,
+                        transaction_type=InventoryMovementType.ADJUSTMENT,
+                        quantity=Decimal(str(delta)),
+                        unit_cost=item.unit_cost or Decimal("0"),
+                        notes=f"Shopify sync: {previous_qty} → {new_qty}",
+                    )
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Failed to record inventory movement for %s: %s",
+                    item.variant_external_id,
+                    exc,
+                )
+
+        return inventory_item_uuid
     
     async def _get_product_id_by_variant(
         self,
@@ -739,8 +1004,17 @@ class PersistenceService:
         provider: str,
         variant_external_id: str
     ) -> Tuple[Optional[UUID], Optional[datetime]]:
-        """Get product ID and created_at for the product containing a specific variant."""
-        # This searches the variants JSONB array
+        """Get product ID and created_at for the product containing a specific variant.
+
+        First searches by variant external_id (standard for Squarespace/PayPal).
+        Falls back to searching by inventory_item_id in the variants JSONB, which
+        is required for Shopify inventory levels where only inventory_item_id is known.
+        """
+        def _parse_row(row: dict) -> Tuple[UUID, Optional[datetime]]:
+            raw_ts = row.get("created_at")
+            return UUID(row["id"]), datetime.fromisoformat(raw_ts) if raw_ts else None
+
+        # Primary: match by variant external_id
         result = await asyncio.to_thread(
             lambda: self.client.table("products")
             .select("id, created_at")
@@ -749,15 +1023,21 @@ class PersistenceService:
             .contains("variants", json.dumps([{"external_id": variant_external_id}]))
             .execute()
         )
-        
         if result.data:
-            row = result.data[0]
-            product_id = UUID(row["id"])
-            raw_ts = row.get("created_at")
-            product_created_at = (
-                datetime.fromisoformat(raw_ts) if raw_ts else None
-            )
-            return product_id, product_created_at
+            return _parse_row(result.data[0])
+
+        # Fallback: match by inventory_item_id (Shopify inventory levels)
+        result = await asyncio.to_thread(
+            lambda: self.client.table("products")
+            .select("id, created_at")
+            .eq("entity_id", str(entity_id))
+            .eq("provider", provider)
+            .contains("variants", json.dumps([{"inventory_item_id": variant_external_id}]))
+            .execute()
+        )
+        if result.data:
+            return _parse_row(result.data[0])
+
         return None, None
     
     # =========================================================================
@@ -840,6 +1120,22 @@ class PersistenceService:
         Returns:
             List of created movement UUIDs
         """
+        # Stamp movements with the order's date, not now(). Left to the column
+        # default, every sale was dated when the sync happened rather than when it
+        # occurred — clustering hundreds of movements on a handful of sync dates and
+        # putting the chronological cost walk in reports.server.ts in processing
+        # order instead of sale order.
+        order_row = await asyncio.to_thread(
+            lambda: self.client.table("orders")
+            .select("created_at")
+            .eq("id", str(order_id))
+            .limit(1)
+            .execute()
+        )
+        order_created_at = (
+            order_row.data[0].get("created_at") if order_row.data else None
+        )
+
         # Fetch the persisted order_line_items to get their DB ids
         persisted_items = await asyncio.to_thread(
             lambda: self.client.table("order_line_items")
@@ -898,6 +1194,14 @@ class PersistenceService:
                 "unit_cost": unit_cost,
                 "notes": f"Order fulfilled (order_id={order_id})",
             }
+            if order_created_at:
+                # created_at is when we wrote the row; movement_date is when the
+                # sale actually happened. They differ whenever an order is
+                # imported late, and only movement_date is safe for period
+                # reporting or for dating the COGS journal.
+                data["created_at"] = order_created_at
+                data["movement_date"] = order_created_at
+                data["movement_date_source"] = "order"
 
             result = await asyncio.to_thread(
                 lambda d=data: self.client.table("inventory_movements")
@@ -1002,22 +1306,6 @@ class PersistenceService:
 
         return _extract_id(result)
 
-    async def get_stock_level(
-        self,
-        inventory_item_id: UUID,
-    ) -> Decimal:
-        """Get current stock level for an inventory item by summing movements."""
-        result = await asyncio.to_thread(
-            lambda: self.client.table("inventory_stock_levels")
-            .select("current_quantity")
-            .eq("inventory_item_id", str(inventory_item_id))
-            .limit(1)
-            .execute()
-        )
-        if result.data:
-            return Decimal(str(result.data[0]["current_quantity"]))
-        return Decimal("0")
-
     async def _get_inventory_item_id(
         self,
         entity_id: UUID,
@@ -1078,6 +1366,9 @@ class PersistenceService:
                 if payment.net_amount else float(payment.amount.amount)
             ),
             "currency": payment.amount.currency,
+            # Base-currency fields (GBP equivalent)
+            "base_amount": float(payment.base_amount) if payment.base_amount is not None else None,
+            "fx_rate": float(payment.fx_rate) if payment.fx_rate is not None else None,
             "status": payment.status.value,
             # Gateway info
             "gateway": payment.gateway,
@@ -1148,6 +1439,7 @@ class PersistenceService:
                 "refunded_fee": float(fee.refunded_fee.amount),
                 "net_fee": float(fee.net_fee.amount),
                 "currency": fee.gross_fee.currency,
+                "base_fee_amount": float(fee.base_fee_amount) if fee.base_fee_amount is not None else None,
                 "metadata": fee.metadata,
             }
             for fee in fees
@@ -1265,6 +1557,7 @@ class PersistenceService:
             "description": txn.description,
             "counterparty_name": txn.counterparty_name,
             "status": txn.status.value if hasattr(txn, 'status') and txn.status else "pending",
+            "excluded_reason": txn.excluded_reason if hasattr(txn, 'excluded_reason') else None,
             "raw_event_id": str(txn.raw_event_id),
             "metadata": txn.metadata,
             "created_at": (
@@ -1474,10 +1767,13 @@ class PersistenceService:
         mapping = {
             "order": "orders",
             "profile": "customers",
+            "customer": "customers",
             "product": "products",
             "inventory_item": "inventory_items",
             "inventory_movement": "inventory_movements",
             "payment": "payments",
+            "payment_transaction": "payments",
+            "order_transaction": "payments",
             "transaction": "payments",
             "bank_account": "bank_accounts",
             "financial_transaction": "financial_transactions",
