@@ -2,9 +2,9 @@
 
 Journal types:
 - **Accrual journal**: Created from a captured *payment* record. Debits clearing
-  (net_amount) + bank charges (fee), credits revenue/shipping/tax from the linked order.
+    (net of gateway fees) + bank charges (fee), credits revenue/shipping/tax from the linked order.
 - **Settlement journal**: Created from an inbound gateway transfer (Stripe/PayPal
-  payout into Revolut). Debits cash, credits clearing.  No fee entry — fees are
+    payout into Revolut). Debits cash, credits clearing.  No fee entry — fees are
   captured at accrual time.
 - **Expense journal**: Created from an outbound financial transaction. Debits the
   resolved expense account, credits cash.
@@ -17,6 +17,7 @@ Safety rules:
 
 import asyncio
 import logging
+import re
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any, Dict, List, Optional, Tuple
@@ -29,6 +30,32 @@ from . import account_mapping as accts
 logger = logging.getLogger(__name__)
 
 BALANCE_TOLERANCE = Decimal("0.01")
+
+
+def _compute_gbp_equivalent(txn: dict, native_amount: Decimal) -> Optional[float]:
+    """Return the GBP equivalent of `native_amount` from a financial transaction.
+
+    Uses the bank-supplied ``base_amount`` (GBP) when the transaction has an
+    ``fx_rate`` and ``base_amount`` differs from the native amount.  Returns
+    ``None`` for GBP transactions (no conversion needed) or when no reliable
+    GBP value is available.
+    """
+    currency = (txn.get("currency_code") or txn.get("currency", "GBP") or "GBP").upper()
+    if currency == "GBP":
+        return None
+    base_amount = txn.get("base_amount")
+    fx_rate = txn.get("fx_rate")
+    if base_amount is None or fx_rate is None:
+        return None
+    base_float = float(base_amount)
+    native_float = float(native_amount)
+    # Only trust base_amount when it has actually been converted (differs from native)
+    if abs(base_float - native_float) < 0.005:
+        return None
+    # base_amount from the bank represents the FULL transaction in GBP.
+    # The individual journal line item carries the same absolute amount as the
+    # transaction, so gbp_equivalent == base_amount for simple two-leg journals.
+    return round(base_float, 4)
 
 
 class JournalError(Exception):
@@ -130,13 +157,13 @@ class JournalService:
         """Create an accrual journal entry for a captured payment.
 
         Uses both the *payments* and *orders* tables:
-        - **payment.net_amount** → clearing debit (what we will receive)
-        - **payment_fees.net_fee** → bank charges debit (gateway fee)
+        - **payment.amount / payment.base_amount** → gross customer-paid amount
+        - **payment_fees.net_fee** → gateway fee expense recognised at accrual time
         - **order** amounts → revenue, shipping revenue, and VAT credits
 
         Journal entries:
-            DEBIT  1012 Payment Gateway Clearing = net_amount
-            DEBIT  8020 Bank Charges             = fee_amount
+            DEBIT  1012 Payment Gateway Clearing = payment.amount less gateway fees
+            DEBIT  8020 Bank Charges             = gateway fee amount
             CREDIT 4020 Revenue                  = subtotal - discounts
             CREDIT 4020 Shipping Revenue         = shipping_total
             CREDIT 2030 Tax Payable              = tax_total
@@ -154,15 +181,44 @@ class JournalService:
         if existing:
             return existing
 
-        net_amount = Decimal(str(payment.get("net_amount", 0)))
-        fee_amount = Decimal(str(payment.get("_fee_amount", 0)))
-        currency = payment.get("currency", "GBP")
+        # Start in the payment currency, then convert fee proportionally if the
+        # journal needs to be posted in the order/base currency instead.
+        raw_amount = Decimal(str(payment.get("amount", 0) or 0))
+        gross_amount = raw_amount
+        currency = (payment.get("currency") or "GBP").strip().upper()
+        fee_amount = Decimal(str(payment.get("_fee_amount", 0) or 0))
+        if fee_amount < 0:
+            fee_amount = Decimal("0")
+
+        raw_net_amount = payment.get("net_amount")
+        if fee_amount == 0 and raw_net_amount is not None:
+            net_amount = Decimal(str(raw_net_amount or 0))
+            if raw_amount > 0 and Decimal("0") <= net_amount <= raw_amount:
+                fee_amount = raw_amount - net_amount
 
         # Fetch linked order for revenue breakdown
         order_id = payment.get("order_id")
         order = await self._fetch_order(UUID(order_id)) if order_id else None
 
         if order:
+            order_currency = (order.get("currency") or "GBP").strip().upper()
+            pay_currency = currency.strip().upper()
+            if order_currency != pay_currency:
+                # Try base_amount (GBP equivalent stored by payment provider)
+                base_amount_raw = payment.get("base_amount")
+                base_currency_raw = (payment.get("base_currency") or "").strip().upper()
+                if base_amount_raw and base_currency_raw == order_currency:
+                    converted_gross_amount = Decimal(str(base_amount_raw))
+                    if raw_amount > 0 and fee_amount > 0:
+                        fee_amount = (fee_amount * converted_gross_amount) / raw_amount
+                    gross_amount = converted_gross_amount
+                    currency = base_currency_raw
+                else:
+                    raise JournalError(
+                        f"Currency mismatch: payment is {pay_currency} but order is {order_currency} "
+                        f"and no usable base_amount in {order_currency} found "
+                        f"(payment {payment_id})"
+                    )
             subtotal = Decimal(str(order.get("subtotal_amount", 0)))
             discount_total = Decimal(str(order.get("discount_total_amount", 0)))
             shipping_total = Decimal(str(order.get("shipping_total_amount", 0)))
@@ -170,7 +226,7 @@ class JournalService:
             revenue_amount = subtotal - discount_total
         else:
             # Fallback: no order linked — entire amount is revenue
-            revenue_amount = net_amount + fee_amount
+            revenue_amount = gross_amount
             shipping_total = Decimal("0")
             tax_total = Decimal("0")
 
@@ -202,18 +258,24 @@ class JournalService:
 
         # Build line items
         line_items: List[Dict[str, Any]] = []
+        clearing_amount = gross_amount - fee_amount
+        if clearing_amount < 0:
+            raise JournalError(
+                f"Payment fee exceeds gross amount for payment {payment_id}: "
+                f"gross={gross_amount} fee={fee_amount}"
+            )
 
-        # DEBIT clearing (net amount — what we will receive from gateway)
-        if net_amount > 0:
+        # DEBIT clearing for the expected net settlement from the gateway.
+        if clearing_amount > 0:
             line_items.append({
                 "account_id": str(clearing_id),
-                "debit": float(net_amount),
+                "debit": float(clearing_amount),
                 "credit": 0,
                 "currency": currency,
                 "description": f"Clearing for payment on order {order_ref}",
             })
 
-        # DEBIT bank charges (gateway processing fee)
+        # DEBIT gateway fees to bank charges at accrual time.
         if fee_amount > 0:
             line_items.append({
                 "account_id": str(fees_id),
@@ -323,7 +385,16 @@ class JournalService:
 
         # Determine gateway from description
         desc = (txn.get("description") or "").lower()
-        gateway = "STRIPE" if "stripe" in desc else "PAYPAL" if "paypal" in desc else "GATEWAY"
+        if "stripe" in desc:
+            gateway = "STRIPE"
+        elif "paypal" in desc:
+            gateway = "PAYPAL"
+        elif "shopify" in desc:
+            gateway = "SHOPIFY"
+        elif "squarespace" in desc:
+            gateway = "SQUARESPACE"
+        else:
+            gateway = "GATEWAY"
 
         # Cash account based on currency
         source = txn.get("source", "revolut")
@@ -408,8 +479,29 @@ class JournalService:
         if existing:
             return existing
 
-        amount = Decimal(str(abs(txn.get("amount", 0))))
-        currency = txn.get("currency_code") or txn.get("currency", "GBP")
+        txn_type = txn.get("transaction_type", "")
+        raw_currency = txn.get("currency_code") or txn.get("currency", "GBP")
+        base_currency = txn.get("base_currency_code") or "GBP"
+        fx_rate = txn.get("fx_rate")
+
+        # Use base_amount (GBP equivalent) for journaling when the transaction is
+        # in a foreign currency.  If fx_rate is null the GBP amount is unconfirmed
+        # — mark the journal as draft so it can be reviewed.
+        if raw_currency.upper() != base_currency.upper():
+            raw_base = txn.get("base_amount")
+            if raw_base is not None and fx_rate is not None:
+                amount = Decimal(str(abs(float(raw_base))))
+            elif raw_base is not None and fx_rate is None:
+                # base_amount stored but FX rate unconfirmed — use it but mark draft
+                amount = Decimal(str(abs(float(raw_base))))
+            else:
+                amount = Decimal(str(abs(txn.get("amount", 0))))
+            currency = base_currency.upper()
+            is_foreign_currency = True
+        else:
+            amount = Decimal(str(abs(txn.get("amount", 0))))
+            currency = raw_currency
+            is_foreign_currency = False
 
         if amount <= 0:
             raise JournalError(f"Transaction amount must be positive, got {amount}")
@@ -423,14 +515,34 @@ class JournalService:
 
         # Detect personal funding vs. merchant/third-party
         is_personal = self._is_personal_funding(description_text, counterparty, txn)
+        is_wholesale = self._is_wholesale_payment(description_text, counterparty, txn)
+        is_brand_collab = self._is_brand_collaboration(description_text, counterparty, txn)
+
         if is_personal:
             credit_code = accts.DIRECTORS_LOAN
             credit_label = "Director's loan — personal funds introduced"
             journal_desc = f"Personal funding: {description_text}"
+        elif txn_type == "reserve_release" or is_wholesale:
+            # Revolut reserve_release = merchant reserve payout; if from a B2B
+            # context treat as wholesale revenue.
+            credit_code = accts.REVENUE_WHOLESALE
+            credit_label = f"Wholesale revenue: {counterparty or description_text}"
+            journal_desc = f"Wholesale receipt: {counterparty or description_text}"
+        elif is_brand_collab:
+            credit_code = accts.BRAND_COLLAB_INCOME
+            credit_label = f"Brand collaboration income: {counterparty or description_text}"
+            journal_desc = f"Brand collaboration: {counterparty or description_text}"
         else:
             credit_code = accts.REVENUE_ECOMMERCE
             credit_label = f"Revenue from {counterparty or description_text}"
             journal_desc = f"Funding received: {counterparty or description_text}"
+
+        # Foreign-currency transactions without a confirmed FX rate are created
+        # as drafts so a bookkeeper can verify the GBP amount.
+        journal_status = "posted"
+        if is_foreign_currency and fx_rate is None:
+            journal_status = "draft"
+            journal_desc += f" [DRAFT — FX rate not confirmed for {raw_currency}]"  # noqa: E501
 
         credit_id = await self._get_account_id(entity_id, credit_code)
 
@@ -469,7 +581,7 @@ class JournalService:
             description=journal_desc,
             source_type="financial_transaction",
             source_id=financial_transaction_id,
-            status="posted",
+            status=journal_status,
             line_items=line_items,
         )
 
@@ -501,24 +613,46 @@ class JournalService:
         if existing:
             return existing
 
-        amount = Decimal(str(abs(txn.get("amount", 0))))
-        currency = txn.get("currency_code") or "GBP"
+        raw_currency = (txn.get("currency_code") or "GBP").upper()
+        base_currency = (txn.get("base_currency_code") or "GBP").upper()
+        fx_rate_val = txn.get("fx_rate")
         meta = txn.get("metadata") or {}
+
+        # Convert auto-FX receipts (e.g. USD PayPal receipt) to GBP so the
+        # PayPal account debit always uses the GBP equivalent.
+        if raw_currency != "GBP" and base_currency == "GBP" and fx_rate_val is not None:
+            raw_base = txn.get("base_amount")
+            if raw_base is not None:
+                amount = Decimal(str(abs(float(raw_base))))
+                currency = "GBP"
+            else:
+                amount = Decimal(str(abs(txn.get("amount", 0))))
+                currency = raw_currency
+        else:
+            amount = Decimal(str(abs(txn.get("amount", 0))))
+            currency = raw_currency
 
         if amount <= 0:
             raise JournalError(f"Transaction amount must be positive, got {amount}")
 
+        description_text = txn.get("description") or ""
+        counterparty = txn.get("counterparty_name") or ""
+
         source = txn.get("source", "paypal")
         cash_code = accts.resolve_cash_account(source, currency)
         cash_id = await self._get_account_id(entity_id, cash_code)
-        revenue_id = await self._get_account_id(entity_id, accts.REVENUE_ECOMMERCE)
+
+        # Detect brand collab receipts that arrived via PayPal direct
+        is_brand_collab = self._is_brand_collaboration(description_text, counterparty, txn)
+        revenue_account_code = accts.BRAND_COLLAB_INCOME if is_brand_collab else accts.REVENUE_ECOMMERCE
+        revenue_id = await self._get_account_id(entity_id, revenue_account_code)
         fees_id = await self._get_account_id(entity_id, accts.BANK_CHARGES)
 
         missing = []
         if not cash_id:
             missing.append(cash_code)
         if not revenue_id:
-            missing.append(accts.REVENUE_ECOMMERCE)
+            missing.append(revenue_account_code)
         if not fees_id:
             missing.append(accts.BANK_CHARGES)
         if missing:
@@ -526,14 +660,15 @@ class JournalService:
                 f"Missing chart of accounts ({', '.join(missing)}). "
                 "Check that these account numbers exist and are not header accounts."
             )
-
-        description_text = txn.get("description") or ""
-        counterparty = txn.get("counterparty_name") or ""
         # Extract fee from metadata
         fee_info = meta.get("fee_amount") or {}
         fee_amount = abs(Decimal(str(fee_info.get("value", "0")))) if fee_info else Decimal("0")
 
         gross_revenue = amount + fee_amount
+
+        # GBP equivalent for non-GBP PayPal receipts
+        gbp_equiv = _compute_gbp_equivalent(txn, amount)
+        gbp_equiv_field: Dict[str, Any] = {"gbp_equivalent": gbp_equiv} if gbp_equiv is not None else {}
 
         line_items: List[Dict[str, Any]] = [
             {
@@ -542,6 +677,7 @@ class JournalService:
                 "credit": 0,
                 "currency": currency,
                 "description": f"PayPal receipt: {counterparty or description_text}",
+                **gbp_equiv_field,
             },
         ]
 
@@ -552,14 +688,21 @@ class JournalService:
                 "credit": 0,
                 "currency": currency,
                 "description": f"PayPal fee: {counterparty or description_text}",
+                **({"gbp_equivalent": _compute_gbp_equivalent(txn, fee_amount)} if gbp_equiv is not None else {}),
             })
 
+        gbp_equiv_gross = round(float(gbp_equiv) + float(_compute_gbp_equivalent(txn, fee_amount) or 0), 4) if gbp_equiv is not None else None
         line_items.append({
             "account_id": str(revenue_id),
             "debit": 0,
             "credit": float(gross_revenue),
             "currency": currency,
-            "description": f"Sales revenue: {counterparty or description_text}",
+            "description": (
+                f"Brand collaboration income: {counterparty or description_text}"
+                if is_brand_collab
+                else f"Sales revenue: {counterparty or description_text}"
+            ),
+            **({"gbp_equivalent": gbp_equiv_gross} if gbp_equiv_gross is not None else {}),
         })
 
         return await self._create_journal(
@@ -725,12 +868,17 @@ class JournalService:
         fee = Decimal(str(meta.get("fee", 0)))
         source_amount = amount + fee  # What we gave up from the source account
 
+        # All line items are tagged GBP (functional currency) regardless of the
+        # foreign currencies involved.  The amounts are already GBP-equivalent
+        # values — tagging legs with their native foreign currency would cause
+        # balance sheet GBP filtering to see orphaned single-leg entries and
+        # produce an Assets ≠ Liabilities + Equity imbalance.
         line_items: List[Dict[str, Any]] = [
             {
                 "account_id": str(target_id),
                 "debit": float(amount),
                 "credit": 0,
-                "currency": currency,
+                "currency": "GBP",
                 "description": f"FX conversion received: {currency}",
             },
         ]
@@ -740,7 +888,7 @@ class JournalService:
                 "account_id": str(fx_loss_id),
                 "debit": float(fee),
                 "credit": 0,
-                "currency": source_currency,
+                "currency": "GBP",
                 "description": f"FX conversion fee",
             })
 
@@ -748,7 +896,7 @@ class JournalService:
             "account_id": str(source_id),
             "debit": 0,
             "credit": float(source_amount),
-            "currency": source_currency,
+            "currency": "GBP",
             "description": f"FX conversion source: {source_currency}",
         })
 
@@ -940,6 +1088,530 @@ class JournalService:
         )
 
         return journal
+
+    # =========================================================================
+    # INVENTORY COGS JOURNAL (Sale → Cost of Goods Sold)
+    # =========================================================================
+
+    # The date perpetual COGS posting takes over from the manual restatement.
+    #
+    # 2026 up to the 30 Jul stock count was restated by hand, as four monthly
+    # journals totalling £5,048.19 that cover every sale through 2026-07-18.
+    # Those carry source_id = NULL, so the per-order idempotency check cannot
+    # see them: without this cutoff, re-syncing any Apr-Jul order would post a
+    # second COGS journal for cost the restatement already recognised.
+    #
+    # Anything on or after this date is virgin territory and posts per order.
+    PERPETUAL_COGS_START = "2026-07-31"
+
+    async def create_inventory_cogs_journal(
+        self,
+        entity_id: UUID,
+        order_id: UUID,
+        force: bool = False,
+    ) -> Optional[Dict[str, Any]]:
+        """Recognise cost of goods sold for a fulfilled order.
+
+        Revenue for an order is recognised when the payment is captured, but the
+        cost of the goods that left the shelf has to land in the same period or
+        gross margin is meaningless. This posts the other half:
+
+            DEBIT  5005 COGS — Finished Goods Sold  = sum of sale cost snapshots
+            CREDIT 1033 Inventory — Finished Goods  = same
+
+        The amount comes from the SALE movements already written for the order,
+        using each movement's ``unit_cost`` — the cost captured *at the time of
+        sale*, not today's cost — so re-running this later cannot silently
+        restate history.
+
+        Returns ``None`` (rather than raising) when there is nothing to post:
+        no live movements, zero total cost, or an order predating
+        :attr:`PERPETUAL_COGS_START`. Those are all normal, and a sale must
+        never fail because its cost is unknown.
+
+        Idempotent on (entity, order). Superseded movements are excluded, so the
+        duplicate-movement problem that order re-syncs cause cannot inflate COGS.
+        """
+        movements = await asyncio.to_thread(
+            lambda: self.client.table("inventory_movements")
+            .select("id, quantity, unit_cost, movement_date, reference_id")
+            .eq("transaction_type", "SALE")
+            .eq("reference_table", "order_line_items")
+            .is_("superseded_at", "null")
+            .execute()
+        )
+
+        line_ids = await self._order_line_item_ids(order_id)
+        if not line_ids:
+            return None
+
+        relevant = [
+            m for m in extract_rows(movements)
+            if str(m.get("reference_id")) in line_ids
+        ]
+        if not relevant:
+            return None
+
+        total = Decimal("0")
+        for mv in relevant:
+            qty = abs(Decimal(str(mv.get("quantity") or 0)))
+            cost = Decimal(str(mv.get("unit_cost") or 0))
+            total += qty * cost
+
+        if total <= 0:
+            # Uncosted stock — genuinely common for unlinked products. Posting a
+            # zero journal would imply the cost is known and nil, which is worse
+            # than posting nothing: the cost-coverage report can find these.
+            logger.debug(
+                "No costed SALE movements for order %s — no COGS journal", order_id
+            )
+            return None
+
+        journal_date = min(
+            str(m.get("movement_date")) for m in relevant if m.get("movement_date")
+        )
+        if journal_date[:10] < self.PERPETUAL_COGS_START:
+            logger.info(
+                "Order %s is dated %s, covered by the manual restatement before %s "
+                "— skipping COGS journal to avoid double-counting",
+                order_id, journal_date[:10], self.PERPETUAL_COGS_START,
+            )
+            return None
+
+        existing = await self._find_journal(
+            entity_id, "inventory_cogs", order_id, "adjustment"
+        )
+        if existing and not force:
+            return existing
+
+        order_row = await asyncio.to_thread(
+            lambda: self.client.table("orders")
+            .select("order_number")
+            .eq("id", str(order_id))
+            .limit(1)
+            .execute()
+        )
+        order_ref = (extract_row(order_row) or {}).get("order_number") or str(order_id)
+
+        cogs_id = await self._get_account_id(entity_id, accts.COGS_FINISHED_GOODS)
+        inventory_id = await self._get_account_id(
+            entity_id, accts.INVENTORY_FINISHED_GOODS
+        )
+        if not cogs_id or not inventory_id:
+            raise JournalError(
+                f"Missing chart of accounts ({accts.COGS_FINISHED_GOODS} COGS / "
+                f"{accts.INVENTORY_FINISHED_GOODS} Inventory). Check both exist "
+                "and are not headers."
+            )
+
+        amount = float(total)
+        return await self._create_journal(
+            entity_id=entity_id,
+            journal_type="adjustment",
+            journal_date=journal_date,
+            description=f"Cost of goods sold — order {order_ref}",
+            source_type="inventory_cogs",
+            source_id=order_id,
+            status="posted",
+            line_items=[
+                {
+                    "account_id": str(cogs_id),
+                    "debit": amount,
+                    "credit": 0,
+                    "currency": "GBP",
+                    "description": "Cost of goods sold at sale-time cost",
+                },
+                {
+                    "account_id": str(inventory_id),
+                    "debit": 0,
+                    "credit": amount,
+                    "currency": "GBP",
+                    "description": "Stock released on sale",
+                },
+            ],
+            metadata={"movement_count": len(relevant), "order_id": str(order_id)},
+        )
+
+    async def _order_line_item_ids(self, order_id: UUID) -> set:
+        """Return the current line item ids for an order, as strings."""
+        result = await asyncio.to_thread(
+            lambda: self.client.table("order_line_items")
+            .select("id")
+            .eq("order_id", str(order_id))
+            .execute()
+        )
+        return {str(r["id"]) for r in extract_rows(result)}
+
+    # =========================================================================
+    # INVENTORY DISPOSAL (Gift or write-off → dated movement + journal)
+    # =========================================================================
+
+    # inventory_items.item_type -> the inventory asset account it capitalises
+    # into. Only 'sellable' and 'sample' exist in the data today; trims/
+    # accessories (1034) are coded directly on invoice line items rather than
+    # tracked per inventory_item, so they are not reachable through this path.
+    _ITEM_TYPE_INVENTORY_ACCOUNT = {
+        "sellable": accts.INVENTORY_FINISHED_GOODS,
+        "sample": accts.INVENTORY_SAMPLES,
+    }
+
+    async def record_inventory_disposal(
+        self,
+        entity_id: UUID,
+        inventory_item_id: UUID,
+        disposal_type: str,
+        quantity: float,
+        notes: Optional[str] = None,
+        occurred_at: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Record a gift or write-off: one dated movement, plus its journal.
+
+        Replaces the previous UI behaviour of deleting every GIFT movement for
+        an item and replacing it with a single undated row — which could only
+        ever represent one gift "total" per item, never a history of separate
+        events, and posted nothing to the ledger. This creates one new,
+        independently dated movement per call, mirroring how PURCHASE and SALE
+        movements already accumulate.
+
+        ``disposal_type`` is ``'GIFT'`` or ``'WRITE_OFF'``:
+            GIFT:      DEBIT 6011 Social Media & Influencer
+            WRITE_OFF: DEBIT 5070 COGS — Inventory Write-Downs
+                       CREDIT 1033/1035 Inventory (by the item's item_type)
+
+        The journal is skipped (movement-only) when ``occurred_at`` predates
+        :attr:`PERPETUAL_COGS_START` — that period was restated by hand.
+        """
+        if disposal_type not in ("GIFT", "WRITE_OFF"):
+            raise JournalError(
+                f"disposal_type must be GIFT or WRITE_OFF, got {disposal_type!r}"
+            )
+        if quantity <= 0:
+            raise JournalError(f"quantity must be positive, got {quantity}")
+
+        item_row = await asyncio.to_thread(
+            lambda: self.client.table("inventory_items")
+            .select("id, unit_cost, item_type, sku")
+            .eq("id", str(inventory_item_id))
+            .limit(1)
+            .execute()
+        )
+        item = extract_row(item_row)
+        if not item:
+            raise JournalError(f"Inventory item not found: {inventory_item_id}")
+
+        unit_cost = float(item.get("unit_cost") or 0)
+        movement_date = occurred_at or datetime.now(timezone.utc).isoformat()
+
+        movement = await asyncio.to_thread(
+            lambda: self.client.table("inventory_movements").insert({
+                "inventory_item_id": str(inventory_item_id),
+                "transaction_type": disposal_type,
+                "quantity": -abs(quantity),
+                "unit_cost": unit_cost,
+                "movement_date": movement_date,
+                "movement_date_source": "order" if occurred_at else "estimated",
+                "notes": (
+                    notes
+                    or ("Gifted stock" if disposal_type == "GIFT" else "Written off")
+                ),
+            }).execute()
+        )
+        movement_row = extract_row(movement)
+        if not movement_row:
+            raise JournalError("Failed to insert inventory movement")
+
+        result: Dict[str, Any] = {"movement": movement_row, "journal": None}
+
+        amount = round(abs(quantity) * unit_cost, 2)
+        if amount <= 0:
+            # No cost on this item — a real and common state (uncosted legacy
+            # stock). The movement is still recorded for the audit trail; there
+            # is simply nothing to journal.
+            return result
+
+        if movement_date[:10] < self.PERPETUAL_COGS_START:
+            return result
+
+        item_type = str(item.get("item_type") or "")
+        inventory_account = self._ITEM_TYPE_INVENTORY_ACCOUNT.get(
+            item_type, accts.INVENTORY_FINISHED_GOODS
+        )
+        debit_account = (
+            accts.SOCIAL_MEDIA if disposal_type == "GIFT" else accts.COGS_WRITE_DOWNS
+        )
+
+        debit_id = await self._get_account_id(entity_id, debit_account)
+        credit_id = await self._get_account_id(entity_id, inventory_account)
+        if not debit_id or not credit_id:
+            raise JournalError(
+                f"Missing chart of accounts ({debit_account} / {inventory_account}). "
+                "Check both exist and are not headers."
+            )
+
+        sku = item.get("sku") or str(inventory_item_id)
+        journal = await self._create_journal(
+            entity_id=entity_id,
+            journal_type="adjustment",
+            journal_date=movement_date,
+            description=(
+                f"{'Gifted' if disposal_type == 'GIFT' else 'Written off'} stock "
+                f"— {sku} x{quantity:g}"
+            ),
+            source_type="inventory_disposal",
+            source_id=UUID(movement_row["id"]),
+            status="posted",
+            line_items=[
+                {
+                    "account_id": str(debit_id),
+                    "debit": amount,
+                    "credit": 0,
+                    "currency": "GBP",
+                    "description": notes or sku,
+                },
+                {
+                    "account_id": str(credit_id),
+                    "debit": 0,
+                    "credit": amount,
+                    "currency": "GBP",
+                    "description": f"Stock released — {sku}",
+                },
+            ],
+            metadata={"inventory_item_id": str(inventory_item_id), "sku": sku},
+        )
+        result["journal"] = journal
+        return result
+
+    # =========================================================================
+    # ORDER REFUND REVERSAL (Refund → reverse revenue, COGS and stock)
+    # =========================================================================
+
+    async def create_refund_reversal_journal(
+        self,
+        entity_id: UUID,
+        order_id: UUID,
+        force: bool = False,
+    ) -> Optional[Dict[str, Any]]:
+        """Reverse the revenue, cost and stock effects of a refunded order.
+
+        Revenue is always reversed for the exact amount refunded, full or
+        partial — this is a pure money fact with no ambiguity:
+
+            DEBIT  4110 Sales Returns & Allowances = refunded_total_amount
+            CREDIT 1012 Merchant Services Clearing = refunded_total_amount
+
+        Cost and stock are only reversed automatically on a **full** refund.
+        Nothing in this schema records which SKUs a *partial* refund returned
+        (``orders.refunded_total_amount`` is a single total with no line-item
+        breakdown), so guessing would risk corrupting real stock counts. A
+        partial refund instead gets an *estimated* COGS reversal posted as
+        ``draft`` — sized proportionally, never touching stock — for a human to
+        confirm or correct once they know what actually came back. This mirrors
+        the existing convention for unresolvable entries elsewhere in this
+        module: mark for review rather than silently mis-post.
+
+        On a full refund:
+            - The order's existing COGS journal (posted by
+              :meth:`create_inventory_cogs_journal`) is soft-voided via
+              :meth:`reverse_journal` — the same mechanism used everywhere else
+              in this file, so there is no double-removal risk.
+            - A RETURN movement (positive quantity) is written for each of the
+              order's SALE movements, so ``inventory_on_hand`` reflects the
+              stock coming back. ``unit_cost`` is carried over from the SALE it
+              reverses, for audit traceability — it plays no role in valuation.
+            - If no COGS journal exists for the order (e.g. every line was
+              uncosted), the revenue reversal still posts; cost/stock are
+              skipped with a note in the result rather than failing the whole
+              operation.
+
+        Orders dated before :attr:`PERPETUAL_COGS_START` are skipped entirely —
+        that period was restated by hand and any refunds in it were already
+        accounted for.
+
+        Idempotent on (entity, order, 'refund'). Returns ``None`` when there is
+        nothing to do (no refund recorded, or the order predates the cutoff).
+        """
+        order_row = await asyncio.to_thread(
+            lambda: self.client.table("orders")
+            .select("id, order_number, status, created_at, "
+                    "grand_total_amount, refunded_total_amount")
+            .eq("id", str(order_id))
+            .limit(1)
+            .execute()
+        )
+        order = extract_row(order_row)
+        if not order:
+            return None
+
+        refunded = Decimal(str(order.get("refunded_total_amount") or 0))
+        if refunded <= 0:
+            return None
+
+        created_at = str(order.get("created_at") or "")
+        if created_at[:10] < self.PERPETUAL_COGS_START:
+            logger.info(
+                "Order %s is dated %s, before the %s cutoff — refund covered by "
+                "the manual restatement, skipping",
+                order_id, created_at[:10], self.PERPETUAL_COGS_START,
+            )
+            return None
+
+        existing = await self._find_journal(entity_id, "order_refund", order_id, "refund")
+        if existing and not force:
+            # Match the shape of the full-path return rather than the bare
+            # journal row _find_journal gives back — a caller checking
+            # result["revenue_reversal"]["id"] must not care whether this was
+            # the first call or a repeat.
+            return {
+                "revenue_reversal": existing,
+                "cogs_reversal": None,
+                "returned_movements": 0,
+                "already_processed": True,
+            }
+
+        grand_total = Decimal(str(order.get("grand_total_amount") or 0))
+        is_full_refund = grand_total > 0 and abs(refunded - grand_total) < Decimal("0.01")
+        order_ref = order.get("order_number") or str(order_id)
+
+        clearing_id = await self._get_account_id(entity_id, accts.MERCHANT_CLEARING)
+        returns_id = await self._get_account_id(entity_id, accts.SALES_RETURNS)
+        if not clearing_id or not returns_id:
+            raise JournalError(
+                f"Missing chart of accounts ({accts.SALES_RETURNS} Sales Returns / "
+                f"{accts.MERCHANT_CLEARING} Merchant Clearing). Check both exist "
+                "and are not headers."
+            )
+
+        revenue_journal = await self._create_journal(
+            entity_id=entity_id,
+            journal_type="refund",
+            journal_date=created_at or datetime.now(timezone.utc).isoformat(),
+            description=(
+                f"Refund — order {order_ref} "
+                f"({'full' if is_full_refund else 'partial'}, £{refunded})"
+            ),
+            source_type="order_refund",
+            source_id=order_id,
+            status="posted",
+            line_items=[
+                {
+                    "account_id": str(returns_id),
+                    "debit": float(refunded),
+                    "credit": 0,
+                    "currency": "GBP",
+                    "description": f"Sales return — order {order_ref}",
+                },
+                {
+                    "account_id": str(clearing_id),
+                    "debit": 0,
+                    "credit": float(refunded),
+                    "currency": "GBP",
+                    "description": f"Refund paid out — order {order_ref}",
+                },
+            ],
+            metadata={"order_id": str(order_id), "is_full_refund": is_full_refund},
+        )
+
+        result: Dict[str, Any] = {
+            "revenue_reversal": revenue_journal,
+            "cogs_reversal": None,
+            "returned_movements": 0,
+        }
+
+        cogs_journal = await self._find_journal(
+            entity_id, "inventory_cogs", order_id, "adjustment"
+        )
+
+        if not is_full_refund:
+            # Cannot know which units came back, so stock is left untouched.
+            # A draft estimate lets a human size the real reversal once they
+            # know what was actually returned, without it affecting any balance
+            # until someone deliberately posts it.
+            if cogs_journal:
+                cogs_lines = await self._fetch_journal_line_items(
+                    UUID(cogs_journal["id"])
+                )
+                original_cogs = sum(
+                    Decimal(str(li.get("debit") or 0)) for li in cogs_lines
+                )
+                proportion = refunded / grand_total if grand_total > 0 else Decimal("0")
+                estimate = (original_cogs * proportion).quantize(Decimal("0.01"))
+                if estimate > 0:
+                    cogs_id = await self._get_account_id(
+                        entity_id, accts.COGS_FINISHED_GOODS
+                    )
+                    inventory_id = await self._get_account_id(
+                        entity_id, accts.INVENTORY_FINISHED_GOODS
+                    )
+                    draft = await self._create_journal(
+                        entity_id=entity_id,
+                        journal_type="adjustment",
+                        journal_date=created_at,
+                        description=(
+                            f"ESTIMATED COGS reversal — partial refund on order "
+                            f"{order_ref} ({proportion:.0%} of order value). "
+                            "Review which SKUs were actually returned before "
+                            "posting; stock has not been adjusted."
+                        ),
+                        source_type="order_refund_cogs_estimate",
+                        source_id=order_id,
+                        status="draft",
+                        line_items=[
+                            {
+                                "account_id": str(inventory_id),
+                                "debit": float(estimate),
+                                "credit": 0,
+                                "currency": "GBP",
+                                "description": "Estimated stock returned",
+                            },
+                            {
+                                "account_id": str(cogs_id),
+                                "debit": 0,
+                                "credit": float(estimate),
+                                "currency": "GBP",
+                                "description": "Estimated cost reversal",
+                            },
+                        ],
+                    )
+                    result["cogs_reversal"] = {"draft_estimate": draft}
+            return result
+
+        # Full refund: void the real COGS journal and return the real stock.
+        if cogs_journal and cogs_journal.get("status") == "posted":
+            voided = await self.reverse_journal(entity_id, UUID(cogs_journal["id"]))
+            result["cogs_reversal"] = voided
+
+        sale_movements = await asyncio.to_thread(
+            lambda: self.client.table("inventory_movements")
+            .select("id, inventory_item_id, reference_id, quantity, unit_cost")
+            .eq("transaction_type", "SALE")
+            .is_("superseded_at", "null")
+            .execute()
+        )
+        line_ids = await self._order_line_item_ids(order_id)
+        relevant = [
+            m for m in extract_rows(sale_movements)
+            if str(m.get("reference_id")) in line_ids
+        ]
+
+        for mv in relevant:
+            return_qty = float(abs(Decimal(str(mv["quantity"] or 0))))
+            movements_table = self.client.table("inventory_movements")
+            await asyncio.to_thread(
+                lambda m=mv, q=return_qty: movements_table.insert({
+                    "inventory_item_id": m["inventory_item_id"],
+                    "transaction_type": "RETURN",
+                    "reference_id": m["reference_id"],
+                    "reference_table": "order_line_items",
+                    "quantity": q,
+                    "unit_cost": float(m.get("unit_cost") or 0),
+                    "movement_date": created_at,
+                    "movement_date_source": "order",
+                    "notes": f"Stock returned — full refund of order {order_ref}",
+                }).execute()
+            )
+            result["returned_movements"] += 1
+
+        return result
 
     # =========================================================================
     # INVOICE PAYMENT JOURNAL
@@ -1260,13 +1932,29 @@ class JournalService:
         if existing:
             return existing
 
-        amount = Decimal(str(abs(txn.get("amount", 0))))
-        currency = txn.get("currency_code") or txn.get("currency", "GBP")
+        raw_currency = (txn.get("currency_code") or txn.get("currency", "GBP") or "GBP").upper()
+        base_currency = (txn.get("base_currency_code") or "GBP").upper()
+        fx_rate_val = txn.get("fx_rate")
+
+        # For auto-FX transactions (e.g. USD charged from the GBP Revolut account),
+        # use base_amount in GBP so the cash entry credits 1014 Revolut GBP rather
+        # than misrouting to 1015 EUR or 1016 USD.
+        if raw_currency != "GBP" and base_currency == "GBP" and fx_rate_val is not None:
+            raw_base = txn.get("base_amount")
+            if raw_base is not None:
+                amount = Decimal(str(abs(float(raw_base))))
+                currency = "GBP"
+            else:
+                amount = Decimal(str(abs(txn.get("amount", 0))))
+                currency = raw_currency
+        else:
+            amount = Decimal(str(abs(txn.get("amount", 0))))
+            currency = raw_currency
 
         if amount <= 0:
             raise JournalError(f"Transaction amount must be positive, got {amount}")
 
-        # Determine cash account based on source + currency
+        # Determine cash account based on source + currency (always GBP for auto-FX)
         source = txn.get("source", "revolut")
         cash_account_code = accts.resolve_cash_account(source, currency)
 
@@ -1299,6 +1987,10 @@ class JournalService:
         if not counterparty:
             counterparty = description or "Unknown"
 
+        # Compute GBP equivalent for non-GBP transactions (for balance sheet reporting)
+        gbp_equiv = _compute_gbp_equivalent(txn, amount)
+        gbp_equiv_field = {"gbp_equivalent": gbp_equiv} if gbp_equiv is not None else {}
+
         line_items = [
             {
                 "account_id": str(expense_id),
@@ -1306,6 +1998,7 @@ class JournalService:
                 "credit": 0,
                 "currency": currency,
                 "description": f"{category}: {counterparty}",
+                **gbp_equiv_field,
             },
             {
                 "account_id": str(cash_id),
@@ -1313,6 +2006,7 @@ class JournalService:
                 "credit": float(amount),
                 "currency": currency,
                 "description": f"Cash out: {counterparty}",
+                **gbp_equiv_field,
             },
         ]
 
@@ -1378,6 +2072,15 @@ class JournalService:
                         "transaction_id": str(txn_id),
                         "error": str(e),
                     })
+            except Exception as e:
+                logger.error(
+                    "Unexpected error journalizing expense %s: %s",
+                    txn_id, e, exc_info=True,
+                )
+                results["errors"].append({
+                    "transaction_id": str(txn_id),
+                    "error": f"Unexpected: {e}",
+                })
 
         return {
             "entity_id": str(entity_id),
@@ -1401,82 +2104,12 @@ class JournalService:
             scope: Which journals to create. One of:
                 - ``"payments"`` — accrual journals from captured payments
                 - ``"transactions"`` — expense + settlement + inbound journals from financial transactions
-                - ``"invoices"`` — purchase / sale / payment journals from invoices
                 - ``None`` or ``"all"`` — run every scope
-
-        PayPal transaction cleaning, cross-provider duplicate detection,
-        and invoice matching always run first (they are prerequisites, not
-        journal-creating steps).
         """
-        from ..services.reconciliation_service import reconciliation_service
-        from ..services.paypal_cleaning_service import paypal_cleaning_service
-
         run_all = scope is None or scope == "all"
         pipeline_start = datetime.now(timezone.utc)
         steps: List[Dict[str, Any]] = []
         overall_errors: List[Dict[str, Any]] = []
-
-        # ── Pre-step: PayPal transaction cleaning ─────────────────────────
-        step = {
-            "step": "paypal_cleaning",
-            "title": "Clean PayPal Transactions",
-            "status": "running",
-        }
-        try:
-            clean_result = await paypal_cleaning_service.clean_paypal_transactions(entity_id)
-            step.update({
-                "status": "completed",
-                "total_processed": clean_result.get("total_processed", 0),
-                "total_excluded": clean_result.get("total_excluded", 0),
-                "total_enriched": clean_result.get("total_enriched", 0),
-                "patterns": clean_result.get("patterns", {}),
-            })
-        except Exception as e:
-            logger.error("PayPal cleaning step failed: %s", e)
-            step.update({"status": "error", "error": str(e)})
-            overall_errors.append({"step": "paypal_cleaning", "error": str(e)})
-        steps.append(step)
-
-        # ── Pre-step: Cross-provider duplicate detection ──────────────────
-        step = {
-            "step": "duplicate_detection",
-            "title": "Detect Cross-Provider Duplicates",
-            "status": "running",
-        }
-        try:
-            dup_result = await reconciliation_service.detect_cross_provider_duplicates(entity_id)
-            step.update({
-                "status": "completed",
-                "duplicates_found": dup_result.get("duplicates_found", 0),
-                "enriched": dup_result.get("enriched", 0),
-                "invoices_updated": dup_result.get("invoices_updated", 0),
-                "excluded_transactions": dup_result.get("excluded_transactions", 0),
-                "internal_pairs_cancelled": dup_result.get("internal_pairs_cancelled", 0),
-            })
-        except Exception as e:
-            logger.error("Duplicate detection step failed: %s", e)
-            step.update({"status": "error", "error": str(e)})
-            overall_errors.append({"step": "duplicate_detection", "error": str(e)})
-        steps.append(step)
-
-        # ── Pre-step: Invoice payment matching ──────────────────────────────
-        step = {
-            "step": "invoice_matching",
-            "title": "Match Invoices to Payments",
-            "status": "running",
-        }
-        try:
-            inv_result = await reconciliation_service.reconcile_invoice_payments(entity_id)
-            step.update({
-                "status": "completed",
-                "invoices_checked": inv_result.get("invoices_checked", 0),
-                "invoices_matched": inv_result.get("invoices_matched", 0),
-            })
-        except Exception as e:
-            logger.error("Invoice matching step failed: %s", e)
-            step.update({"status": "error", "error": str(e)})
-            overall_errors.append({"step": "invoice_matching", "error": str(e)})
-        steps.append(step)
 
         # ── Scope: payments — accrual journals ──────────────────────────────
         if run_all or scope == "payments":
@@ -1595,35 +2228,6 @@ class JournalService:
                 overall_errors.append({"step": "journal_expenses", "error": str(e)})
             steps.append(step)
 
-        # ── Scope: invoices — purchase / sale / payment journals ────────────
-        if run_all or scope == "invoices":
-            step = {
-                "step": "journal_invoices",
-                "title": "Journal Invoices",
-                "status": "running",
-            }
-            try:
-                inv_j_result = await self.auto_journal_invoices(entity_id)
-                step.update({
-                    "status": "completed",
-                    "invoices_processed": inv_j_result.get("invoices_processed", 0),
-                    "created": inv_j_result.get("created", 0),
-                    "skipped": inv_j_result.get("skipped", 0),
-                    "errors": inv_j_result.get("errors", []),
-                })
-                if inv_j_result.get("errors"):
-                    for err in inv_j_result["errors"]:
-                        overall_errors.append({
-                            "step": "journal_invoices",
-                            "source_id": err.get("invoice_id"),
-                            "error": err.get("error"),
-                        })
-            except Exception as e:
-                logger.error("Journal invoices step failed: %s", e)
-                step.update({"status": "error", "error": str(e)})
-                overall_errors.append({"step": "journal_invoices", "error": str(e)})
-            steps.append(step)
-
         # ── Summary ─────────────────────────────────────────────────────────
         total_created = sum(s.get("created", 0) for s in steps if s.get("created"))
         total_skipped = sum(s.get("skipped", 0) for s in steps if s.get("skipped"))
@@ -1654,69 +2258,77 @@ class JournalService:
         entity_id: UUID,
         journal_id: UUID,
     ) -> Dict[str, Any]:
-        """Reverse a posted journal by creating a counter-journal.
+        """Reverse a posted journal by voiding it (status -> 'reversed').
 
-        The original journal is marked as 'reversed' and linked to the reversal.
+        In this system 'reversed' is a SOFT VOID: every balance consumer filters
+        on status = 'posted' (see reports.server.ts's balance sheet and P&L
+        queries), so a reversed journal contributes nothing to any balance.
+
+        This is why no counter-journal is created. Posting a balanced contra
+        entry AND marking the original 'reversed' would remove the amount twice
+        — the original drops out of the posted-only balance while the contra is
+        still counted, swinging the account by -X instead of to 0. That is a
+        silent, money-corrupting bug, and it is the reason this function was
+        rewritten; the reclassification flow in api/routes/accounting.py calls
+        it whenever a transaction is excluded or its account code changes.
+
+        The alternative convention (keep the contra, leave the original
+        'posted') is also arithmetically sound, but it would break callers that
+        use `.neq("status", "reversed")` to decide whether a live journal still
+        exists for a transaction.
 
         Args:
-            entity_id: The entity
+            entity_id: The entity (validated against the journal)
             journal_id: The journal to reverse
 
         Returns:
-            The reversal journal record
+            Dict describing the void: the journal id, its new status, and the
+            net amount removed from the books.
         """
         original = await self._fetch_journal(journal_id)
         if not original:
             raise JournalError(f"Journal not found: {journal_id}")
+
+        if str(original.get("entity_id")) != str(entity_id):
+            raise JournalError(
+                f"Journal {journal_id} does not belong to entity {entity_id}"
+            )
 
         if original.get("status") != "posted":
             raise JournalError(
                 f"Cannot reverse journal with status '{original.get('status')}'"
             )
 
-        # Check not already reversed
-        if original.get("reversed_by_id"):
-            raise JournalError(f"Journal already reversed by {original['reversed_by_id']}")
-
-        # Get original line items
         original_lines = await self._fetch_journal_line_items(journal_id)
-
-        # Build reversed line items (swap debits and credits)
-        reversed_lines = [
-            {
-                "account_id": li["account_id"],
-                "debit": li.get("credit", 0),
-                "credit": li.get("debit", 0),
-                "currency": li.get("currency"),
-                "description": f"Reversal: {li.get('description', '')}",
-            }
-            for li in original_lines
-        ]
-
-        # Create reversal journal
-        reversal = await self._create_journal(
-            entity_id=entity_id,
-            journal_type="reversal",
-            journal_date=datetime.now(timezone.utc).isoformat(),
-            description=f"Reversal of journal {journal_id}",
-            source_type=original.get("source_type"),
-            source_id=UUID(original["source_id"]) if original.get("source_id") else None,
-            status="posted",
-            line_items=reversed_lines,
+        reversed_total = sum(
+            Decimal(str(li.get("debit") or 0)) for li in original_lines
         )
 
-        # Mark original as reversed
         await asyncio.to_thread(
             lambda: self.client.table("journals")
-            .update({
-                "status": "reversed",
-                "reversed_by_id": reversal["id"],
-            })
+            .update({"status": "reversed"})
             .eq("id", str(journal_id))
+            .eq("status", "posted")  # guard against a concurrent reversal
             .execute()
         )
 
-        return reversal
+        logger.info(
+            "Voided journal %s (%s lines, %s removed from posted balances)",
+            journal_id,
+            len(original_lines),
+            reversed_total,
+        )
+
+        return {
+            "id": str(journal_id),
+            "status": "reversed",
+            "journal_type": original.get("journal_type"),
+            "source_type": original.get("source_type"),
+            "source_id": original.get("source_id"),
+            "line_count": len(original_lines),
+            "amount_removed": float(reversed_total),
+            "method": "soft_void",
+        }
 
     # =========================================================================
     # JOURNAL QUERIES
@@ -1832,6 +2444,15 @@ class JournalService:
                         "payment_id": str(pid),
                         "error": str(e),
                     })
+            except Exception as e:
+                logger.error(
+                    "Unexpected error journalizing payment %s: %s",
+                    pid, e, exc_info=True,
+                )
+                results["errors"].append({
+                    "payment_id": str(pid),
+                    "error": f"Unexpected: {e}",
+                })
 
         return {
             "entity_id": str(entity_id),
@@ -1866,93 +2487,19 @@ class JournalService:
                         "transaction_id": str(tid),
                         "error": str(e),
                     })
+            except Exception as e:
+                logger.error(
+                    "Unexpected error journalizing settlement %s: %s",
+                    tid, e, exc_info=True,
+                )
+                results["errors"].append({
+                    "transaction_id": str(tid),
+                    "error": f"Unexpected: {e}",
+                })
 
         return {
             "entity_id": str(entity_id),
             "settlements_processed": len(transaction_ids),
-            **results,
-        }
-
-    async def auto_journal_invoices(
-        self,
-        entity_id: UUID,
-        invoice_ids: Optional[List[UUID]] = None,
-    ) -> Dict[str, Any]:
-        """Batch-create purchase / sale / payment journals for invoices.
-
-        For each unjournaled invoice:
-        - PURCHASE invoices → create_purchase_journal (always credits AP)
-        - SALE invoices → create_sale_journal
-        - If a matching financial transaction exists → auto-set invoice to PAID
-          and create_invoice_payment_journal to clear the AP
-        """
-        if invoice_ids is None:
-            invoice_ids = await self._find_unjournaled_invoices(entity_id)
-
-        results = {"created": 0, "skipped": 0, "errors": []}
-
-        for i, inv_id in enumerate(invoice_ids):
-            if i > 0 and i % self.BATCH_SIZE == 0:
-                self._refresh_connection()
-                await asyncio.sleep(0.5)
-
-            try:
-                invoice = await self._fetch_invoice(inv_id)
-                if not invoice:
-                    results["errors"].append({
-                        "invoice_id": str(inv_id),
-                        "error": "Invoice not found",
-                    })
-                    continue
-
-                inv_type = invoice.get("invoice_type", "PURCHASE")
-                inv_number = invoice.get("invoice_number", "")
-                inv_status = invoice.get("status", "OPEN")
-
-                # Create the accrual-side journal (purchase or sale)
-                if inv_type == "SALE":
-                    await self.create_sale_journal(entity_id, inv_id)
-                else:
-                    await self.create_purchase_journal(entity_id, inv_id)
-                results["created"] += 1
-
-                # Auto-pay: if a matching transaction exists, mark as PAID + clear AP
-                if inv_status not in ("PAID", "paid"):
-                    txn_id = await self._find_transaction_for_invoice(entity_id, inv_number)
-                    if txn_id:
-                        # Mark invoice as PAID in the database
-                        await asyncio.to_thread(
-                            lambda: self.client.table("invoices")
-                            .update({"status": "PAID", "updated_at": datetime.now(timezone.utc).isoformat()})
-                            .eq("id", str(inv_id))
-                            .execute()
-                        )
-                        inv_status = "PAID"
-                        logger.info(
-                            "Auto-matched invoice %s to transaction %s — set to PAID",
-                            inv_number, txn_id,
-                        )
-
-                # If paid, also create the payment journal (clears AP)
-                if inv_status in ("PAID", "paid"):
-                    try:
-                        await self.create_invoice_payment_journal(entity_id, inv_id)
-                        results["created"] += 1
-                    except JournalError:
-                        pass  # Already exists or other issue
-
-            except JournalError as e:
-                if "already" in str(e).lower() or "existing" in str(e).lower():
-                    results["skipped"] += 1
-                else:
-                    results["errors"].append({
-                        "invoice_id": str(inv_id),
-                        "error": str(e),
-                    })
-
-        return {
-            "entity_id": str(entity_id),
-            "invoices_processed": len(invoice_ids),
             **results,
         }
 
@@ -2018,6 +2565,14 @@ class JournalService:
                         err = {"transaction_id": txn["id"], "error": str(e)}
                         cat_results["errors"].append(err)
                         results["errors"].append(err)
+                except Exception as e:
+                    logger.error(
+                        "Unexpected error journalizing inbound transaction %s: %s",
+                        txn["id"], e, exc_info=True,
+                    )
+                    err = {"transaction_id": txn["id"], "error": f"Unexpected: {e}"}
+                    cat_results["errors"].append(err)
+                    results["errors"].append(err)
 
             results["by_type"][category] = cat_results
 
@@ -2085,6 +2640,16 @@ class JournalService:
             await asyncio.to_thread(
                 lambda: self.client.table("journal_line_items")
                 .insert(items_data)
+                .execute()
+            )
+
+        # Stamp journalised_at on the source financial transaction so we can
+        # reliably identify which transactions have been accounted for.
+        if source_type == "financial_transaction" and source_id:
+            await asyncio.to_thread(
+                lambda: self.client.table("financial_transactions")
+                .update({"journalised_at": datetime.now(timezone.utc).isoformat()})
+                .eq("id", str(source_id))
                 .execute()
             )
 
@@ -2259,6 +2824,49 @@ class JournalService:
             return True
         return False
 
+    # ── Wholesale / B2B payment detection ─────────────────────────────────────
+
+    _WHOLESALE_PATTERNS = [
+        "one yard", "inv ", "invoice", "wholesale", "b2b", "bulk order",
+    ]
+    _WHOLESALE_REF_PATTERN = re.compile(r"\bINV\s+\d", re.IGNORECASE)
+
+    def _is_wholesale_payment(
+        self,
+        description: str,
+        counterparty: str,
+        txn: Dict[str, Any],
+    ) -> bool:
+        """Return True if the transaction looks like a B2B/wholesale payment receipt."""
+        combined = f"{description} {counterparty}".lower()
+        for pat in self._WHOLESALE_PATTERNS:
+            if pat in combined:
+                return True
+        if self._WHOLESALE_REF_PATTERN.search(description):
+            return True
+        return (txn.get("metadata") or {}).get("income_type") == "wholesale"
+
+    # ── Brand collaboration / content income detection ─────────────────────────
+
+    _BRAND_COLLAB_PATTERNS = [
+        "video", "photo", "content", "film", "shoot", "editing", "dop",
+        "photographer", "videographer", "unboxing", "digital cover", "retouch",
+        "hypebeast", "campaign shoot", "brand shoot", "creative direction",
+    ]
+
+    def _is_brand_collaboration(
+        self,
+        description: str,
+        counterparty: str,
+        txn: Dict[str, Any],
+    ) -> bool:
+        """Return True if the transaction is brand collaboration / content income received."""
+        combined = f"{description} {counterparty}".lower()
+        for pat in self._BRAND_COLLAB_PATTERNS:
+            if pat in combined:
+                return True
+        return (txn.get("metadata") or {}).get("income_type") == "brand_collaboration"
+
     # ── PayPal passthrough pair detection ─────────────────────────────────
 
     async def _detect_paypal_passthroughs(self, entity_id: UUID) -> Dict[str, Any]:
@@ -2373,68 +2981,110 @@ class JournalService:
         }
 
     async def _find_unjournaled_payments(self, entity_id: UUID) -> List[UUID]:
-        """Find captured payments without accrual journals."""
-        def _query():
-            payments = self.client.table("payments") \
-                .select("id") \
-                .eq("entity_id", str(entity_id)) \
-                .eq("status", "captured") \
-                .execute()
+        """Find captured payments without accrual journals.
 
-            if not payments.data:
+        Uses pagination to bypass Supabase's 1000-record default limit.
+        """
+        def _query():
+            # Paginate payments to get all records beyond the 1000-row default limit
+            all_payment_ids: List[str] = []
+            page_size = 1000
+            offset = 0
+            while True:
+                result = self.client.table("payments") \
+                    .select("id") \
+                    .eq("entity_id", str(entity_id)) \
+                    .eq("status", "captured") \
+                    .range(offset, offset + page_size - 1) \
+                    .execute()
+                if not result.data:
+                    break
+                all_payment_ids.extend(row["id"] for row in result.data)
+                if len(result.data) < page_size:
+                    break
+                offset += page_size
+
+            if not all_payment_ids:
                 return []
 
-            payment_ids = [row["id"] for row in payments.data]
+            # Paginate journals too (may exceed 1000 as journal count grows)
+            accrued_ids: set = set()
+            offset = 0
+            while True:
+                result = self.client.table("journals") \
+                    .select("source_id") \
+                    .eq("entity_id", str(entity_id)) \
+                    .eq("source_type", "payment") \
+                    .eq("journal_type", "accrual") \
+                    .neq("status", "reversed") \
+                    .range(offset, offset + page_size - 1) \
+                    .execute()
+                if not result.data:
+                    break
+                accrued_ids.update(row["source_id"] for row in result.data)
+                if len(result.data) < page_size:
+                    break
+                offset += page_size
 
-            journals = self.client.table("journals") \
-                .select("source_id") \
-                .eq("entity_id", str(entity_id)) \
-                .eq("source_type", "payment") \
-                .eq("journal_type", "accrual") \
-                .neq("status", "reversed") \
-                .execute()
-
-            accrued_ids = {row["source_id"] for row in (journals.data or [])}
-            return [UUID(pid) for pid in payment_ids if pid not in accrued_ids]
+            return [UUID(pid) for pid in all_payment_ids if pid not in accrued_ids]
 
         return await asyncio.to_thread(_query)
 
     async def _find_unjournaled_settlements(self, entity_id: UUID) -> List[UUID]:
-        """Find inbound Stripe/PayPal transfers without settlement journals."""
+        """Find inbound gateway transfers (Stripe/PayPal/Shopify/Squarespace) without settlement journals.
+
+        Uses pagination to bypass Supabase's 1000-record default limit.
+        """
         def _query():
-            txns = self.client.table("financial_transactions") \
-                .select("id, description, metadata") \
-                .eq("entity_id", str(entity_id)) \
-                .eq("source", "revolut") \
-                .eq("direction", "in") \
-                .eq("transaction_type", "transfer") \
-                .execute()
+            page_size = 1000
 
-            if not txns.data:
-                return []
-
-            # Filter to Stripe/PayPal payouts, exclude declined
-            eligible = []
-            for t in txns.data:
-                desc = (t.get("description") or "").lower()
-                meta = t.get("metadata") or {}
-                if meta.get("state") == "declined":
-                    continue
-                if "stripe" in desc or "paypal" in desc:
-                    eligible.append(t["id"])
+            # Paginate financial_transactions to get all records
+            eligible: List[str] = []
+            offset = 0
+            while True:
+                result = self.client.table("financial_transactions") \
+                    .select("id, description, metadata") \
+                    .eq("entity_id", str(entity_id)) \
+                    .eq("source", "revolut") \
+                    .eq("direction", "in") \
+                    .eq("transaction_type", "transfer") \
+                    .range(offset, offset + page_size - 1) \
+                    .execute()
+                if not result.data:
+                    break
+                for t in result.data:
+                    desc = (t.get("description") or "").lower()
+                    meta = t.get("metadata") or {}
+                    if meta.get("state") == "declined":
+                        continue
+                    if "stripe" in desc or "paypal" in desc or "shopify" in desc or "squarespace" in desc:
+                        eligible.append(t["id"])
+                if len(result.data) < page_size:
+                    break
+                offset += page_size
 
             if not eligible:
                 return []
 
-            journals = self.client.table("journals") \
-                .select("source_id") \
-                .eq("entity_id", str(entity_id)) \
-                .eq("source_type", "financial_transaction") \
-                .eq("journal_type", "settlement") \
-                .neq("status", "reversed") \
-                .execute()
+            # Paginate journals to get all settled IDs
+            settled_ids: set = set()
+            offset = 0
+            while True:
+                result = self.client.table("journals") \
+                    .select("source_id") \
+                    .eq("entity_id", str(entity_id)) \
+                    .eq("source_type", "financial_transaction") \
+                    .eq("journal_type", "settlement") \
+                    .neq("status", "reversed") \
+                    .range(offset, offset + page_size - 1) \
+                    .execute()
+                if not result.data:
+                    break
+                settled_ids.update(row["source_id"] for row in result.data)
+                if len(result.data) < page_size:
+                    break
+                offset += page_size
 
-            settled_ids = {row["source_id"] for row in (journals.data or [])}
             return [UUID(tid) for tid in eligible if tid not in settled_ids]
 
         return await asyncio.to_thread(_query)
@@ -2575,70 +3225,6 @@ class JournalService:
             classified["merchant"].append(txn)
 
         return classified
-
-    async def _find_unjournaled_invoices(self, entity_id: UUID) -> List[UUID]:
-        """Find invoices without existing journal entries.
-
-        Excludes invoices that have been journaled either directly (source_type=invoice)
-        or via a matched financial transaction (source_type=financial_transaction,
-        journal_type=purchase).
-        """
-        def _query():
-            invoices = self.client.table("invoices") \
-                .select("id, invoice_number") \
-                .eq("entity_id", str(entity_id)) \
-                .execute()
-
-            if not invoices.data:
-                return []
-
-            invoice_number_by_id = {
-                row["id"]: row.get("invoice_number", "")
-                for row in invoices.data
-            }
-
-            # Invoices already journaled directly
-            inv_journals = self.client.table("journals") \
-                .select("source_id") \
-                .eq("entity_id", str(entity_id)) \
-                .eq("source_type", "invoice") \
-                .neq("status", "reversed") \
-                .execute()
-            journaled_by_invoice = {row["source_id"] for row in (inv_journals.data or [])}
-
-            # Invoices already journaled via a matched financial transaction
-            txn_journals = self.client.table("journals") \
-                .select("source_id") \
-                .eq("entity_id", str(entity_id)) \
-                .eq("source_type", "financial_transaction") \
-                .eq("journal_type", "purchase") \
-                .neq("status", "reversed") \
-                .execute()
-            journaled_txn_ids = {row["source_id"] for row in (txn_journals.data or [])}
-
-            invoice_numbers_covered: set = set()
-            if journaled_txn_ids:
-                txn_rows = self.client.table("financial_transactions") \
-                    .select("id, metadata") \
-                    .in_("id", list(journaled_txn_ids)) \
-                    .execute()
-                invoice_numbers_covered = {
-                    str((row.get("metadata") or {}).get("invoice_id", "")).strip()
-                    for row in (txn_rows.data or [])
-                }
-                invoice_numbers_covered.discard("")
-
-            unjournaled = []
-            for iid, inv_num in invoice_number_by_id.items():
-                if iid in journaled_by_invoice:
-                    continue
-                if inv_num and inv_num in invoice_numbers_covered:
-                    continue
-                unjournaled.append(UUID(iid))
-
-            return unjournaled
-
-        return await asyncio.to_thread(_query)
 
     async def _find_unjournaled_expenses(self, entity_id: UUID) -> List[UUID]:
         """Find OUT-direction transactions eligible for expense journals.

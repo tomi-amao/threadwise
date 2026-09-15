@@ -587,7 +587,7 @@ class InvoiceService:
         mime_type: str,
         file_name: str = "invoice",
         file_path: str = "",
-        create_journal: bool = True,
+        create_journal: bool = False,
         invoice_type_override: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Full invoice ingestion pipeline.
@@ -683,7 +683,13 @@ class InvoiceService:
         # stock records, while non-product items (R&D, marketing, giveaways)
         # remain pure expenses with no inventory footprint.
 
-        # Step 5: Create journal
+        # Step 5: Optionally journal immediately.
+        #
+        # Off by default. Ingest creates the invoice as DRAFT, and a DRAFT is a
+        # document rather than an obligation — posting it would capitalise stock
+        # and recognise a payable for something not yet reviewed, before anyone
+        # has confirmed the extracted line items or their GL coding. The journal
+        # belongs at finalisation instead; see set_invoice_status().
         journal = None
         journal_error = None
         if create_journal:
@@ -868,7 +874,12 @@ class InvoiceService:
     async def update_invoice_status(
         self, invoice_id: UUID, status: str
     ) -> Optional[Dict[str, Any]]:
-        """Update invoice status."""
+        """Update invoice status without touching the ledger.
+
+        Low-level setter. Prefer :meth:`set_invoice_status`, which posts the
+        journals a status change implies — using this directly moves an invoice
+        through its lifecycle with no accounting consequence.
+        """
         result = await asyncio.to_thread(
             lambda: self.client.table("invoices")
             .update({"status": status})
@@ -876,6 +887,134 @@ class InvoiceService:
             .execute()
         )
         return extract_row(result)
+
+    # Statuses at which an invoice has become a real obligation: the goods are
+    # ours and the supplier is owed. CANCELLED/VOID never post; DRAFT is only a
+    # document. PARTIALLY_PAID and OVERDUE imply the invoice was already opened,
+    # so they finalise too in case the invoice jumped straight there.
+    _POSTS_PURCHASE = frozenset({"OPEN", "OVERDUE", "PARTIALLY_PAID", "PAID"})
+    _POSTS_PAYMENT = frozenset({"PAID"})
+
+    # Purchase journals are dated at the invoice's own invoice_date, not at the
+    # moment of finalisation. 2026 was restated against a fixed 31 Dec 2025
+    # opening inventory balance, so finalising a 2024-dated invoice would post a
+    # 2024 journal, move that opening balance, and silently break the
+    # restatement's roll-forward. The 34 legacy DRAFT invoices dated 2023-2025
+    # were deliberately left un-journaled: their cost was already expensed as
+    # incurred at the time, so capitalising them now would double-count it.
+    #
+    # Crossing this line has to be a deliberate decision, not the side effect of
+    # someone clicking a status dropdown.
+    LEDGER_PERIOD_CUTOFF = "2026-01-01"
+
+    def _assert_postable_period(
+        self, invoice: Dict[str, Any], allow_prior_period: bool
+    ) -> None:
+        """Refuse to post a journal dated before the restated-period cutoff."""
+        if allow_prior_period:
+            return
+
+        invoice_date = invoice.get("invoice_date")
+        if not invoice_date or str(invoice_date)[:10] >= self.LEDGER_PERIOD_CUTOFF:
+            return
+
+        raise JournalError(
+            f"Invoice {invoice.get('invoice_number') or invoice.get('id')} is dated "
+            f"{str(invoice_date)[:10]}, before the {self.LEDGER_PERIOD_CUTOFF} "
+            "accounting cutoff. Finalising it would post a prior-year journal and "
+            "change the 31 Dec 2025 opening inventory balance that the 2026 "
+            "restatement depends on. Its cost was already expensed when it was "
+            "paid, so capitalising it now would "
+            "double-count. Mark it CANCELLED or VOID to clear it from the list, or pass "
+            "allow_prior_period=true if you intend to restate prior years."
+        )
+
+    async def set_invoice_status(
+        self,
+        entity_id: UUID,
+        invoice_id: UUID,
+        status: str,
+        allow_prior_period: bool = False,
+    ) -> Dict[str, Any]:
+        """Move an invoice through its lifecycle, posting journals as it goes.
+
+        A DRAFT invoice has no accounting consequence — it is a document, not an
+        obligation, which is why nothing is posted at ingest. Two transitions do
+        have consequences:
+
+        Leaving DRAFT capitalises the purchase. Each line item is debited to its
+        own GL account (stock lines to 1033/1034/1035, freight and fees to their
+        expense accounts) and Accounts Payable is credited for the gross. The
+        goods land on the balance sheet as an asset rather than hitting the P&L,
+        so their cost reaches profit only when they sell.
+
+        Being marked PAID clears that payable against cash.
+
+        Both journals are idempotent — ``create_purchase_journal`` and
+        ``create_invoice_payment_journal`` return any existing journal rather
+        than posting a second one — so replaying a transition is safe.
+
+        The journals are written *before* the status moves. If posting fails the
+        invoice stays where it was, rather than advancing with nothing in the
+        ledger behind it, which is the failure mode that left 35 invoices with
+        no accounting entries at all.
+
+        Invoices dated before :attr:`LEDGER_PERIOD_CUTOFF` are refused unless
+        ``allow_prior_period`` is set — see :meth:`_assert_postable_period`.
+        Transitions to CANCELLED or VOID post nothing and are never blocked, so
+        legacy drafts can always be cleared away.
+
+        Returns the updated invoice plus whichever journals were posted.
+        """
+        invoice = await self.get_invoice(invoice_id)
+        if not invoice:
+            raise ValueError(f"Invoice not found: {invoice_id}")
+
+        current = (invoice.get("status") or "").upper()
+        target = status.upper()
+        invoice_type = (invoice.get("invoice_type") or "PURCHASE").upper()
+
+        purchase_journal: Optional[Dict[str, Any]] = None
+        payment_journal: Optional[Dict[str, Any]] = None
+        warnings: List[str] = []
+
+        if target in self._POSTS_PURCHASE and current not in self._POSTS_PURCHASE:
+            self._assert_postable_period(invoice, allow_prior_period)
+            if invoice_type == "SALE":
+                purchase_journal = await journal_service.create_sale_journal(
+                    entity_id, invoice_id
+                )
+            else:
+                purchase_journal = await journal_service.create_purchase_journal(
+                    entity_id, invoice_id
+                )
+            logger.info(
+                "Invoice %s finalised (%s → %s): journal %s",
+                invoice_id, current, target, (purchase_journal or {}).get("id"),
+            )
+
+        if target in self._POSTS_PAYMENT:
+            try:
+                payment_journal = await journal_service.create_invoice_payment_journal(
+                    entity_id, invoice_id
+                )
+            except JournalError as exc:
+                # The payable is recognised even when we cannot yet identify the
+                # cash side (no matched bank transaction). Surface it instead of
+                # failing the transition — the AP balance is still correct.
+                warnings.append(f"Payment journal not posted: {exc}")
+                logger.warning("Invoice %s marked PAID but no payment journal: %s",
+                               invoice_id, exc)
+
+        updated = await self.update_invoice_status(invoice_id, target)
+
+        return {
+            "invoice": updated,
+            "previous_status": current,
+            "purchase_journal": purchase_journal,
+            "payment_journal": payment_journal,
+            "warnings": warnings,
+        }
 
     async def delete_invoice(self, invoice_id: UUID) -> bool:
         """Delete invoice and its line items."""
@@ -1127,6 +1266,10 @@ class InvoiceService:
                 if override_sku:
                     patch["sku"] = override_sku
                     patch["variant_external_id"] = override_sku
+                if row_overrides.get("asset_account_id"):
+                    patch["asset_account_id"] = row_overrides["asset_account_id"]
+                if row_overrides.get("cogs_account_id"):
+                    patch["cogs_account_id"] = row_overrides["cogs_account_id"]
 
                 await asyncio.to_thread(
                     lambda iid=inventory_item_id, p=patch: self.client.table(
@@ -1147,6 +1290,288 @@ class InvoiceService:
                 logger.warning(
                     "Failed to link inventory_item for line %s: %s", line_item_id, exc
                 )
+
+    async def link_line_items_to_existing_products(
+        self,
+        entity_id: UUID,
+        invoice_id: UUID,
+        links: List[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        """Backfill unit costs on existing inventory items from invoice line items.
+
+        For each {line_item_id, product_id} pair:
+          1. Reads unit_cost from the invoice line item
+          2. Finds all inventory_items linked to that product
+          3. Updates their unit_cost
+          4. Creates a PURCHASE movement per inventory item for COGS tracking
+
+        This is the correct path when the product catalog already exists
+        (e.g. synced from Squarespace) and the user just wants to assign costs
+        from a purchase invoice.
+        """
+        if not links:
+            return {"updated_items": 0, "linked_products": 0}
+
+        line_item_ids = [lnk["line_item_id"] for lnk in links if lnk.get("line_item_id")]
+        if not line_item_ids:
+            return {"updated_items": 0, "linked_products": 0}
+
+        # Fetch all referenced line items in one round-trip
+        li_result = await asyncio.to_thread(
+            lambda: self.client.table("invoice_line_items")
+            .select("id, unit_cost, quantity, description, sku")
+            .eq("invoice_id", str(invoice_id))
+            .in_("id", line_item_ids)
+            .execute()
+        )
+        line_items_by_id: Dict[str, Any] = {
+            li["id"]: li for li in (li_result.data or [])
+        }
+
+        updated_items = 0
+        linked_products = 0
+
+        for lnk in links:
+            line_item_id = lnk.get("line_item_id")
+            product_id = lnk.get("product_id")
+            if not line_item_id or not product_id:
+                continue
+
+            li = line_items_by_id.get(line_item_id)
+            if not li or li.get("unit_cost") is None:
+                logger.warning(
+                    "Skipping link: line item %s not found or has no unit_cost", line_item_id
+                )
+                continue
+
+            unit_cost = float(li["unit_cost"])
+            qty = float(li.get("quantity") or 0)
+            asset_account_id = lnk.get("asset_account_id") or None
+            cogs_account_id = lnk.get("cogs_account_id") or None
+
+            try:
+                # Fetch all inventory_items for this product
+                inv_result = await asyncio.to_thread(
+                    lambda pid=product_id: self.client.table("inventory_items")
+                    .select("id, variant_external_id, sku")
+                    .eq("product_id", pid)
+                    .eq("entity_id", str(entity_id))
+                    .execute()
+                )
+                inventory_items = inv_result.data or []
+
+                # No inventory_items yet — bootstrap from the product's variants
+                if not inventory_items:
+                    prod_result = await asyncio.to_thread(
+                        lambda pid=product_id: self.client.table("products")
+                        .select("id, name, provider, variants")
+                        .eq("id", pid)
+                        .eq("entity_id", str(entity_id))
+                        .limit(1)
+                        .execute()
+                    )
+                    product_row = prod_result.data[0] if prod_result.data else None
+                    if not product_row:
+                        logger.warning(
+                            "Product %s not found for entity %s — skipping link",
+                            product_id,
+                            entity_id,
+                        )
+                        continue
+
+                    raw_variants = product_row.get("variants") or []
+                    # Fall back to a single generic entry if product has no variants
+                    if not raw_variants:
+                        raw_variants = [
+                            {"external_id": product_id, "sku": None, "attributes": {}}
+                        ]
+
+                    provider = product_row.get("provider") or "invoice"
+                    to_insert = [
+                        {
+                            "entity_id": str(entity_id),
+                            "product_id": product_id,
+                            "variant_external_id": (v.get("external_id") or product_id),
+                            "sku": v.get("sku") or None,
+                            "description": li.get("description"),
+                            "unit_cost": unit_cost,
+                            "is_unlimited": False,
+                            "provider": provider,
+                            **({"asset_account_id": asset_account_id} if asset_account_id else {}),
+                            **({"cogs_account_id": cogs_account_id} if cogs_account_id else {}),
+                        }
+                        for v in raw_variants
+                    ]
+                    upsert_result = await asyncio.to_thread(
+                        lambda rows=to_insert: self.client.table("inventory_items")
+                        .upsert(rows, on_conflict="entity_id,provider,variant_external_id")
+                        .execute()
+                    )
+                    inventory_items = upsert_result.data or []
+                    if not inventory_items:
+                        logger.warning(
+                            "Failed to create inventory_items for product %s — skipping",
+                            product_id,
+                        )
+                        continue
+                    logger.info(
+                        "Bootstrapped %d inventory_item(s) for product %s",
+                        len(inventory_items),
+                        product_id,
+                    )
+
+                # Bulk-update unit_cost (and optionally account IDs) for all variants
+                inv_ids = [item["id"] for item in inventory_items]
+                update_patch: Dict[str, Any] = {"unit_cost": unit_cost}
+                if asset_account_id:
+                    update_patch["asset_account_id"] = asset_account_id
+                if cogs_account_id:
+                    update_patch["cogs_account_id"] = cogs_account_id
+                await asyncio.to_thread(
+                    lambda ids=inv_ids, patch=update_patch: self.client.table("inventory_items")
+                    .update(patch)
+                    .in_("id", ids)
+                    .eq("entity_id", str(entity_id))
+                    .execute()
+                )
+                updated_items += len(inv_ids)
+
+                # Record a PURCHASE movement for each inventory item.
+                # Use the same column names as persistence_service (quantity, not
+                # quantity_delta; entity_id is not a column on inventory_movements).
+                # Idempotent: skip if a PURCHASE movement already exists for this
+                # line_item_id + inventory_item combination.
+                for inv_item in inventory_items:
+                    try:
+                        existing_mv = await asyncio.to_thread(
+                            lambda iid=inv_item["id"]: self.client.table("inventory_movements")
+                            .select("id")
+                            .eq("reference_id", line_item_id)
+                            .eq("inventory_item_id", iid)
+                            .eq("transaction_type", "PURCHASE")
+                            .limit(1)
+                            .execute()
+                        )
+                        if existing_mv.data:
+                            continue  # Already recorded — skip to stay idempotent
+
+                        movement = {
+                            "inventory_item_id": inv_item["id"],
+                            "quantity": qty,
+                            "unit_cost": unit_cost,
+                            "transaction_type": "PURCHASE",
+                            "reference_id": line_item_id,
+                            "reference_table": "invoice_line_items",
+                            "notes": f"Cost backfilled from invoice {invoice_id}",
+                        }
+                        await asyncio.to_thread(
+                            lambda m=movement: self.client.table("inventory_movements")
+                            .insert(m)
+                            .execute()
+                        )
+                    except Exception as exc:
+                        logger.warning(
+                            "Could not record purchase movement for inv_item %s: %s",
+                            inv_item["id"],
+                            exc,
+                        )
+
+                linked_products += 1
+                logger.info(
+                    "Linked invoice line %s → product %s: updated %d item(s) @ £%.2f",
+                    line_item_id,
+                    product_id,
+                    len(inv_ids),
+                    unit_cost,
+                )
+
+            except Exception as exc:
+                logger.warning(
+                    "Failed to link line item %s to product %s: %s",
+                    line_item_id,
+                    product_id,
+                    exc,
+                )
+
+        return {"updated_items": updated_items, "linked_products": linked_products}
+
+    async def create_inventory_movements_only(
+        self,
+        entity_id: UUID,
+        invoice_id: UUID,
+        line_item_ids: List[str],
+        overrides: Optional[Dict[str, Dict[str, str]]] = None,
+    ) -> Dict[str, Any]:
+        """Create inventory items + PURCHASE movements without creating product catalog entries.
+
+        Used when the user selects Skip (expense) on a line item but still wants
+        to track the physical stock movement (e.g. consumables, raw materials).
+
+        ``overrides`` is keyed by line_item_id and accepts:
+          - ``sku``              — override the SKU used to match/create the inventory_item
+          - ``asset_account_id`` — set the GL asset account on the inventory_item
+          - ``cogs_account_id``  — set the GL COGS account on the inventory_item
+        """
+        if not line_item_ids:
+            return {"recorded": 0}
+
+        result = await asyncio.to_thread(
+            lambda: self.client.table("invoice_line_items")
+            .select("*")
+            .eq("invoice_id", str(invoice_id))
+            .in_("id", line_item_ids)
+            .execute()
+        )
+        items = result.data or []
+        if not items:
+            return {"recorded": 0}
+
+        # Apply SKU overrides before passing to _record_purchase_movements
+        for item in items:
+            item_overrides = (overrides or {}).get(item["id"], {})
+            if item_overrides.get("sku"):
+                item["sku"] = item_overrides["sku"]
+
+        movements = await self._record_purchase_movements(entity_id, items, category_map={})
+
+        # Apply asset/cogs account overrides to the inventory items created above
+        for item in items:
+            item_overrides = (overrides or {}).get(item["id"], {})
+            asset_account_id = item_overrides.get("asset_account_id")
+            cogs_account_id = item_overrides.get("cogs_account_id")
+            if not asset_account_id and not cogs_account_id:
+                continue
+            try:
+                mv_result = await asyncio.to_thread(
+                    lambda lid=item["id"]: self.client.table("inventory_movements")
+                    .select("inventory_item_id")
+                    .eq("reference_id", lid)
+                    .eq("transaction_type", "PURCHASE")
+                    .limit(1)
+                    .execute()
+                )
+                if not mv_result.data:
+                    continue
+                inv_item_id = mv_result.data[0]["inventory_item_id"]
+                patch: Dict[str, Any] = {}
+                if asset_account_id:
+                    patch["asset_account_id"] = asset_account_id
+                if cogs_account_id:
+                    patch["cogs_account_id"] = cogs_account_id
+                await asyncio.to_thread(
+                    lambda iid=inv_item_id, p=patch: self.client.table("inventory_items")
+                    .update(p)
+                    .eq("id", iid)
+                    .eq("entity_id", str(entity_id))
+                    .execute()
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Failed to apply account overrides for line %s: %s", item["id"], exc
+                )
+
+        return {"recorded": len(movements)}
+
 
 # Global service instance
 invoice_service = InvoiceService()

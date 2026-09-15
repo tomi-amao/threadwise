@@ -66,13 +66,24 @@ REVENUE_MARKETPLACE = "4040"        # Sales — Marketplace
 SALES_RETURNS = "4110"              # Sales Returns & Allowances
 DISCOUNTS = "4120"                  # Discounts & Promotional Allowances
 
+# ── Inventory (balance sheet) ───────────────────────────────────────────────
+# Stock bought on a supplier invoice is capitalised here rather than expensed,
+# and only reaches the P&L via COGS_FINISHED_GOODS when the item actually sells.
+INVENTORY_FINISHED_GOODS = "1033"   # Inventory — Finished Goods
+INVENTORY_TRIMS = "1034"            # Inventory — Trims & Accessories
+INVENTORY_SAMPLES = "1035"          # Inventory — Samples
+
 # ── COGS ────────────────────────────────────────────────────────────────────
+COGS_FINISHED_GOODS = "5005"        # COGS — Finished Goods Sold (perpetual, per sale)
 COGS_FABRIC = "5010"                # COGS — Fabric & Materials
 COGS_CMT = "5020"                   # COGS — CMT / Manufacturing
 COGS_TRIMS = "5030"                 # COGS — Trims & Accessories
 COGS_PACKAGING = "5040"             # COGS — Labels & Packaging
 COGS_FREIGHT_IN = "5050"            # COGS — Freight Inbound
 COGS_DUTIES = "5060"                # COGS — Import Duties & Customs
+COGS_WRITE_DOWNS = "5070"           # COGS — Inventory Write-Downs
+COGS_COUNT_ADJUSTMENT = "5075"      # COGS — Inventory Count Adjustment (reconciling)
+COGS_SAMPLES = "5080"               # COGS — Sample Costs
 COGS_PRODUCTION_SUPPLIES = "5090"   # COGS — Production Supplies (Amazon/eBay)
 COGS_DEFAULT = "5010"               # Default COGS account
 
@@ -102,6 +113,9 @@ INTEREST_EXPENSE = "8010"           # Interest Expense
 BANK_CHARGES = "8020"               # Bank Charges & Payment Fees
 FX_LOSS = "8030"                    # Foreign Exchange Loss
 MISCELLANEOUS_EXPENSE = "8090"      # Miscellaneous Expense (pending reclassification)
+
+# ── Other Income ──────────────────────────────────────────────────────────────
+BRAND_COLLAB_INCOME = "4230"        # Brand Collaboration & Content Income
 
 # ── Equity ──────────────────────────────────────────────────────────────────
 OWNER_CAPITAL = "3050"              # Owner's Capital Introduced
@@ -189,11 +203,15 @@ _KEYWORD_RULES: List[Tuple[re.Pattern, str]] = [
     (re.compile(r"\b(shipping|freight|courier|postage|parcel)\b", re.I), OUTBOUND_SHIPPING),
 
     # ── SaaS / Software ────────────────────────────────────────────────────
-    (re.compile(r"\b(shopify|squarespace|notion|figma|canva|adobe|slack|zoom|dropbox|github|aws|google\s*workspace|microsoft|openai|anthropic|vercel|netlify|heroku|lightricks)\b", re.I), TECHNOLOGY_SAAS),
+    # openai\w* (not \bopenai\b) so merchant-descriptor variants like
+    # "Openaiopcol Op" still match — a plain \b boundary requires a break
+    # immediately after "openai", which garbled payment descriptors don't have.
+    (re.compile(r"\b(shopify|squarespace|notion|figma|canva|adobe|slack|zoom|dropbox|github|aws|google\s*workspace|microsoft|openai\w*|anthropic|vercel|netlify|heroku|lightricks)\b", re.I), TECHNOLOGY_SAAS),
     (re.compile(r"\b(saas|subscription|software|app\s*store|google\s*play)\b", re.I), TECHNOLOGY_SAAS),
 
     # ── Marketing / Advertising ─────────────────────────────────────────────
-    (re.compile(r"\b(google\s*ads?|meta\s*ads?|facebook|instagram|tiktok|mailchimp|klaviyo|hubspot|semrush)\b", re.I), MARKETING),
+    # moo = MOO.com, print marketing materials (business cards, stickers)
+    (re.compile(r"\b(google\s*ads?|meta\s*ads?|facebook|instagram|tiktok|mailchimp|klaviyo|hubspot|semrush|moo)\b", re.I), MARKETING),
     (re.compile(r"\b(advertising|advert|promo|campaign|seo|ppc)\b", re.I), MARKETING),
 
     # ── Marketplace fees ────────────────────────────────────────────────────
@@ -214,7 +232,9 @@ _KEYWORD_RULES: List[Tuple[re.Pattern, str]] = [
     (re.compile(r"\b(amazon|ebay)\b", re.I), COGS_PRODUCTION_SUPPLIES),  # Amazon/eBay = production supplies
 
     # ── Travel & entertainment ──────────────────────────────────────────────
-    (re.compile(r"\b(hotel|airbnb|booking\.com|flight|airline|trainline|uber|taxi|cab)\b", re.I), TRAVEL_ENTERTAINMENT),
+    # lime = e-scooter/bike hire, same category as uber/taxi below.
+    (re.compile(r"\b(hotel|airbnb|booking\.com|agoda|flight|airline|trainline|uber|taxi|cab|lime)\b", re.I), TRAVEL_ENTERTAINMENT),
+    (re.compile(r"\b(british\s*airways|easyjet|ryanair|jet2|tui|heathrow|gatwick|eurostar|avanti|lner|gwr)\b", re.I), TRAVEL_ENTERTAINMENT),
     (re.compile(r"\b(restaurant|cafe|coffee|deliveroo|just\s*eat|uber\s*eats)\b", re.I), TRAVEL_ENTERTAINMENT),
 
     # ── Rent / occupancy ────────────────────────────────────────────────────
@@ -230,8 +250,15 @@ _KEYWORD_RULES: List[Tuple[re.Pattern, str]] = [
     (re.compile(r"\b(bank\s*(fee|charge)|payment\s*fee|card\s*fee|stripe\s*fee|plan\s*fee)\b", re.I), BANK_CHARGES),
     (re.compile(r"\b(capital\s*on\s*tap|amex|revolut|monzo)\b", re.I), BANK_CHARGES),
 
-    # ── Photography / content ───────────────────────────────────────────────
-    (re.compile(r"\b(photograph|studio\s*hire|model\s*agency|lookbook|videograph)\b", re.I), PHOTOGRAPHY),
+    # ── Photography / content production ──────────────────────────────────────
+    # Vendor names: Park Cameras, Cineden, LightingByJoe, Luminary VFX, Epitome, Refined Imagery, CameraWorld, Blaze Image
+    (re.compile(r"\b(park\s*cameras|cineden|lightingbyjoe|luminary\s*vfx|epitome|refined\s*imagery|cameraworld|blaze\s*image)\b", re.I), PHOTOGRAPHY),
+    # Film crew roles & shoot-day terms
+    (re.compile(r"\b(dop|d\.o\.p|director\s*of\s*photography|sound\s*recordist|sound\s*design|gaffer|1st\s*ac|art\s*direction|lighting\s*assistant)\b", re.I), PHOTOGRAPHY),
+    # General production & shoot keywords
+    (re.compile(r"\b(vfx|visual\s*fx|camera\s*kit|camera\s*equip|backdrop|production\s*rate|production\s*exp|film\s*shoot|shoot|tba\s*film|tba\s*cap|studio\s*hire|studio\s*rental)\b", re.I), PHOTOGRAPHY),
+    # Original photography & general content terms
+    (re.compile(r"\b(photograph|model\s*agency|lookbook|videograph|content\s*creat)\b", re.I), PHOTOGRAPHY),
 
     # ── PR / Press ──────────────────────────────────────────────────────────
     (re.compile(r"\b(pr\s*agency|press|media\s*relation|vogue|elle|conde\s*nast)\b", re.I), PR_PRESS),

@@ -206,18 +206,54 @@ The database follows a multi-tenant architecture with these core tables:
    - Use when: Payment processing cost analysis, fee optimization, true profit calculations,
      gateway cost comparison, net revenue after fees
 
-10. **inventory_items** - Product variant inventory levels
-    - Contains: variant_external_id, sku, quantity, is_unlimited
-    - Links to: entities, products, external_raw_events
-    - Use when: Stock level queries, inventory management, out-of-stock analysis
+10. **inventory_on_hand** (VIEW) - ALWAYS use this for stock-level questions
+    - Contains: inventory_item_id, product_id, sku, item_type, quantity_source, unit_cost,
+      is_unlimited, units_purchased, units_sold, units_refunded, units_gifted, on_hand
+    - **on_hand** is the single canonical stock figure. Never re-derive stock by reading
+      inventory_items.available_quantity or by summing inventory_movements — this view
+      already applies the correct rule per item and those shortcuts give wrong answers.
+    - ALWAYS wrap on_hand in greatest(on_hand, 0) when aggregating, for BOTH unit
+      counts and values. A handful of archived legacy items carry a negative
+      on_hand because their historical purchases were expensed as incurred and
+      never entered the subledger, so only their sales are recorded. Summing
+      on_hand raw returns a nonsensical negative total.
+    - Stock units = greatest(on_hand, 0); stock value = greatest(on_hand,0) * unit_cost
+    - Use when: any "how much stock", out-of-stock, low-stock or stock-valuation question
 
-11. **inventory_adjustments** - Inventory change history
-    - Contains: variant_external_id, quantity_change, quantity_after, reason, adjusted_at
-    - Reasons: sale, return, restock, damage, shrinkage, adjustment, initial
-    - Links to: entities, inventory_items, external_raw_events
-    - Use when: Inventory audit trails, shrinkage analysis, restock patterns
+10a. **accounting_health_checks** (VIEW) - integrity of the books
+    - Contains: check_name, severity ('ok' | 'warn' | 'fail'), item_count, amount, detail
+    - Covers: inventory GL vs subledger, journal balancing, sales with no cost
+      recorded, negative stock, untranslated foreign-currency lines, movement dates
+    - Use when: "are my books correct/healthy", "is anything wrong with my
+      accounts", "does inventory reconcile", before quoting figures you are unsure of
+    - 'fail' means the books are wrong or an automated process has stopped;
+      'warn' means a known accepted gap. Report failures prominently.
 
-12. **normalization_processing_log** - ETL processing audit trail
+10b. **inventory_uncosted_sales** / **inventory_negative_stock** (VIEWS)
+    - The offending rows behind two of the checks above, with a ``reason`` column
+    - Use when: the user asks which items/orders are affected, not just how many
+
+11. **inventory_items** - Product variant inventory records (the underlying table)
+    - Contains: variant_external_id, sku, item_type, quantity_source, available_quantity,
+      is_unlimited, unit_cost, provider
+    - Links to: entities, products (product_id), external_raw_events (raw_event_id)
+    - **item_type**: 'sellable' | 'sample' | 'material'. Samples are development
+      stock that was never sold; they legitimately have product_id IS NULL.
+      Filter to item_type = 'sellable' when reporting stock or stock value.
+    - **quantity_source**: 'shopify' (available_quantity is authoritative) or 'ledger'
+      (derived from movements). Prefer the inventory_on_hand view over branching on this.
+    - **provider**: data lineage only — never branch business logic on it.
+    - Use when: item attributes/cost. For quantities, use inventory_on_hand instead.
+
+12. **inventory_movements** - Inventory change ledger (purchases, sales, gifts)
+    - Contains: inventory_item_id, transaction_type, quantity (signed), unit_cost, notes,
+      reference_id, reference_table, created_at
+    - transaction_type values: PURCHASE, SALE, GIFT, WRITE_OFF, ADJUSTMENT
+    - Links to: inventory_items (inventory_item_id)
+    - Use when: Purchase/sale history, spend on samples, audit trails. NEVER for
+      current stock levels (use the inventory_on_hand view instead)
+
+13. **normalization_processing_log** - ETL processing audit trail
     - Contains: raw_event_id, entity_type, status, canonical_id, error_message, needs_review
     - Purpose: Track normalization success/failures for debugging
     - Use when: Debugging data pipeline, monitoring ETL quality
@@ -275,7 +311,12 @@ Customer Questions → customers, orders
 Product Questions → products, order_line_items, inventory_items
 - "Best sellers": JOIN products → order_line_items → SUM(quantity)
 - "Product revenue": order_line_items.total_price_amount
-- "Stock levels": inventory_items.quantity
+- "Stock levels": SUM(greatest(on_hand,0)) FROM inventory_on_hand
+  WHERE item_type = 'sellable'
+- "Stock value": SUM(greatest(on_hand,0) * unit_cost) FROM inventory_on_hand
+  WHERE item_type = 'sellable'
+- "Sample spend": inventory_movements PURCHASE rows joined to inventory_items
+  WHERE item_type = 'sample'
 
 Integration/ETL Questions → external_sources, external_raw_events, normalization_processing_log
 - "Sync status": external_sources.sync_status
@@ -297,7 +338,8 @@ Geographic Questions → customers, orders (shipping_address, billing_address)
 - Order_line_items link to orders and products
 - Payments link to orders via order_id
 - Payment_fees link to payments via payment_id (CASCADE delete)
-- Inventory_items link to products
+- Inventory_items link to products (product_id) and to inventory_movements
+  (inventory_item_id); read stock levels from the inventory_on_hand view
 
 **CAPABILITIES:**
 
