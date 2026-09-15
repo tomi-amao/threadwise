@@ -1,19 +1,17 @@
 /**
  * Journal Generation Modal
  *
- * Full-pipeline journal generation UI with scope selection.
+ * Payments & transactions journal generation UI with scope selection.
  * Runs journal-generating steps in dependency order:
  *
- * 1. Cross-provider duplicate detection — identify PayPal mirrors
- * 2. Invoice matching — auto-match open invoices to transactions
- * 3. Accrue Payments — revenue recognition for captured payments
- * 4. Settle Payouts — cash recognition for inbound gateway transfers
- * 5. Journal Expenses — expense recording for categorised bank outflows
- * 6. Journal Invoices — purchase / sale / payment journals from invoices
+ * 1. Accrue Payments — revenue recognition for captured payments
+ * 2. Settle Payouts — cash recognition for inbound gateway transfers
+ * 3. Journal Inbound — funding, sales receipts, refunds, FX conversions
+ * 4. Journal Expenses — expense recording for categorised bank outflows
  *
- * Users can select a scope (payments, transactions, invoices, or all)
- * before running the pipeline. A Review tab surfaces draft journals
- * that need human attention.
+ * Users can select a scope (payments, transactions, or all) before running
+ * the pipeline. A Review tab surfaces draft journals that need human
+ * attention.
  */
 
 import React, { useState, useCallback, useRef } from 'react';
@@ -30,7 +28,6 @@ import {
   XCircle,
   Lightning,
   ArrowRight,
-  GitMerge,
   CaretDown,
   CaretRight,
   Info,
@@ -76,22 +73,6 @@ const PIPELINE_STEPS: Array<{
   bgColor: string;
 }> = [
   {
-    key: 'duplicate_detection',
-    title: 'Duplicate Detection',
-    description: 'Identify cross-provider mirrors (Revolut ↔ PayPal)',
-    icon: GitMerge,
-    iconColor: 'text-purple-400',
-    bgColor: 'bg-purple-500/10',
-  },
-  {
-    key: 'invoice_matching',
-    title: 'Invoice Matching',
-    description: 'Auto-match open invoices to financial transactions',
-    icon: Receipt,
-    iconColor: 'text-teal-400',
-    bgColor: 'bg-teal-500/10',
-  },
-  {
     key: 'journal_payments',
     title: 'Accrue Payments',
     description: 'Revenue recognition for captured payments → Clearing',
@@ -123,14 +104,6 @@ const PIPELINE_STEPS: Array<{
     iconColor: 'text-amber-400',
     bgColor: 'bg-amber-500/10',
   },
-  {
-    key: 'journal_invoices',
-    title: 'Journal Invoices',
-    description: 'Create purchase, sale and payment journals from invoices',
-    icon: ClipboardText,
-    iconColor: 'text-orange-400',
-    bgColor: 'bg-orange-500/10',
-  },
 ];
 
 // =============================================================================
@@ -141,43 +114,9 @@ function getStepSummary(step: PipelineStepResult): string[] {
   const lines: string[] = [];
 
   switch (step.step) {
-    case 'duplicate_detection':
-      if (step.duplicates_found !== undefined) {
-        lines.push(
-          `${step.duplicates_found} duplicate${step.duplicates_found !== 1 ? 's' : ''} found`
-        );
-      }
-      if (step.excluded_transactions) {
-        lines.push(`${step.excluded_transactions} excluded`);
-      }
-      if (step.enriched) lines.push(`${step.enriched} enriched`);
-      if (step.invoices_updated)
-        lines.push(
-          `${step.invoices_updated} invoice${step.invoices_updated !== 1 ? 's' : ''} updated`
-        );
-      if (step.internal_pairs_cancelled)
-        lines.push(
-          `${step.internal_pairs_cancelled} internal pair${step.internal_pairs_cancelled !== 1 ? 's' : ''} cancelled`
-        );
-      break;
-
-    case 'invoice_matching':
-      if (step.invoices_checked !== undefined) {
-        lines.push(
-          `${step.invoices_checked} invoice${step.invoices_checked !== 1 ? 's' : ''} checked`
-        );
-      }
-      if (step.invoices_matched !== undefined) {
-        lines.push(
-          `${step.invoices_matched} invoice${step.invoices_matched !== 1 ? 's' : ''} matched`
-        );
-      }
-      break;
-
     case 'journal_payments':
     case 'journal_settlements':
-    case 'journal_expenses':
-    case 'journal_invoices': {
+    case 'journal_expenses': {
       const created = step.created ?? 0;
       const skipped = step.skipped ?? 0;
       const errorCount = step.errors?.length ?? 0;
@@ -575,7 +514,7 @@ export function JournalGenerationModal({ isOpen, onClose, entityId }: JournalGen
             </div>
             <div>
               <h2 className="text-lg font-semibold text-zinc-100">Generate Journals</h2>
-              <p className="text-sm text-zinc-400">Full double-entry journal pipeline</p>
+              <p className="text-sm text-zinc-400">Payments &amp; transactions journal pipeline</p>
             </div>
           </div>
           <button
@@ -632,9 +571,9 @@ export function JournalGenerationModal({ isOpen, onClose, entityId }: JournalGen
                       <Info size={18} className="text-zinc-400 mt-0.5 shrink-0" />
                       <div className="text-sm text-zinc-400">
                         <p>
-                          This will detect cross-provider duplicates, match invoices, and generate
-                          all pending journals (accruals, settlements, expenses, invoices) in a
-                          single pass. Existing journals are never duplicated.
+                          This will generate all pending payment and transaction journals
+                          (accruals, settlements, inbound transfers, expenses) in a single pass.
+                          Existing journals are never duplicated.
                         </p>
                       </div>
                     </div>
@@ -649,7 +588,6 @@ export function JournalGenerationModal({ isOpen, onClose, entityId }: JournalGen
                           { value: 'all', label: 'All' },
                           { value: 'payments', label: 'Payments' },
                           { value: 'transactions', label: 'Transactions' },
-                          { value: 'invoices', label: 'Invoices' },
                         ] as const
                       ).map(opt => (
                         <button
@@ -671,8 +609,6 @@ export function JournalGenerationModal({ isOpen, onClose, entityId }: JournalGen
                       {scope === 'payments' && 'Accrue captured payments as revenue.'}
                       {scope === 'transactions' &&
                         'Settle gateway payouts, journal inbound transfers (funding, refunds, FX, sales) and record expenses.'}
-                      {scope === 'invoices' &&
-                        'Create purchase, sale and payment journals from invoices.'}
                     </p>
                   </div>
                 </>

@@ -15,7 +15,7 @@ import { toast } from 'sonner';
 import { InvoiceUpload } from './InvoiceUpload';
 import { InvoiceList } from './InvoiceList';
 import { ProductSelectionModal } from './ProductSelectionModal';
-import type { ProductCandidate } from './ProductSelectionModal';
+import type { ProductCandidate, ExistingProduct, GLAccount } from './ProductSelectionModal';
 import { InvoiceEditModal } from './InvoiceEditModal';
 import type { InvoiceEditPayload } from './InvoiceEditModal';
 import { GlAccountReviewModal } from './GlAccountReviewModal';
@@ -82,12 +82,14 @@ export function InvoicesSection({
   const [productModalInvoiceId, setProductModalInvoiceId] = useState('');
   const [productModalInvoiceType, setProductModalInvoiceType] = useState<InvoiceType>('PURCHASE');
 
+  // ── Existing products for link-to-existing mode ───────────────────────────
+  const [existingProducts, setExistingProducts] = useState<ExistingProduct[]>([]);
+  const existingProductsFetchedRef = useRef(false);
+
   // ── Invoice edit modal state ──────────────────────────────────────────────
   const [editModalOpen, setEditModalOpen] = useState(false);
   const [editingInvoice, setEditingInvoice] = useState<Invoice | null>(null);
-  const [glAccounts, setGlAccounts] = useState<
-    { id: string; account_number: string; name: string; account_type: string }[]
-  >([]);
+  const [glAccounts, setGlAccounts] = useState<GLAccount[]>([]);
 
   // ── GL account review modal state (step 2 of upload workflow) ────────────
   const [glReviewModalOpen, setGlReviewModalOpen] = useState(false);
@@ -285,6 +287,12 @@ export function InvoicesSection({
         setProductModalInvoiceId(lastResult.invoice.id);
         setProductModalInvoiceType(resultInvoiceType);
         setProductModalLineItems(lastResult.line_items as InvoiceLineItem[]);
+        // Pre-load GL accounts so asset/COGS selectors are available immediately
+        if (glAccounts.length === 0 && entity?.id) {
+          fetchChartOfAccounts(entity.id)
+            .then(accounts => setGlAccounts(accounts.filter(a => !a.is_header)))
+            .catch(err => console.error('Failed to pre-fetch GL accounts:', err));
+        }
         setProductModalOpen(true);
       }
     },
@@ -411,34 +419,159 @@ export function InvoicesSection({
     }
   }, []);
 
-  // ── Product creation from line items ───────────────────────────────────────
+  // ── Load existing products (eager, once per entity) ────────────────────
+  const fetchExistingProducts = useCallback(async () => {
+    if (!entity?.id || existingProductsFetchedRef.current) return;
+    try {
+      const supabase = getSupabaseBrowserClient();
+      const { data, error } = await supabase
+        .from('products')
+        .select('id, name')
+        .eq('entity_id', entity.id)
+        .neq('status', 'archived')
+        .order('name', { ascending: true });
+      if (error) {
+        console.error('Failed to load existing products:', error);
+        return;
+      }
+      // Mark fetched only after success so errors allow a retry
+      existingProductsFetchedRef.current = true;
+      setExistingProducts((data ?? []) as ExistingProduct[]);
+    } catch (err) {
+      console.error('Failed to load existing products:', err);
+    }
+  }, [entity?.id]);
+
+  // Load products as soon as entity is available so the modal never waits
+  useEffect(() => {
+    fetchExistingProducts();
+  }, [fetchExistingProducts]);
+
+  // ── Product creation / linking from line items ────────────────────────────
   const handleCreateProducts = useCallback(
     async (selected: ProductCandidate[]) => {
       if (!entity?.id) return;
 
-      const fd = new FormData();
-      fd.append('intent', 'createProducts');
-      fd.append('invoiceId', productModalInvoiceId);
-      fd.append('entity_id', entity.id);
-      fd.append('lineItemIds', JSON.stringify(selected.map(s => s.lineItemId)));
-      // Include user-edited name/sku overrides keyed by line item ID
-      const overrides = Object.fromEntries(
-        selected.map(s => [s.lineItemId, { name: s.name, sku: s.sku }])
-      );
-      fd.append('overrides', JSON.stringify(overrides));
+      // Split candidates by mode
+      const toCreate = selected.filter(c => c.mode === 'new');
+      const toLink = selected.filter(c => c.mode === 'link' && c.linkedProductId);
+      const toInventoryOnly = selected.filter(c => c.mode === 'skip' && c.createInventoryRecord);
 
-      const resp = await fetch('/api/invoices', { method: 'POST', body: fd });
-      const result = await resp.json();
+      const requests: Promise<void>[] = [];
 
-      if (!resp.ok || result.error) {
-        toast.error('Failed to create products', { description: result.error });
-        return;
+      // ── Create new products ──────────────────────────────────────────────
+      if (toCreate.length > 0) {
+        const fd = new FormData();
+        fd.append('intent', 'createProducts');
+        fd.append('invoiceId', productModalInvoiceId);
+        fd.append('entity_id', entity.id);
+        fd.append('lineItemIds', JSON.stringify(toCreate.map(s => s.lineItemId)));
+        const overrides = Object.fromEntries(
+          toCreate.map(s => [
+            s.lineItemId,
+            {
+              name: s.name,
+              sku: s.sku,
+              ...(s.assetAccountId ? { asset_account_id: s.assetAccountId } : {}),
+              ...(s.cogsAccountId ? { cogs_account_id: s.cogsAccountId } : {}),
+            },
+          ])
+        );
+        fd.append('overrides', JSON.stringify(overrides));
+
+        requests.push(
+          fetch('/api/invoices', { method: 'POST', body: fd })
+            .then(r => r.json())
+            .then(result => {
+              if (result.error) throw new Error(result.error);
+              toast.success(`Created ${result.count ?? toCreate.length} new product(s)`, {
+                description: 'Products are in draft status and can be enriched later.',
+                duration: 5000,
+              });
+            })
+            .catch(err => {
+              toast.error('Failed to create products', {
+                description: err instanceof Error ? err.message : 'An error occurred',
+              });
+            })
+        );
       }
 
-      toast.success(`Created ${result.count ?? selected.length} product(s)`, {
-        description: 'Products are in draft status and can be enriched later.',
-        duration: 5000,
-      });
+      // ── Link to existing products ────────────────────────────────────────
+      if (toLink.length > 0) {
+        const fd = new FormData();
+        fd.append('intent', 'linkLineItems');
+        fd.append('invoiceId', productModalInvoiceId);
+        fd.append('entity_id', entity.id);
+        fd.append(
+          'links',
+          JSON.stringify(
+            toLink.map(s => ({
+              line_item_id: s.lineItemId,
+              product_id: s.linkedProductId,
+              ...(s.assetAccountId ? { asset_account_id: s.assetAccountId } : {}),
+              ...(s.cogsAccountId ? { cogs_account_id: s.cogsAccountId } : {}),
+            }))
+          )
+        );
+
+        requests.push(
+          fetch('/api/invoices', { method: 'POST', body: fd })
+            .then(r => r.json())
+            .then(result => {
+              if (result.error) throw new Error(result.error);
+              toast.success(
+                `Updated unit costs on ${result.updated_items ?? toLink.length} item(s)`,
+                {
+                  description: `${result.linked_products ?? toLink.length} product(s) linked from invoice.`,
+                  duration: 5000,
+                }
+              );
+            })
+            .catch(err => {
+              toast.error('Failed to link products', {
+                description: err instanceof Error ? err.message : 'An error occurred',
+              });
+            })
+        );
+      }
+
+      await Promise.all(requests);
+
+      // ── Inventory-only movements (skip mode + record stock) ──────────────
+      if (toInventoryOnly.length > 0) {
+        const fd = new FormData();
+        fd.append('intent', 'inventoryMovements');
+        fd.append('invoiceId', productModalInvoiceId);
+        fd.append('entity_id', entity.id);
+        fd.append('lineItemIds', JSON.stringify(toInventoryOnly.map(s => s.lineItemId)));
+        const overrides = Object.fromEntries(
+          toInventoryOnly.map(s => [
+            s.lineItemId,
+            {
+              ...(s.sku ? { sku: s.sku } : {}),
+              ...(s.assetAccountId ? { asset_account_id: s.assetAccountId } : {}),
+              ...(s.cogsAccountId ? { cogs_account_id: s.cogsAccountId } : {}),
+            },
+          ])
+        );
+        fd.append('overrides', JSON.stringify(overrides));
+
+        await fetch('/api/invoices', { method: 'POST', body: fd })
+          .then(r => r.json())
+          .then(result => {
+            if (result.error) throw new Error(result.error);
+            toast.success(
+              `Recorded ${result.recorded ?? toInventoryOnly.length} stock movement(s)`,
+              { description: 'Inventory items created without product catalog entries.', duration: 5000 }
+            );
+          })
+          .catch(err => {
+            toast.error('Failed to record inventory movements', {
+              description: err instanceof Error ? err.message : 'An error occurred',
+            });
+          });
+      }
     },
     [entity?.id, productModalInvoiceId]
   );
@@ -741,6 +874,8 @@ export function InvoicesSection({
         invoiceId={productModalInvoiceId}
         invoiceType={productModalInvoiceType}
         entityId={entity?.id ?? ''}
+        existingProducts={existingProducts}
+        glAccounts={glAccounts}
         onConfirm={handleCreateProducts}
       />
 

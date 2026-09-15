@@ -17,7 +17,6 @@ import {
   getInvoiceUrl,
   listInvoices,
   getInvoiceStats,
-  updateInvoiceStatus,
 } from '~/lib/api/invoices.server';
 import { getServerSupabaseClient } from '~/lib/supabase';
 
@@ -87,6 +86,8 @@ export async function action({ request }: ActionFunctionArgs) {
         agentForm.append('file', new Blob([uint8Array], { type: file.type }), file.name);
         if (entityId) agentForm.append('entity_id', entityId);
         agentForm.append('file_path', storagePath);
+        // TEMPORARY: journals disabled — invoices being uploaded purely for unit cost population
+        agentForm.append('create_journal', 'false');
 
         const invoiceType = formData.get('invoice_type') as string | null;
         if (invoiceType) agentForm.append('invoice_type', invoiceType);
@@ -113,17 +114,20 @@ export async function action({ request }: ActionFunctionArgs) {
           return json({ error: 'invoiceId and status are required' }, { status: 400 });
         }
 
+        const { invoice: current, error: fetchError } = await getInvoice(invoiceId);
+        if (fetchError || !current) {
+          return json({ error: fetchError ?? 'Invoice not found' }, { status: 404 });
+        }
+        if (!current.entity_id) {
+          return json({ error: 'Invoice has no entity_id' }, { status: 422 });
+        }
+
         // Before marking as PAID, verify a matching financial transaction exists.
         // This prevents marking an invoice paid when the actual payment hasn't been imported.
         if (status === 'PAID') {
-          const { invoice: inv, error: fetchErr } = await getInvoice(invoiceId);
-          if (fetchErr || !inv) {
-            return json({ error: fetchErr ?? 'Invoice not found' }, { status: 404 });
-          }
-
           const { found } = await findMatchingTransaction(
-            inv.invoice_number ?? '',
-            inv.entity_id ?? ''
+            current.invoice_number ?? '',
+            current.entity_id
           );
 
           if (!found) {
@@ -138,27 +142,38 @@ export async function action({ request }: ActionFunctionArgs) {
           }
         }
 
-        const { invoice, error } = await updateInvoiceStatus(invoiceId, {
-          status: status as import('~/types/invoice').InvoiceStatus,
-        });
+        // Status changes must go through the agent, not straight to Postgres.
+        // Leaving DRAFT is what capitalises a purchase (DEBIT the line items' GL
+        // accounts, CREDIT Accounts Payable) and being marked PAID is what clears
+        // that payable. Patching the row directly moved invoices through their
+        // lifecycle with no ledger entries at all — which is how 35 invoices came
+        // to have zero journals behind them.
 
-        if (error) return json({ error }, { status: 500 });
-
-        // When marked as paid, create the payment settlement journal in the AI agent.
-        // Non-fatal — the status change succeeds regardless of journal creation.
-        if (status === 'PAID' && invoice?.entity_id) {
-          try {
-            await fetch(`${AI_AGENT_URL}/accounting/journals/invoice-payment`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ entity_id: invoice.entity_id, invoice_id: invoiceId }),
-            });
-          } catch {
-            // Intentionally swallowed — journal can be recreated later if needed
+        const statusResponse = await fetch(
+          `${AI_AGENT_URL}/accounting/invoices/${invoiceId}/status`,
+          {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ entity_id: current.entity_id, status }),
           }
+        );
+
+        if (!statusResponse.ok) {
+          const detail = await statusResponse.text();
+          return json(
+            { error: `Failed to update status: ${detail}` },
+            { status: statusResponse.status }
+          );
         }
 
-        return json({ success: true, invoice });
+        const statusResult = await statusResponse.json();
+        return json({
+          success: true,
+          invoice: statusResult.invoice,
+          purchaseJournal: statusResult.purchase_journal ?? null,
+          paymentJournal: statusResult.payment_journal ?? null,
+          warnings: statusResult.warnings ?? [],
+        });
       }
 
       case 'delete': {
@@ -249,6 +264,93 @@ export async function action({ request }: ActionFunctionArgs) {
         if (!agentResp.ok) {
           const errText = await agentResp.text();
           return json({ error: 'Product creation failed', detail: errText }, { status: 502 });
+        }
+
+        const result = await agentResp.json();
+        return json({ success: true, ...result });
+      }
+
+      case 'linkLineItems': {
+        const invoiceId = formData.get('invoiceId') as string;
+        const entityId = formData.get('entity_id') as string;
+        const linksJson = formData.get('links') as string;
+
+        if (!invoiceId || !entityId || !linksJson) {
+          return json(
+            { error: 'invoiceId, entity_id, and links are required' },
+            { status: 400 }
+          );
+        }
+
+        let links: { line_item_id: string; product_id: string }[];
+        try {
+          links = JSON.parse(linksJson);
+        } catch {
+          return json({ error: 'links must be a valid JSON array' }, { status: 400 });
+        }
+
+        const agentResp = await fetch(
+          `${AI_AGENT_URL}/accounting/invoices/${invoiceId}/link-to-products`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ entity_id: entityId, links }),
+          }
+        );
+
+        if (!agentResp.ok) {
+          const errText = await agentResp.text();
+          return json({ error: 'Failed to link line items', detail: errText }, { status: 502 });
+        }
+
+        const result = await agentResp.json();
+        return json({ success: true, ...result });
+      }
+
+      case 'inventoryMovements': {
+        const invoiceId = formData.get('invoiceId') as string;
+        const entityId = formData.get('entity_id') as string;
+        const lineItemIdsJson = formData.get('lineItemIds') as string;
+        const overridesJson = formData.get('overrides') as string | null;
+
+        if (!invoiceId || !entityId || !lineItemIdsJson) {
+          return json(
+            { error: 'invoiceId, entity_id, and lineItemIds are required' },
+            { status: 400 }
+          );
+        }
+
+        let lineItemIds: string[];
+        try {
+          lineItemIds = JSON.parse(lineItemIdsJson);
+        } catch {
+          return json({ error: 'lineItemIds must be valid JSON array' }, { status: 400 });
+        }
+
+        let overrides: Record<string, Record<string, string>> | undefined;
+        if (overridesJson) {
+          try {
+            overrides = JSON.parse(overridesJson);
+          } catch {
+            // ignore malformed overrides — not fatal
+          }
+        }
+
+        const agentResp = await fetch(
+          `${AI_AGENT_URL}/accounting/invoices/${invoiceId}/inventory-movements`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ entity_id: entityId, line_item_ids: lineItemIds, overrides }),
+          }
+        );
+
+        if (!agentResp.ok) {
+          const errText = await agentResp.text();
+          return json(
+            { error: 'Failed to record inventory movements', detail: errText },
+            { status: 502 }
+          );
         }
 
         const result = await agentResp.json();

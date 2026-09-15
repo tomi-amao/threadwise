@@ -76,26 +76,15 @@ export interface PipelineStepResult {
   title: string;
   status: 'running' | 'completed' | 'error';
   error?: string;
-  // Duplicate detection
-  duplicates_found?: number;
-  enriched?: number;
-  invoices_updated?: number;
-  excluded_transactions?: number;
-  internal_pairs_cancelled?: number;
-  // Invoice matching
-  invoices_checked?: number;
-  invoices_matched?: number;
-  // Journal creation (payments / settlements / expenses / invoices)
+  // Journal creation (payments / settlements / inbound / expenses)
   payments_processed?: number;
   settlements_processed?: number;
   transactions_processed?: number;
-  invoices_processed?: number;
   created?: number;
   skipped?: number;
   errors?: Array<{
     payment_id?: string;
     transaction_id?: string;
-    invoice_id?: string;
     error: string;
   }>;
   // journal_inbound step extras
@@ -298,7 +287,7 @@ export async function fetchReviewSummary(entityId: string): Promise<ReviewSummar
   return response.json();
 }
 
-export type JournalScope = 'payments' | 'transactions' | 'invoices' | 'all';
+export type JournalScope = 'payments' | 'transactions' | 'all';
 
 export async function generateAllJournals(
   entityId: string,
