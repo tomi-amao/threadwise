@@ -9,13 +9,7 @@
  * - List journals
  */
 
-// Get the AI Agent API base URL
-function getApiBaseUrl(): string {
-  if (typeof window !== 'undefined') {
-    return import.meta.env?.VITE_AI_AGENT_URL || 'http://localhost:2024';
-  }
-  return process.env.AI_AGENT_URL || process.env.VITE_AI_AGENT_URL || 'http://localhost:2024';
-}
+import { getApiBaseUrl } from './base-url';
 
 // ============================================================================
 // Types

@@ -23,6 +23,7 @@ import {
 } from 'phosphor-react';
 import { useRealtime } from 'inngest/react';
 import { cn } from '~/lib/utils';
+import { getApiBaseUrl } from '~/lib/api/base-url';
 
 interface SyncProgressData {
   endpoint: string;
@@ -82,14 +83,6 @@ function StatusIndicator({ status }: { status: string }) {
     default:
       return <span className={cn(baseClasses, 'bg-gray-500')} />;
   }
-}
-
-function getApiBaseUrl(): string {
-  if (typeof window !== 'undefined') {
-    // @ts-ignore
-    return import.meta.env?.VITE_AI_AGENT_URL || 'http://localhost:2024';
-  }
-  return process.env.AI_AGENT_URL || process.env.VITE_AI_AGENT_URL || 'http://localhost:2024';
 }
 
 export function SyncProgressToast({

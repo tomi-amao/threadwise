@@ -7,6 +7,8 @@
  * - Get sync statistics
  */
 
+import { getApiBaseUrl } from './base-url';
+
 // Integration summary from the API
 export interface IntegrationSummary {
   id: string;
@@ -80,17 +82,6 @@ export interface CreateExternalSourceRequest {
   external_account_id: string;
   display_name?: string;
   api_key: string;
-}
-
-// Get the AI Agent API base URL
-function getApiBaseUrl(): string {
-  if (typeof window !== 'undefined') {
-    // Client-side
-    // @ts-ignore
-    return import.meta.env?.VITE_AI_AGENT_URL || 'http://localhost:2024';
-  }
-  // Server-side
-  return process.env.AI_AGENT_URL || process.env.VITE_AI_AGENT_URL || 'http://localhost:2024';
 }
 
 /**

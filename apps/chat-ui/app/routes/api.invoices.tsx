@@ -19,10 +19,10 @@ import {
   getInvoiceStats,
 } from '~/lib/api/invoices.server';
 import { getServerSupabaseClient } from '~/lib/supabase';
+import { getApiBaseUrl } from '~/lib/api/base-url';
 
 // AI Agent base URL
-const AI_AGENT_URL =
-  process.env.AI_AGENT_URL || process.env.VITE_AI_AGENT_URL || 'http://localhost:2024';
+const AI_AGENT_URL = getApiBaseUrl();
 
 // Helper to return JSON responses
 function json(data: unknown, init?: ResponseInit) {
