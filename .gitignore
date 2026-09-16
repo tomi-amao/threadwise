@@ -11,3 +11,4 @@ apps/chat-ui/build
 apps/ai_agent/utils/example_approaches
 **/.env.local
 .mcp.json
+apps/chat-ui/.env.local
