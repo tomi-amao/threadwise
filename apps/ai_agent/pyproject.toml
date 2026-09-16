@@ -33,6 +33,11 @@ dependencies = [
     "langchain-pinecone (>=0.2.0)",
     "inngest (>=0.5.15,<0.6.0)",
     "langchain-mcp-adapters (>=0.2.1,<0.3.0)",
+    # langchain-mcp-adapters declares "mcp >=1.9.2" with no upper bound, but its
+    # actual code isn't compatible with mcp 2.x (mcp.shared.context.RequestContext
+    # was removed/moved there) — cap it here until langchain-mcp-adapters itself
+    # bumps its constraint after verifying compatibility.
+    "mcp (<2.0.0)",
 ]
 
 [tool.poetry]
@@ -56,7 +61,7 @@ pythonpath = ["src"]
 testpaths = ["tests"]
 
 [tool.poetry.group.dev.dependencies]
-black = "^25.1.0"
+black = "^26.3.0"
 isort = "^6.0.1"
 pytest = "^8.3.5"
 watchfiles = "^1.0.5"
