@@ -82,48 +82,6 @@ export async function fileToContentBlock(file: File): Promise<Base64ContentBlock
 }
 
 /**
- * Type guard for Base64ContentBlock
- */
-export function isBase64ContentBlock(block: unknown): block is Base64ContentBlock {
-  if (typeof block !== 'object' || block === null || !('type' in block)) return false;
-
-  const typedBlock = block as { type: unknown; source_type?: unknown; mime_type?: unknown };
-
-  // file type (PDF)
-  if (
-    typedBlock.type === 'file' &&
-    typedBlock.source_type === 'base64' &&
-    typeof typedBlock.mime_type === 'string' &&
-    (typedBlock.mime_type.startsWith('image/') || typedBlock.mime_type === 'application/pdf')
-  ) {
-    return true;
-  }
-
-  // image type
-  if (
-    typedBlock.type === 'image' &&
-    typedBlock.source_type === 'base64' &&
-    typeof typedBlock.mime_type === 'string' &&
-    typedBlock.mime_type.startsWith('image/')
-  ) {
-    return true;
-  }
-
-  return false;
-}
-
-/**
- * Get display name from a content block
- */
-export function getBlockDisplayName(block: Base64ContentBlock): string {
-  if (block.metadata?.filename) return block.metadata.filename;
-  if (block.metadata?.name) return block.metadata.name;
-  if (block.type === 'file') return 'PDF file';
-  if (block.type === 'image') return 'Image';
-  return 'Unknown file';
-}
-
-/**
  * Check if a file is a duplicate in the blocks list
  */
 export function isDuplicateFile(file: File, blocks: Base64ContentBlock[]): boolean {

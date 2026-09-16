@@ -43,13 +43,6 @@ export interface TriggerNormalizeResponse {
   event_ids: string[];
 }
 
-// Normalization stats (from the normalization API)
-export interface NormalizationStats {
-  by_status: Record<string, number>;
-  by_entity_type: Record<string, number>;
-  by_status_and_type: Record<string, number>;
-}
-
 // API key validation response
 export interface ValidateApiKeyResponse {
   source_id: string;
@@ -63,16 +56,6 @@ export interface UpdateApiKeyResponse {
   source_id: string;
   status: string;
   message: string;
-}
-
-// Entity response
-export interface Entity {
-  id: string;
-  name: string;
-  currency: string;
-  legal_name: string | null;
-  country: string | null;
-  created_at: string;
 }
 
 // External source (full details)
@@ -141,32 +124,6 @@ export async function getIntegrationsSummary(entityId?: string): Promise<Integra
 }
 
 /**
- * Get all entities
- */
-export async function getEntities(): Promise<Entity[]> {
-  const baseUrl = getApiBaseUrl();
-
-  try {
-    const response = await fetch(`${baseUrl}/integrations/entities`, {
-      method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-    });
-
-    if (!response.ok) {
-      console.error('Failed to fetch entities:', response.status);
-      return [];
-    }
-
-    return await response.json();
-  } catch (error) {
-    console.error('Error fetching entities:', error);
-    return [];
-  }
-}
-
-/**
  * Trigger a sync for an integration
  *
  * @param sourceId - The external source ID to sync
@@ -206,34 +163,6 @@ export async function triggerSync(
 }
 
 /**
- * Get sync statistics for a source
- */
-export async function getSyncStats(
-  sourceId: string
-): Promise<{ stats: Record<string, number> } | null> {
-  const baseUrl = getApiBaseUrl();
-
-  try {
-    const response = await fetch(`${baseUrl}/integrations/sources/${sourceId}/stats`, {
-      method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-    });
-
-    if (!response.ok) {
-      console.error('Failed to fetch sync stats:', response.status);
-      return null;
-    }
-
-    return await response.json();
-  } catch (error) {
-    console.error('Error fetching sync stats:', error);
-    return null;
-  }
-}
-
-/**
  * Create a new external source connection
  */
 export async function createExternalSource(
@@ -259,44 +188,6 @@ export async function createExternalSource(
     return await response.json();
   } catch (error) {
     console.error('Error creating external source:', error);
-    return null;
-  }
-}
-
-/**
- * Create a new entity
- */
-export async function createEntity(
-  name: string,
-  currency: string,
-  legalName?: string,
-  country?: string
-): Promise<Entity | null> {
-  const baseUrl = getApiBaseUrl();
-
-  try {
-    const response = await fetch(`${baseUrl}/integrations/entities`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        name,
-        currency,
-        legal_name: legalName,
-        country,
-      }),
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error('Failed to create entity:', response.status, errorText);
-      return null;
-    }
-
-    return await response.json();
-  } catch (error) {
-    console.error('Error creating entity:', error);
     return null;
   }
 }
@@ -404,36 +295,6 @@ export async function triggerNormalization(
     return await response.json();
   } catch (error) {
     console.error('Error triggering normalization:', error);
-    return null;
-  }
-}
-
-/**
- * Get normalization processing stats for a source
- *
- * Returns counts by status, entity type, and combined status/type.
- *
- * @param sourceId - The external source ID to get stats for
- */
-export async function getNormalizationStats(sourceId: string): Promise<NormalizationStats | null> {
-  const baseUrl = getApiBaseUrl();
-
-  try {
-    const response = await fetch(`${baseUrl}/normalization/stats?source_id=${sourceId}`, {
-      method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-    });
-
-    if (!response.ok) {
-      console.error('Failed to fetch normalization stats:', response.status);
-      return null;
-    }
-
-    return await response.json();
-  } catch (error) {
-    console.error('Error fetching normalization stats:', error);
     return null;
   }
 }

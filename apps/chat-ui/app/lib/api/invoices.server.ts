@@ -10,17 +10,7 @@
 
 import { getServerSupabaseClient } from '~/lib/supabase';
 import type { SupabaseClient } from '@supabase/supabase-js';
-import type {
-  Contact,
-  Invoice,
-  InvoiceFilters,
-  InvoiceStats,
-  UpdateInvoiceStatusInput,
-} from '~/types/invoice';
-
-export type { Contact, Invoice, InvoiceStats };
-// Re-export key types for convenience
-export type { InvoiceType, InvoiceStatus, ContactType, InvoiceLineItem } from '~/types/invoice';
+import type { Invoice, InvoiceFilters, InvoiceStats } from '~/types/invoice';
 
 // Use shared Supabase client
 const getSupabaseClient = getServerSupabaseClient;
@@ -29,34 +19,6 @@ const getClient = (override?: SupabaseClient) => override ?? getSupabaseClient()
 // ============================================================================
 // STORAGE HELPERS
 // ============================================================================
-
-/**
- * Upload an invoice file to Supabase Storage
- * Returns the storage path on success.
- */
-export async function uploadInvoiceFile(
-  file: File,
-  entityId?: string
-): Promise<{ path: string; error: string | null }> {
-  const supabase = getSupabaseClient();
-
-  const timestamp = Date.now();
-  const sanitizedName = file.name.replace(/[^a-zA-Z0-9.-]/g, '_');
-  const folder = entityId || 'general';
-  const filePath = `${folder}/${timestamp}-${sanitizedName}`;
-
-  const { data, error } = await supabase.storage.from('invoices').upload(filePath, file, {
-    contentType: file.type || 'application/pdf',
-    upsert: false,
-  });
-
-  if (error) {
-    console.error('Error uploading invoice file:', error);
-    return { path: '', error: error.message };
-  }
-
-  return { path: data.path, error: null };
-}
 
 /**
  * Get a signed URL for viewing/downloading an invoice file.
@@ -77,24 +39,6 @@ export async function getInvoiceUrl(
   }
 
   return data.signedUrl;
-}
-
-/**
- * Delete a file from Supabase Storage.
- */
-export async function deleteInvoiceFile(
-  filePath: string
-): Promise<{ success: boolean; error: string | null }> {
-  const supabase = getSupabaseClient();
-
-  const { error } = await supabase.storage.from('invoices').remove([filePath]);
-
-  if (error) {
-    console.error('Error deleting invoice file:', error);
-    return { success: false, error: error.message };
-  }
-
-  return { success: true, error: null };
 }
 
 // ============================================================================
@@ -120,30 +64,6 @@ export async function getInvoice(
 
   if (error) {
     console.error('Error fetching invoice:', error);
-    return { invoice: null, error: error.message };
-  }
-
-  return { invoice: data as unknown as Invoice, error: null };
-}
-
-/**
- * Update invoice status.
- */
-export async function updateInvoiceStatus(
-  id: string,
-  input: UpdateInvoiceStatusInput
-): Promise<{ invoice: Invoice | null; error: string | null }> {
-  const supabase = getSupabaseClient();
-
-  const { data, error } = await supabase
-    .from('invoices')
-    .update({ status: input.status, updated_at: new Date().toISOString() })
-    .eq('id', id)
-    .select()
-    .single();
-
-  if (error) {
-    console.error('Error updating invoice status:', error);
     return { invoice: null, error: error.message };
   }
 
@@ -294,46 +214,3 @@ export async function getInvoiceStats(
   return stats;
 }
 
-// ============================================================================
-// CONTACTS
-// ============================================================================
-
-/**
- * List contacts for an entity.
- */
-export async function listContacts(
-  entityId?: string
-): Promise<{ contacts: Contact[]; error: string | null }> {
-  const supabase = getSupabaseClient();
-
-  let query = supabase.from('contacts').select('*');
-
-  if (entityId) query = query.eq('entity_id', entityId);
-
-  const { data, error } = await query.eq('is_active', true).order('name', { ascending: true });
-
-  if (error) {
-    console.error('Error listing contacts:', error);
-    return { contacts: [], error: error.message };
-  }
-
-  return { contacts: data as Contact[], error: null };
-}
-
-/**
- * Get a single contact by ID.
- */
-export async function getContact(
-  id: string
-): Promise<{ contact: Contact | null; error: string | null }> {
-  const supabase = getSupabaseClient();
-
-  const { data, error } = await supabase.from('contacts').select('*').eq('id', id).single();
-
-  if (error) {
-    console.error('Error fetching contact:', error);
-    return { contact: null, error: error.message };
-  }
-
-  return { contact: data as Contact, error: null };
-}

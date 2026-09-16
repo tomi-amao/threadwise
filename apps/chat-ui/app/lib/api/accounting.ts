@@ -54,19 +54,6 @@ export interface Journal {
   line_items?: JournalLineItem[];
 }
 
-export interface BatchJournalResult {
-  created: number;
-  skipped: number;
-  errors: string[];
-  journals?: Array<{ id: string; description: string }>;
-}
-
-export interface ListJournalsResponse {
-  entity_id: string;
-  journals: Journal[];
-  count: number;
-}
-
 // ============================================================================
 // Generate-All Pipeline Types
 // ============================================================================
@@ -131,67 +118,6 @@ export interface GenerateAllResult {
 // Journal Creation
 // ============================================================================
 
-/**
- * Create accrual journals for captured payments.
- * DR Clearing (1012) = net_amount, DR Bank Charges (8020) = fees
- * CR Revenue (4020), Shipping, Tax Payable (2030)
- */
-export async function accruePayments(
-  entityId: string,
-  paymentIds?: string[]
-): Promise<BatchJournalResult> {
-  const baseUrl = getApiBaseUrl();
-  const response = await fetch(`${baseUrl}/accounting/journals/accrue`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      entity_id: entityId,
-      ...(paymentIds && { payment_ids: paymentIds }),
-    }),
-  });
-
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`Failed to accrue payments: ${errorText}`);
-  }
-
-  return response.json();
-}
-
-/**
- * Create expense journals for categorized bank transactions.
- * DR 6xxx Expense account
- * CR Cash (1000/1100)
- */
-export async function journalExpenses(
-  entityId: string,
-  transactionIds?: string[]
-): Promise<BatchJournalResult> {
-  const baseUrl = getApiBaseUrl();
-  const response = await fetch(`${baseUrl}/accounting/journals/expense`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      entity_id: entityId,
-      ...(transactionIds && { transaction_ids: transactionIds }),
-    }),
-  });
-
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`Failed to journal expenses: ${errorText}`);
-  }
-
-  return response.json();
-}
-
-// ============================================================================
-// Journal Listing
-// ============================================================================
-
-/**
- * List journals with optional filters.
- */
 // ============================================================================
 // Chart of Accounts
 // ============================================================================
@@ -222,31 +148,6 @@ export async function fetchChartOfAccounts(entityId: string): Promise<ChartOfAcc
   const data = await response.json();
   // API returns { entity_id, accounts: [...] }
   return (data.accounts ?? []) as ChartOfAccountEntry[];
-}
-
-export async function listJournals(
-  entityId: string,
-  journalType?: string,
-  statusFilter?: string,
-  limit: number = 100
-): Promise<ListJournalsResponse> {
-  const baseUrl = getApiBaseUrl();
-  const params = new URLSearchParams({ entity_id: entityId });
-  if (journalType) params.set('journal_type', journalType);
-  if (statusFilter) params.set('status_filter', statusFilter);
-  params.set('limit', String(limit));
-
-  const response = await fetch(`${baseUrl}/accounting/journals?${params}`, {
-    method: 'GET',
-    headers: { 'Content-Type': 'application/json' },
-  });
-
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`Failed to list journals: ${errorText}`);
-  }
-
-  return response.json();
 }
 
 // ============================================================================

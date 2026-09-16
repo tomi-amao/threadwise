@@ -26,28 +26,6 @@ export function cn(...inputs: ClassValue[]) {
 }
 
 /**
- * Format timestamp for message display
- *
- * Converts ISO timestamp to user-friendly time format
- * Uses 12-hour format with AM/PM for consistency across the app
- *
- * @param timestamp - ISO timestamp string or Date object
- * @returns Formatted time string (e.g., "2:30 PM", "10:45 AM")
- *
- * @example
- * formatTimestamp("2023-10-27T14:30:00Z") // "2:30 PM"
- * formatTimestamp(new Date()) // Current time formatted
- */
-export function formatTimestamp(timestamp: string | Date): string {
-  const date = typeof timestamp === 'string' ? new Date(timestamp) : timestamp;
-  return new Intl.DateTimeFormat('en-US', {
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: true,
-  }).format(date);
-}
-
-/**
  * Format date for thread list display
  *
  * Provides human-friendly relative date formatting:
@@ -87,31 +65,3 @@ export function formatDate(timestamp: string | Date): string {
   }
 }
 
-/**
- * Generate unique thread identifier
- *
- * Creates a unique ID for new conversation threads
- * Format: "thread_{timestamp}_{randomString}"
- * Ensures uniqueness across concurrent thread creation
- *
- * @returns Unique thread ID string
- *
- */
-/**
- * Truncate text with ellipsis for UI display
- *
- * Safely truncates long text strings for display in constrained UI elements
- * like thread previews, ensuring proper word boundaries when possible
- *
- * @param text - Text string to potentially truncate
- * @param maxLength - Maximum allowed character length
- * @returns Truncated text with ellipsis if needed
- *
- * @example
- * truncateText("This is a very long message", 20) // "This is a very long..."
- * truncateText("Short text", 50) // "Short text" (unchanged)
- */
-export function truncateText(text: string, maxLength: number): string {
-  if (text.length <= maxLength) return text;
-  return text.slice(0, maxLength).trim() + '...';
-}
