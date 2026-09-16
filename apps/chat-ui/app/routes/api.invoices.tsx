@@ -114,9 +114,9 @@ export async function action({ request }: ActionFunctionArgs) {
           return json({ error: 'invoiceId and status are required' }, { status: 400 });
         }
 
-        const { invoice: current, error: fetchError } = await getInvoice(invoiceId);
-        if (fetchError || !current) {
-          return json({ error: fetchError ?? 'Invoice not found' }, { status: 404 });
+        const current = await getInvoice(invoiceId);
+        if (!current) {
+          return json({ error: 'Invoice not found' }, { status: 404 });
         }
         if (!current.entity_id) {
           return json({ error: 'Invoice has no entity_id' }, { status: 422 });
@@ -182,8 +182,7 @@ export async function action({ request }: ActionFunctionArgs) {
           return json({ error: 'Invoice ID required' }, { status: 400 });
         }
 
-        const { success, error } = await deleteInvoice(invoiceId);
-        if (error) return json({ error }, { status: 500 });
+        await deleteInvoice(invoiceId);
         return json({ success: true });
       }
 
@@ -193,8 +192,8 @@ export async function action({ request }: ActionFunctionArgs) {
           return json({ error: 'Invoice ID required' }, { status: 400 });
         }
 
-        const { invoice, error } = await getInvoice(invoiceId);
-        if (error || !invoice) return json({ error: error ?? 'Not found' }, { status: 404 });
+        const invoice = await getInvoice(invoiceId);
+        if (!invoice) return json({ error: 'Not found' }, { status: 404 });
 
         // file_path holds the Supabase storage path; source is now the platform label
         const storagePath = invoice.file_path;
@@ -202,7 +201,6 @@ export async function action({ request }: ActionFunctionArgs) {
           return json({ error: 'No file attached to this invoice' }, { status: 404 });
 
         const signedUrl = await getInvoiceUrl(storagePath);
-        if (!signedUrl) return json({ error: 'Failed to generate URL' }, { status: 500 });
 
         return json({ success: true, signedUrl });
       }
@@ -213,15 +211,14 @@ export async function action({ request }: ActionFunctionArgs) {
           return json({ error: 'Invoice ID required' }, { status: 400 });
         }
 
-        const { invoice, error } = await getInvoice(invoiceId);
-        if (error || !invoice) return json({ error: error ?? 'Not found' }, { status: 404 });
+        const invoice = await getInvoice(invoiceId);
+        if (!invoice) return json({ error: 'Not found' }, { status: 404 });
 
         const storagePath = invoice.file_path;
         if (!storagePath)
           return json({ error: 'No file attached to this invoice' }, { status: 404 });
 
         const signedUrl = await getInvoiceUrl(storagePath, 60);
-        if (!signedUrl) return json({ error: 'Failed to generate download URL' }, { status: 500 });
 
         return redirect(signedUrl);
       }
@@ -404,6 +401,6 @@ export async function action({ request }: ActionFunctionArgs) {
 
 // Loader for fetching invoices list + stats
 export async function loader() {
-  const [{ invoices }, stats] = await Promise.all([listInvoices(), getInvoiceStats()]);
+  const [invoices, stats] = await Promise.all([listInvoices(), getInvoiceStats()]);
   return json({ invoices, stats });
 }

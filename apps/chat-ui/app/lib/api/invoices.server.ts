@@ -22,11 +22,9 @@ const getClient = (override?: SupabaseClient) => override ?? getSupabaseClient()
 
 /**
  * Get a signed URL for viewing/downloading an invoice file.
+ * Throws if the signed URL can't be created.
  */
-export async function getInvoiceUrl(
-  filePath: string,
-  expiresIn: number = 3600
-): Promise<string | null> {
+export async function getInvoiceUrl(filePath: string, expiresIn: number = 3600): Promise<string> {
   const supabase = getSupabaseClient();
 
   const { data, error } = await supabase.storage
@@ -35,7 +33,7 @@ export async function getInvoiceUrl(
 
   if (error) {
     console.error('Error getting signed URL:', error);
-    return null;
+    throw new Error(`Failed to get signed URL: ${error.message}`);
   }
 
   return data.signedUrl;
@@ -47,10 +45,9 @@ export async function getInvoiceUrl(
 
 /**
  * Get a single invoice by ID, with joined contact and line items.
+ * Returns null if no invoice matches; throws on any other error.
  */
-export async function getInvoice(
-  id: string
-): Promise<{ invoice: Invoice | null; error: string | null }> {
+export async function getInvoice(id: string): Promise<Invoice | null> {
   const supabase = getSupabaseClient();
 
   const { data, error } = await supabase
@@ -63,16 +60,19 @@ export async function getInvoice(
     .single();
 
   if (error) {
+    if (error.code === 'PGRST116') return null; // no rows matched
     console.error('Error fetching invoice:', error);
-    return { invoice: null, error: error.message };
+    throw new Error(`Failed to fetch invoice: ${error.message}`);
   }
 
-  return { invoice: data as unknown as Invoice, error: null };
+  return data as unknown as Invoice;
 }
 
 /**
  * Check whether a financial transaction exists that is matched to the given invoice.
  * Uses metadata.invoice_id to find transactions referencing the invoice number.
+ * found: false means "no match" — a legitimate result, not an error. Throws
+ * if the query itself fails.
  */
 export async function findMatchingTransaction(
   invoiceNumber: string,
@@ -95,7 +95,7 @@ export async function findMatchingTransaction(
 
   if (error) {
     console.error('Error checking matching transaction:', error);
-    return { transactionId: null, found: false };
+    throw new Error(`Failed to check for matching transaction: ${error.message}`);
   }
 
   return { transactionId: data?.id ?? null, found: !!data };
@@ -103,29 +103,27 @@ export async function findMatchingTransaction(
 
 /**
  * Delete invoice metadata record (storage file handled separately).
+ * Throws on failure.
  */
-export async function deleteInvoice(
-  id: string
-): Promise<{ success: boolean; error: string | null }> {
+export async function deleteInvoice(id: string): Promise<void> {
   const supabase = getSupabaseClient();
 
   const { error } = await supabase.from('invoices').delete().eq('id', id);
 
   if (error) {
     console.error('Error deleting invoice:', error);
-    return { success: false, error: error.message };
+    throw new Error(`Failed to delete invoice: ${error.message}`);
   }
-
-  return { success: true, error: null };
 }
 
 /**
  * List invoices with optional filters, joining contact name and line items.
+ * Throws on failure.
  */
 export async function listInvoices(
   filters?: InvoiceFilters,
   client?: SupabaseClient
-): Promise<{ invoices: Invoice[]; error: string | null }> {
+): Promise<Invoice[]> {
   const supabase = getClient(client);
 
   let query = supabase
@@ -150,14 +148,15 @@ export async function listInvoices(
 
   if (error) {
     console.error('Error listing invoices:', error);
-    return { invoices: [], error: error.message };
+    throw new Error(`Failed to list invoices: ${error.message}`);
   }
 
-  return { invoices: data as unknown as Invoice[], error: null };
+  return data as unknown as Invoice[];
 }
 
 /**
  * Compute invoice statistics split by SALE / PURCHASE type.
+ * Throws on failure.
  */
 export async function getInvoiceStats(
   entityId?: string,
@@ -171,13 +170,16 @@ export async function getInvoiceStats(
 
   const { data, error } = await query;
 
+  if (error) {
+    console.error('Error computing invoice stats:', error);
+    throw new Error(`Failed to compute invoice stats: ${error.message}`);
+  }
+
   const empty = {
     total: 0,
     sales: { total: 0, open: 0, paid: 0, overdue: 0, outstanding: 0 },
     purchases: { total: 0, open: 0, paid: 0, overdue: 0, payable: 0 },
   };
-
-  if (error || !data) return empty;
 
   const stats: InvoiceStats = { ...empty, total: data.length };
 
