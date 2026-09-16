@@ -26,7 +26,6 @@ from .middleware import (
 
 # Import agent graphs (lazy to avoid circular imports)
 # Use: from ai_agent.agents.graph_agent import agent
-# Use: from ai_agent.agents.agent import agent
 
 __all__ = [
     # Prompts

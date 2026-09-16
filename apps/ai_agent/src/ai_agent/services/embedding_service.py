@@ -35,7 +35,6 @@ try:
 except ImportError:
     HuggingFaceEmbeddings = None
 
-from langchain_core.documents import Document as LangChainDocument
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
@@ -44,11 +43,6 @@ try:
 except ImportError:
     Pinecone = None
     ServerlessSpec = None
-
-try:
-    from langchain_pinecone import PineconeVectorStore
-except ImportError:
-    PineconeVectorStore = None
 
 from dotenv import load_dotenv
 
