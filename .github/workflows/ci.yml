@@ -20,10 +20,37 @@ env:
   PNPM_VERSION: '10.11.0'
 
 jobs:
+  changes:
+    name: Detect Changed Areas
+    runs-on: ubuntu-latest
+    outputs:
+      frontend: ${{ steps.filter.outputs.frontend }}
+      backend: ${{ steps.filter.outputs.backend }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Filter paths
+        uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            frontend:
+              - 'apps/chat-ui/**'
+              - 'package.json'
+              - 'pnpm-lock.yaml'
+              - 'pnpm-workspace.yaml'
+              - '.github/workflows/ci.yml'
+            backend:
+              - 'apps/ai_agent/**'
+              - '.github/workflows/ci.yml'
+
   # Frontend CI Jobs
   frontend-lint:
     name: Frontend Lint & Format
     runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.frontend == 'true'
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -51,6 +78,8 @@ jobs:
   frontend-typecheck:
     name: Frontend Type Check
     runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.frontend == 'true'
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -75,7 +104,8 @@ jobs:
   frontend-build:
     name: Frontend Build
     runs-on: ubuntu-latest
-    needs: [frontend-lint, frontend-typecheck]
+    needs: [changes, frontend-lint, frontend-typecheck]
+    if: needs.changes.outputs.frontend == 'true'
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -112,6 +142,8 @@ jobs:
   backend-lint:
     name: Backend Lint & Format Check
     runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.backend == 'true'
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -155,6 +187,8 @@ jobs:
   backend-typecheck:
     name: Backend Type Check
     runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.backend == 'true'
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -190,6 +224,8 @@ jobs:
   backend-security:
     name: Backend Security Scan
     runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.backend == 'true'
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -225,6 +261,8 @@ jobs:
   backend-test:
     name: Backend Tests
     runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.backend == 'true'
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -271,7 +309,8 @@ jobs:
   backend-build:
     name: Backend Build
     runs-on: ubuntu-latest
-    needs: [backend-lint, backend-typecheck, backend-security, backend-test]
+    needs: [changes, backend-lint, backend-typecheck, backend-security, backend-test]
+    if: needs.changes.outputs.backend == 'true'
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -315,13 +354,22 @@ jobs:
   ci-success:
     name: CI Success
     runs-on: ubuntu-latest
-    needs: [frontend-build, backend-build]
+    needs: [changes, frontend-build, backend-build]
     if: always()
     steps:
-      - name: Check all jobs status
+      - name: Check required jobs status
         run: |
-          if [[ "${{ needs.frontend-build.result }}" != "success" ]] || [[ "${{ needs.backend-build.result }}" != "success" ]]; then
-            echo "One or more CI jobs failed"
+          FRONTEND_CHANGED="${{ needs.changes.outputs.frontend }}"
+          BACKEND_CHANGED="${{ needs.changes.outputs.backend }}"
+          FRONTEND_RESULT="${{ needs.frontend-build.result }}"
+          BACKEND_RESULT="${{ needs.backend-build.result }}"
+
+          if [[ "$FRONTEND_CHANGED" == "true" && "$FRONTEND_RESULT" != "success" ]]; then
+            echo "Frontend CI failed (result: $FRONTEND_RESULT)"
             exit 1
           fi
-          echo "All CI jobs passed successfully!"
+          if [[ "$BACKEND_CHANGED" == "true" && "$BACKEND_RESULT" != "success" ]]; then
+            echo "Backend CI failed (result: $BACKEND_RESULT)"
+            exit 1
+          fi
+          echo "All required CI jobs passed successfully!"
