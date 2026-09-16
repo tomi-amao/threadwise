@@ -1,0 +1,269 @@
+name: Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy to'
+        required: true
+        type: choice
+        options:
+          - development
+          - staging
+          - production
+      version:
+        description: 'Version/tag to deploy (leave empty for latest main)'
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  packages: read
+  deployments: write
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_PREFIX: ${{ github.repository }}
+
+jobs:
+  validate-deployment:
+    name: Validate Deployment Request
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.validate.outputs.version }}
+      environment: ${{ steps.validate.outputs.environment }}
+    steps:
+      - name: Validate inputs
+        id: validate
+        run: |
+          ENVIRONMENT="${{ github.event.inputs.environment }}"
+          VERSION="${{ github.event.inputs.version }}"
+
+          if [ -z "$VERSION" ]; then
+            VERSION="latest"
+          fi
+
+          echo "environment=$ENVIRONMENT" >> $GITHUB_OUTPUT
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+          echo "📦 Deploying version: $VERSION"
+          echo "🎯 Target environment: $ENVIRONMENT"
+
+  pre-deployment-checks:
+    name: Pre-Deployment Checks
+    needs: validate-deployment
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.validate-deployment.outputs.version != 'latest' && needs.validate-deployment.outputs.version || 'main' }}
+
+      - name: Verify Docker images exist
+        run: |
+          VERSION="${{ needs.validate-deployment.outputs.version }}"
+
+          echo "Checking if Docker images exist for version: $VERSION"
+
+          # Check chat-ui image
+          docker manifest inspect ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/chat-ui:$VERSION || {
+            echo "❌ Chat UI image not found for version $VERSION"
+            exit 1
+          }
+
+          # Check ai-agent image
+          docker manifest inspect ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/ai-agent:$VERSION || {
+            echo "❌ AI Agent image not found for version $VERSION"
+            exit 1
+          }
+
+          echo "✅ All Docker images verified"
+
+      - name: Production approval required
+        if: needs.validate-deployment.outputs.environment == 'production'
+        uses: trstringer/manual-approval@v1
+        with:
+          secret: ${{ github.TOKEN }}
+          approvers: ${{ github.repository_owner }}
+          minimum-approvals: 1
+          issue-title: 'Deploy ${{ needs.validate-deployment.outputs.version }} to Production'
+          issue-body: |
+            Please review and approve the production deployment.
+
+            **Version**: ${{ needs.validate-deployment.outputs.version }}
+            **Triggered by**: @${{ github.actor }}
+
+            Review the changes and approve this issue to proceed with deployment.
+
+  deploy:
+    name: Deploy to ${{ needs.validate-deployment.outputs.environment }}
+    needs: [validate-deployment, pre-deployment-checks]
+    runs-on: ubuntu-latest
+    environment:
+      name: ${{ needs.validate-deployment.outputs.environment }}
+      url: ${{ steps.deploy.outputs.url }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.validate-deployment.outputs.version != 'latest' && needs.validate-deployment.outputs.version || 'main' }}
+
+      - name: Configure environment
+        id: configure
+        run: |
+          ENVIRONMENT="${{ needs.validate-deployment.outputs.environment }}"
+
+          case $ENVIRONMENT in
+            development)
+              echo "url=https://dev.threadwise.app" >> $GITHUB_OUTPUT
+              echo "replicas=1" >> $GITHUB_OUTPUT
+              ;;
+            staging)
+              echo "url=https://staging.threadwise.app" >> $GITHUB_OUTPUT
+              echo "replicas=2" >> $GITHUB_OUTPUT
+              ;;
+            production)
+              echo "url=https://threadwise.app" >> $GITHUB_OUTPUT
+              echo "replicas=3" >> $GITHUB_OUTPUT
+              ;;
+          esac
+
+      # TODO: Customize this section based on your deployment platform
+      # Examples: AWS ECS, Google Cloud Run, Kubernetes, Docker Swarm, etc.
+
+      - name: Deploy to server (Example - Customize for your setup)
+        id: deploy
+        run: |
+          echo "🚀 Deploying to ${{ needs.validate-deployment.outputs.environment }}"
+          echo "📦 Version: ${{ needs.validate-deployment.outputs.version }}"
+          echo "🔗 URL: ${{ steps.configure.outputs.url }}"
+
+          # Example deployment commands (replace with your actual deployment logic):
+
+          # Option 1: Docker Compose SSH deployment
+          # ssh user@server "cd /app && docker-compose pull && docker-compose up -d"
+
+          # Option 2: Kubernetes deployment
+          # kubectl set image deployment/chat-ui chat-ui=${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/chat-ui:${{ needs.validate-deployment.outputs.version }}
+          # kubectl set image deployment/ai-agent ai-agent=${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/ai-agent:${{ needs.validate-deployment.outputs.version }}
+
+          # Option 3: AWS ECS
+          # aws ecs update-service --cluster threadwise --service chat-ui --force-new-deployment
+
+          # Option 4: Google Cloud Run
+          # gcloud run deploy chat-ui --image=${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/chat-ui:${{ needs.validate-deployment.outputs.version }}
+
+          echo "✅ Deployment command executed"
+          echo "url=${{ steps.configure.outputs.url }}" >> $GITHUB_OUTPUT
+
+  run-migrations:
+    name: Run Database Migrations
+    needs: [validate-deployment, deploy]
+    runs-on: ubuntu-latest
+    if: needs.validate-deployment.outputs.environment != 'development'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.validate-deployment.outputs.version != 'latest' && needs.validate-deployment.outputs.version || 'main' }}
+
+      - name: Run Supabase migrations
+        run: |
+          echo "Running database migrations for ${{ needs.validate-deployment.outputs.environment }}"
+
+          # TODO: Add your migration commands here
+          # Example: npx supabase db push
+          # Or: psql $DATABASE_URL -f infrastructure/supabase/volumes/db/migrations/latest.sql
+
+          echo "✅ Migrations completed"
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+
+  health-check:
+    name: Post-Deployment Health Check
+    needs: [validate-deployment, deploy, run-migrations]
+    runs-on: ubuntu-latest
+    if: always() && needs.deploy.result == 'success'
+    steps:
+      - name: Wait for services to stabilize
+        run: sleep 30
+
+      - name: Check Chat UI health
+        run: |
+          URL="${{ needs.deploy.outputs.url }}"
+          echo "Checking Chat UI at $URL"
+
+          RETRIES=5
+          for i in $(seq 1 $RETRIES); do
+            HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "$URL" || echo "000")
+            if [ "$HTTP_CODE" = "200" ] || [ "$HTTP_CODE" = "301" ] || [ "$HTTP_CODE" = "302" ]; then
+              echo "✅ Chat UI is healthy (HTTP $HTTP_CODE)"
+              exit 0
+            fi
+            echo "Attempt $i/$RETRIES: HTTP $HTTP_CODE (retrying in 10s...)"
+            sleep 10
+          done
+
+          echo "❌ Chat UI health check failed after $RETRIES attempts"
+          exit 1
+
+      - name: Check AI Agent API health
+        run: |
+          # Adjust the API URL based on your environment
+          API_URL="${{ needs.deploy.outputs.url }}/api"
+          echo "Checking AI Agent API at $API_URL"
+
+          RETRIES=5
+          for i in $(seq 1 $RETRIES); do
+            HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "$API_URL/health" || echo "000")
+            if [ "$HTTP_CODE" = "200" ]; then
+              echo "✅ AI Agent API is healthy"
+              exit 0
+            fi
+            echo "Attempt $i/$RETRIES: HTTP $HTTP_CODE (retrying in 10s...)"
+            sleep 10
+          done
+
+          echo "❌ AI Agent API health check failed after $RETRIES attempts"
+          exit 1
+
+  rollback:
+    name: Rollback Deployment
+    needs: [validate-deployment, deploy, health-check]
+    runs-on: ubuntu-latest
+    if: failure()
+    steps:
+      - name: Rollback to previous version
+        run: |
+          echo "⚠️ Deployment failed, initiating rollback"
+
+          # TODO: Add rollback logic for your deployment platform
+          # Example kubectl: kubectl rollout undo deployment/chat-ui
+          # Example docker-compose: docker-compose down && docker-compose up -d
+
+          echo "🔄 Rollback completed"
+
+  deployment-summary:
+    name: Deployment Summary
+    needs: [validate-deployment, deploy, health-check]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Create deployment summary
+        run: |
+          echo "## 🚀 Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Environment**: ${{ needs.validate-deployment.outputs.environment }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Version**: ${{ needs.validate-deployment.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Deployed by**: @${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Status**: ${{ job.status }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          if [ "${{ needs.health-check.result }}" = "success" ]; then
+            echo "✅ **Deployment Status**: Successful" >> $GITHUB_STEP_SUMMARY
+            echo "🔗 **Application URL**: ${{ needs.deploy.outputs.url }}" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "❌ **Deployment Status**: Failed" >> $GITHUB_STEP_SUMMARY
+            echo "Check the logs above for more details." >> $GITHUB_STEP_SUMMARY
+          fi

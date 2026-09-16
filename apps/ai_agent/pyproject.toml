@@ -29,6 +29,13 @@ dependencies = [
     "langchain (>=1.0.2,<2.0.0)",
     "langgraph-cli[inmem] (>=0.4.4,<0.5.0)",
     "langchain-text-splitters (>=1.0.0,<2.0.0)",
+    "langgraph-checkpoint-postgres (>=3.0.0,<4.0.0)",
+    "langchain-google-genai (>=4.2.0,<5.0.0)",
+    # Pinecone vector store integration
+    "pinecone (>=5.0.0)",
+    "langchain-pinecone (>=0.2.0)",
+    "inngest (>=0.5.15,<0.6.0)",
+    "langchain-mcp-adapters (>=0.2.1,<0.3.0)",
 ]
 
 [tool.poetry]
@@ -47,6 +54,9 @@ python_version = "3.13"
 warn_return_any = true
 warn_unused_configs = true
 
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
 
 [tool.poetry.group.dev.dependencies]
 black = "^25.1.0"

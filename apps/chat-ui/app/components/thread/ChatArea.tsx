@@ -1,26 +1,26 @@
-import React from "react";
-import { useChat } from "~/providers/ChatProvider";
-import { MessageList } from "./messages/MessageList";
-import { MessageInput } from "./messages/MessageInput";
-import { Robot, User } from "phosphor-react";
+import React from 'react';
+import { useChat } from '~/providers/ChatProvider';
+import { MessageList } from './messages/MessageList';
+import { MessageInput } from './messages/MessageInput';
+import { Robot, User } from 'phosphor-react';
 
 /**
  * ChatArea Component - Main conversation interface for ThreadWise
- * 
+ *
  * Provides the primary chat interface where users interact with ThreadWise AI Agent
- * 
+ *
  * Features:
  * - Responsive layout with desktop header/mobile header in ChatLayout
  * - Message list with scrolling and auto-focus
  * - Message input with auto-resize and validation
  * - AI Agent status indicators (thinking, interruptions)
  * - Empty state handling for no thread selection
- * 
+ *
  * Layout Strategy:
  * - Desktop: Shows header with assistant info and status
  * - Mobile: Header handled by ChatLayout for better space usage
  * - Flexible message area with input pinned to bottom
- * 
+ *
  * Integration Points:
  * - Uses ChatProvider for current thread and loading state
  * - Integrates with ThreadWise AI Agent API via ChatProvider
@@ -45,7 +45,8 @@ export function ChatArea() {
   }
 
   return (
-    <div className="flex-1 flex flex-col bg-background overflow-hidden">
+    <div className="flex-1 flex flex-col bg-background overflow-hidden max-h-full">
+      {/* Ensure proper height constraints */}
       {/* 
         Desktop Header - Hidden on mobile for space efficiency
         - Shows ThreadWise AI Agent branding and status
@@ -64,12 +65,10 @@ export function ChatArea() {
               <h2 className="font-semibold text-foreground">
                 {currentThread.metadata?.title || 'ThreadWise Assistant'}
               </h2>
-              <p className="text-sm text-muted-foreground">
-                AI-powered business intelligence
-              </p>
+              <p className="text-sm text-muted-foreground">AI-powered business intelligence</p>
             </div>
           </div>
-          
+
           {/* 
             Real-time Status Indicators
             - Interrupted: Shows when agent processing was stopped
@@ -100,7 +99,8 @@ export function ChatArea() {
         - Flexible layout that works on all screen sizes
         - Auto-scroll behavior handled by MessageList
       */}
-      <div className="flex-1 flex flex-col overflow-hidden">
+      <div className="flex-1 flex flex-col overflow-hidden max-h-full">
+        {/* Prevent overflow beyond container */}
         <MessageList />
         <MessageInput />
       </div>

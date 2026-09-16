@@ -1,33 +1,32 @@
-import React, { useState } from "react";
-import { useChat } from "~/providers/ChatProvider";
-import { Button } from "~/components/ui/button";
-import { Card } from "~/components/ui/card";
+import React, { useState } from 'react';
+import { useChat } from '~/providers/ChatProvider';
+import { Button } from '~/components/ui/button';
+import { Card } from '~/components/ui/card';
 import {
   ContextMenu,
   ContextMenuContent,
   ContextMenuItem,
   ContextMenuSeparator,
   ContextMenuTrigger,
-} from "~/components/ui/context-menu";
-import { formatDate } from "~/lib/utils";
-import { 
-  Plus, 
-  ChatCircle, 
-  Trash, 
+} from '~/components/ui/context-menu';
+import { formatDate } from '~/lib/utils';
+import {
+  Plus,
+  ChatCircle,
+  Trash,
   DotsThree,
-  Chat,
   X,
   ArrowClockwise,
   Spinner,
   Copy,
-  Check
-} from "phosphor-react";
+  Check,
+} from 'phosphor-react';
 
 /**
  * ThreadSidebar Component - LangGraph-integrated conversation list interface
- * 
+ *
  * Now integrates with real LangGraph server data and URL-based navigation
- * 
+ *
  * Features:
  * - Real thread data from LangGraph server
  * - URL-based thread navigation with query parameters
@@ -39,18 +38,18 @@ import {
  */
 
 interface ThreadSidebarProps {
-  onClose?: () => void;  // Optional close handler for mobile overlay mode
+  onClose?: () => void; // Optional close handler for mobile overlay mode
 }
 
 export function ThreadSidebar({ onClose }: ThreadSidebarProps) {
-  const { 
-    threads, 
-    currentThread, 
-    createThread, 
-    selectThread, 
-    deleteThread, 
+  const {
+    threads,
+    currentThread,
+    createThread,
+    selectThread,
+    deleteThread,
     refreshThreads,
-    error 
+    error,
   } = useChat();
 
   const [copiedThreadId, setCopiedThreadId] = useState<string | null>(null);
@@ -62,7 +61,7 @@ export function ThreadSidebar({ onClose }: ThreadSidebarProps) {
     try {
       await createThread();
     } catch (error) {
-      console.error("Failed to create thread:", error);
+      console.error('Failed to create thread:', error);
       // TODO: Add toast notification for user feedback
     }
   };
@@ -72,7 +71,7 @@ export function ThreadSidebar({ onClose }: ThreadSidebarProps) {
    */
   const handleDeleteThread = async (threadId: string, e: React.MouseEvent) => {
     e.stopPropagation();
-    if (window.confirm("Are you sure you want to delete this conversation?")) {
+    if (window.confirm('Are you sure you want to delete this conversation?')) {
       await deleteThread(threadId);
     }
   };
@@ -95,7 +94,7 @@ export function ThreadSidebar({ onClose }: ThreadSidebarProps) {
     try {
       await refreshThreads();
     } catch (error) {
-      console.error("Failed to refresh threads:", error);
+      console.error('Failed to refresh threads:', error);
     }
   };
 
@@ -108,7 +107,7 @@ export function ThreadSidebar({ onClose }: ThreadSidebarProps) {
       setCopiedThreadId(threadId);
       setTimeout(() => setCopiedThreadId(null), 2000);
     } catch (error) {
-      console.error("Failed to copy thread ID:", error);
+      console.error('Failed to copy thread ID:', error);
     }
   };
 
@@ -118,29 +117,19 @@ export function ThreadSidebar({ onClose }: ThreadSidebarProps) {
         Sidebar Header with LangGraph integration indicators
       */}
       <div className="p-4 border-b border-sidebar-border">
-        <div className="flex items-center justify-between mb-4">
-          <div className="flex items-center gap-2">
-            <Chat size={24} className="text-sidebar-primary" weight="duotone" />
-            <h1 className="text-lg font-semibold text-sidebar-foreground">ThreadWise</h1>
-          </div>
-          
-          {/* Mobile-only close button */}
-          {onClose && (
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={onClose}
-              className="h-8 w-8 lg:hidden"
-            >
+        {/* Mobile-only close button */}
+        {onClose && (
+          <div className="flex items-center justify-end mb-4 lg:hidden">
+            <Button variant="ghost" size="icon" onClick={onClose} className="h-8 w-8">
               <X size={20} weight="bold" />
             </Button>
-          )}
-        </div>
-        
+          </div>
+        )}
+
         {/* Action buttons row */}
         <div className="flex gap-2">
           {/* Primary action: Create new conversation */}
-          <Button 
+          <Button
             onClick={handleNewThread}
             className="flex-1 bg-sidebar-primary hover:bg-sidebar-primary/90 text-sidebar-primary-foreground"
             size="sm"
@@ -148,7 +137,7 @@ export function ThreadSidebar({ onClose }: ThreadSidebarProps) {
             <Plus size={16} weight="bold" />
             New Chat
           </Button>
-          
+
           {/* Refresh button to sync with LangGraph server */}
           <Button
             variant="outline"
@@ -184,17 +173,17 @@ export function ThreadSidebar({ onClose }: ThreadSidebarProps) {
           </div>
         ) : (
           // Thread list with real LangGraph data
-          threads.map((thread) => {
+          threads.map(thread => {
             const isActive = currentThread?.thread_id === thread.thread_id;
             const isCopied = copiedThreadId === thread.thread_id;
-            
+
             return (
               <ContextMenu key={thread.thread_id}>
                 <ContextMenuTrigger asChild>
                   <Card
                     className={`p-3 cursor-pointer transition-all duration-200 hover:bg-sidebar-accent group ${
-                      isActive 
-                        ? 'bg-sidebar-accent border-sidebar-primary/50 shadow-sm' 
+                      isActive
+                        ? 'bg-sidebar-accent border-sidebar-primary/50 shadow-sm'
                         : 'bg-transparent border-transparent hover:border-sidebar-border'
                     }`}
                     onClick={() => handleSelectThread(thread.thread_id)}
@@ -207,24 +196,24 @@ export function ThreadSidebar({ onClose }: ThreadSidebarProps) {
                           <h3 className="font-medium text-sm text-sidebar-foreground truncate">
                             {thread.metadata?.title || 'New Conversation'}
                           </h3>
-                          
+
                           {/* Status indicator for interrupted threads */}
                           {thread.status === 'interrupted' && (
                             <div className="w-2 h-2 bg-yellow-500 rounded-full shrink-0" />
                           )}
-                          
+
                           {/* Active thread indicator */}
                           {isActive && (
                             <div className="w-2 h-2 bg-sidebar-primary rounded-full shrink-0" />
                           )}
                         </div>
-                        
+
                         {/* Thread metadata */}
                         <div className="flex items-center gap-2 mt-1">
                           <p className="text-xs text-muted-foreground">
                             {formatDate(thread.updated_at)}
                           </p>
-                          
+
                           {/* LangGraph thread ID for debugging */}
                           {import.meta.env.DEV && (
                             <>
@@ -236,7 +225,7 @@ export function ThreadSidebar({ onClose }: ThreadSidebarProps) {
                           )}
                         </div>
                       </div>
-                      
+
                       {/* 
                         Hover Actions
                       */}
@@ -245,7 +234,7 @@ export function ThreadSidebar({ onClose }: ThreadSidebarProps) {
                           variant="ghost"
                           size="icon"
                           className="h-6 w-6 text-muted-foreground hover:text-destructive"
-                          onClick={(e) => handleDeleteThread(thread.thread_id, e)}
+                          onClick={e => handleDeleteThread(thread.thread_id, e)}
                           title="Delete conversation"
                         >
                           <Trash size={12} />
@@ -270,7 +259,7 @@ export function ThreadSidebar({ onClose }: ThreadSidebarProps) {
                   </ContextMenuItem>
                   <ContextMenuSeparator />
                   <ContextMenuItem
-                    onClick={(e) => handleDeleteThread(thread.thread_id, e as any)}
+                    onClick={e => handleDeleteThread(thread.thread_id, e as any)}
                     className="text-destructive focus:text-destructive"
                   >
                     <Trash size={16} className="mr-2" weight="duotone" />
@@ -291,13 +280,13 @@ export function ThreadSidebar({ onClose }: ThreadSidebarProps) {
           <div>
             {threads.length} conversation{threads.length !== 1 ? 's' : ''}
           </div>
-          
+
           {/* Connection status indicator */}
           <div className="flex items-center justify-center gap-1">
             <div className="w-1.5 h-1.5 bg-green-500 rounded-full" />
             <span>Connected to LangGraph</span>
           </div>
-          
+
           {/* Development info */}
           {import.meta.env.DEV && (
             <div className="text-xs text-muted-foreground/60">
