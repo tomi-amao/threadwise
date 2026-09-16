@@ -18,6 +18,7 @@ import {
   useSearchParams,
 } from 'react-router';
 import { ResponsiveLine } from '@nivo/line';
+import { RouteErrorBoundary } from '~/components/RouteErrorBoundary';
 import { ResponsiveBar } from '@nivo/bar';
 import {
   FilePdf,
@@ -2812,4 +2813,8 @@ export default function ReportsPage() {
       />
     </div>
   );
+}
+
+export function ErrorBoundary() {
+  return <RouteErrorBoundary what="reports" />;
 }

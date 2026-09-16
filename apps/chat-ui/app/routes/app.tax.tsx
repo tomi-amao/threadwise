@@ -31,6 +31,7 @@ import {
 import { getTaxData } from '~/lib/api/tax.server';
 import type { TaxData, TaxPeriod, TaxDeadline, ProfitBreakdownLine } from '~/lib/api/tax.server';
 import type { AccountDrilldownData } from '~/lib/api/reports.server';
+import { RouteErrorBoundary } from '~/components/RouteErrorBoundary';
 
 export const meta: MetaFunction = () => [
   { title: 'Tax - ThreadWise' },
@@ -874,4 +875,8 @@ export default function TaxPage() {
       )}
     </div>
   );
+}
+
+export function ErrorBoundary() {
+  return <RouteErrorBoundary what="tax summary" />;
 }
