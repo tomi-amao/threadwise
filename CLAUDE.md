@@ -21,36 +21,52 @@ yet; docs and root scripts referencing them describe aspirational, not current, 
 
 ## ⚠️ Known issues to work around
 
-- **Root pnpm scripts targeting the frontend are broken.** `package.json`'s
-  `dev:react-router`, `build:react-router`, `typecheck:react-router`, and
-  `test:react-router` all run `pnpm --filter threadwise-react-router ...`, but
-  `apps/chat-ui/package.json`'s `name` is `threadwise-chat-ui` — the filter matches
-  no package and pnpm no-ops or errors. Use `pnpm --filter threadwise-chat-ui <script>`,
-  or `cd apps/chat-ui && pnpm <script>`, directly instead. This means `pnpm dev`,
-  `pnpm build`, `pnpm test`, and `pnpm typecheck` at the root are all currently
-  broken for the frontend half.
-- Frontend `typecheck` currently fails on pre-existing errors (stale `tsconfig`
-  `module` target rejecting `import.meta.env`/dynamic imports in several files,
-  plus a couple of real type mismatches) — these predate any given task; don't
-  assume you broke typecheck unless your diff touches those files.
-- `.github/copilot-instructions.md` describes an older layout (`apps/react-router/`,
-  empty `packages/*`, port 3000/8100 Docker mapping) that no longer matches the
-  codebase in several places — cross-check against actual files rather than
-  trusting it verbatim.
+A 2026-09 codebase health pass fixed most of the monorepo-wiring bugs that used
+to live in this section (broken root pnpm scripts, `apps/ai-agent`/`apps/ai_agent`
+path typos in `.gitignore`/`.pre-commit-config.yaml`, an empty stray
+`apps/ai_agent/__init__.py` that broke all of pytest, `bandit`/`flake8` not being
+real dependencies, a production-build-breaking route naming issue). What's left:
+
+- Frontend `typecheck` still fails on ~8 pre-existing genuine type errors
+  (`OnboardingModal` extra prop, a `ChatProvider` message-content type mismatch,
+  a couple of `ReactNode` mismatches, `tailwind.config.ts` darkMode typing) —
+  these predate any given task; don't assume you broke typecheck unless your
+  diff touches those specific files. (A larger batch of ~20 `import.meta`/
+  dynamic-import errors that used to dominate this list turned out to share one
+  root cause — `tsconfig.json` never set `module` explicitly, so with
+  `moduleResolution: "Bundler"` it silently resolved to `module: "es6"` — and
+  is a known, not-yet-applied one-line fix: add `"module": "ESNext"`.)
+- ESLint has a large pre-existing backlog (mostly `no-explicit-any` and
+  `no-unused-vars` across the newer route files) that the Husky `lint-staged`
+  hook's `eslint --fix` will refuse to commit past — it aborts the whole commit
+  on *any* remaining error in a staged file, including ones unrelated to your
+  change. Until that backlog is cleared, `git commit --no-verify` is the
+  practical workaround for otherwise-legitimate commits.
 - `apps/chat-ui/.env.local` is committed to git with live Supabase/LangSmith/Google
   API keys despite `.gitignore` listing `**/.env.local` — the ignore rule was added
   after the file was already tracked. Don't add new secrets to it, and flag this to
   the user rather than assuming it's fine to leave real credentials in a tracked file.
+- Docker (`docker-compose*.yml`, `apps/ai_agent/Dockerfile`) is marked
+  experimental/non-functional (see the warning comment at the top of
+  `docker-compose.yml`) — stale paths from before an app rename, and the backend
+  Dockerfile is unmodified `langgraph build` template output. Not part of the
+  day-to-day dev workflow; don't try to fix it as a side effect of an unrelated task.
+- No frontend test runner exists yet (no Vitest/Jest, no test script) — planned
+  as a follow-up, not yet started. Backend has one test file
+  (`apps/ai_agent/tests/test_normalization.py`); most services are untested.
 
 ## Commands (run from repo root unless noted)
+
+Node 24 and Python 3.13 are pinned (`.nvmrc`, `apps/ai_agent/.python-version`) —
+both current LTS as of 2026-09.
 
 ```bash
 # Install everything (pnpm workspace + Poetry env for ai_agent)
 make setup                    # or: pnpm setup
 
-# Dev servers (see "broken scripts" above — these two work)
-pnpm --filter threadwise-chat-ui dev     # chat-ui, http://localhost:5174
-pnpm dev:ai-agent                        # FastAPI, http://localhost:8000, --reload
+# Dev servers
+pnpm dev:react-router          # chat-ui, http://localhost:5174 (or --filter threadwise-chat-ui dev)
+pnpm dev:ai-agent               # FastAPI, http://localhost:8000, --reload
 
 # Frontend-specific (cd apps/chat-ui, or --filter threadwise-chat-ui from root)
 pnpm typecheck                # react-router typegen && tsc
@@ -75,9 +91,10 @@ pnpm format                   # prettier --write .
 
 CI (`.github/workflows/ci.yml`) runs frontend lint/typecheck/build and backend
 lint/typecheck/security/test as separate jobs, invoking pnpm/poetry directly with
-`--filter`/`working-directory` (not the broken root aggregate scripts) — mirror the
-workflow file, not `package.json`, when checking "what CI actually runs."
-Pre-commit hooks (root `.pre-commit-config.yaml`, invoked via Husky) run
+`--filter`/`working-directory` — mirror the workflow file, not `package.json`,
+when checking "what CI actually runs." A `changes` job (via `dorny/paths-filter`)
+skips the frontend or backend job group entirely when nothing under its path
+changed. Pre-commit hooks (root `.pre-commit-config.yaml`, invoked via Husky) run
 Black/isort/flake8/mypy/bandit on changed Python files and Prettier/ESLint on
 everything else at commit time.
 
@@ -117,8 +134,18 @@ distinct data paths, and it matters which one a given feature uses:
   authenticated app shell with sidebar: dashboard, chat, invoices, transactions,
   collections, reports, orders, products, inventory, customers, integrations,
   account, reclassification, journals, tax).
-  `api.*.server.tsx` routes are resource routes (no UI) that the frontend's own
-  `fetch` calls hit as a thin proxy/aggregation layer in front of the AI agent or Supabase.
+  `api.*.tsx` routes (no `.server` suffix — see below) are resource routes (no
+  UI) that the frontend's own `fetch` calls hit as a thin proxy/aggregation
+  layer in front of the AI agent or Supabase.
+  **Naming convention:** don't suffix a route file registered in `routes.ts`
+  with `.server.tsx`, even if it only exports `loader`/`action` — React
+  Router's Vite plugin treats that suffix as "server-only helper imported by a
+  route," not "the route module itself," and fails production builds ("server-only
+  module referenced by client") when it tries to generate the route's client-side
+  stub. Plain `.ts`/`.tsx` is correct; `loader`/`action` exports are already
+  server-only by framework convention regardless of filename. (Helper modules
+  under `lib/api/*.server.ts` that are only ever *imported by* a route, not
+  registered as one themselves, are a different case and fine to suffix.)
 - `providers/AuthProvider.tsx` wraps the whole app (in `root.tsx`) and owns
   Supabase auth state, profile, and entity (the business/org record) — most
   authenticated pages read from `useAuth()` rather than querying Supabase themselves.
