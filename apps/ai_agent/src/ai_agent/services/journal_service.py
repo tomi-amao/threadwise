@@ -2726,8 +2726,8 @@ class JournalService:
             if result.data:
                 row = result.data[0]
                 return row.get("company_name") or row.get("name") or "Unknown"
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Failed to fetch contact name for {contact_id}: {e}")
         return "Unknown"
 
     async def _fetch_financial_transaction(self, txn_id: str) -> Optional[Dict[str, Any]]:

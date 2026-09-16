@@ -1314,8 +1314,7 @@ async def get_integrations_summary(entity_id: Optional[str] = None):
                     )
                     uncategorized_count = result.count or 0
                 except Exception as e:
-                    # logger.warning(f"Failed to get uncategorized count: {e}")
-                    pass
+                    logger.warning(f"Failed to get uncategorized count: {e}")
             
             # Extract entity name from joined data
             entity_name = None
