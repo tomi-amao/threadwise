@@ -56,9 +56,6 @@ importers:
 
   apps/chat-ui:
     dependencies:
-      '@inngest/realtime':
-        specifier: ^0.4.5
-        version: 0.4.7(@opentelemetry/core@2.11.0(@opentelemetry/api@1.9.0))(express@4.21.2)(react@19.1.0)(typescript@5.8.3)(zod@3.25.76)
       '@langchain/core':
         specifier: ^1.0.2
         version: 1.2.11(@opentelemetry/api@1.9.0)(@opentelemetry/exporter-trace-otlp-proto@0.222.0(@opentelemetry/api@1.9.0))(@opentelemetry/sdk-trace-base@2.11.0(@opentelemetry/api@1.9.0))(openai@5.12.2(ws@8.18.3)(zod@3.25.76))(ws@8.18.3)
@@ -110,6 +107,9 @@ importers:
       clsx:
         specifier: ^2.1.1
         version: 2.1.1
+      inngest:
+        specifier: ^4.20.0
+        version: 4.20.0(@opentelemetry/core@2.11.0(@opentelemetry/api@1.9.0))(express@4.21.2)(react@19.1.0)(typescript@5.8.3)(zod@3.25.76)
       isbot:
         specifier: ^5.1.27
         version: 5.1.28
@@ -607,13 +607,6 @@ packages:
 
   '@inngest/ai@0.1.8':
     resolution: {integrity: sha512-DiZ6r3R5FiS0h2p4pzoUIHdjukEDZpDXuG9Z+4s1beOcUn0pBAEovBdlokFCzMLVECXfrkqWWxZEQvgiY6a2ew==}
-
-  '@inngest/realtime@0.4.7':
-    resolution: {integrity: sha512-CtmQFXlhtR0DHOJ5KngTSsk5lJXgr+Ro25HaAtdZjvDJjzo9tS0ut5e5SpGClUZkSBqdvpIKw8VBLonJ5j1JqQ==}
-    deprecated: This package is deprecated. Realtime functionality is now built into the inngest package.
-    peerDependencies:
-      react: '>=18.0.0'
-      zod: ^3.25.0 || ^4.0.0
 
   '@isaacs/cliui@8.0.2':
     resolution: {integrity: sha512-O8jcjabXaleOG9DQ0+ARXWZBTfnP4WNAqzuiJK7ll44AmxGKv/J2M4TPjxjY3znBCfvBXFzucm1twdyFybFqEA==}
@@ -1785,9 +1778,6 @@ packages:
     cpu: [x64]
     os: [win32]
 
-  '@standard-schema/spec@1.0.0':
-    resolution: {integrity: sha512-m2bOd0f2RT9k8QJx1JN85cZYyH1RqFBdlwtkSlf4tBDYLCiiZnv1fIIwacK6cqwXavOydf0NPToMQgpKq+dVlA==}
-
   '@standard-schema/spec@1.1.0':
     resolution: {integrity: sha512-l2aFy5jALhniG5HgqrD6jXLi/rUWrKvqN/qJx6yoJsgKhblVd+iqqU4RCXavm/jPityDo5TCvKMnpjKnOriy0w==}
 
@@ -2104,10 +2094,6 @@ packages:
   ansi-escapes@7.0.0:
     resolution: {integrity: sha512-GdYO7a61mR0fOlAsvC9/rIHf7L96sBc6dEWzeOu+KAea5bZyQRPIpojrVoI4AXGJS/ycu/fBTdLrUkA4ODrvjw==}
     engines: {node: '>=18'}
-
-  ansi-regex@4.1.1:
-    resolution: {integrity: sha512-ILlv4k/3f6vfQ4OoP2AGvirOktlQ98ZEL1k9FaQjxa3L1abBgbuTDAdPOpvbGncC0BTVQrl+OM8xZGK6tWXt7g==}
-    engines: {node: '>=6'}
 
   ansi-regex@5.0.1:
     resolution: {integrity: sha512-quJQXlTSUGL2LH9SUXo8VwsY4soanhgo6LNSm84E1LBcE8s3O0wpdiRzyR9z/ZZJMlMWv37qOOb9pdJlMUEKFQ==}
@@ -3025,8 +3011,8 @@ packages:
   inline-style-parser@0.2.7:
     resolution: {integrity: sha512-Nb2ctOyNR8DqQoR0OwRG95uNWIC0C1lCgf5Naz5H6Ji72KZ8OcFZLz2P5sNgwlyoJ8Yif11oMuYs5pBQa86csA==}
 
-  inngest@3.54.2:
-    resolution: {integrity: sha512-SAAc52c7n34E9dBEapy99g0vO5MPJP2yttoZpCu3LcYy1d8tz6CrkdoEQ4FBBgzMNnQxNpeAH5lvNeFCGNXbtA==}
+  inngest@4.20.0:
+    resolution: {integrity: sha512-U6ro6cG+Y2ys79Qxo6hliDhjSjU/616XO1QzaViinSj8jGOpaei+iQ7cB66bL/M3sLceumn2r5i/SKfrevdbsw==}
     engines: {node: '>=20'}
     peerDependencies:
       '@sveltejs/kit': '>=1.27.3'
@@ -3038,6 +3024,7 @@ packages:
       hono: '>=4.2.7'
       koa: '>=2.14.2'
       next: '>=12.0.0'
+      react: '>=18.0.0'
       typescript: '>=5.8.0'
       zod: ^3.25.0 || ^4.0.0
     peerDependenciesMeta:
@@ -3058,6 +3045,8 @@ packages:
       koa:
         optional: true
       next:
+        optional: true
+      react:
         optional: true
       typescript:
         optional: true
@@ -4184,10 +4173,6 @@ packages:
     resolution: {integrity: sha512-dW41u5VfLXu8SJh5bwRmyYUbAoSB3c9uQh6L8h/KtsFREPWpbX1lrljJo186Jc4nmci/sGUZ9a0a0J2zgfq2hw==}
     engines: {node: '>= 0.8.0'}
 
-  serialize-error-cjs@0.1.4:
-    resolution: {integrity: sha512-6a6dNqipzbCPlTFgztfNP2oG+IGcflMe/01zSzGrQcxGMKbIjOemBBD85pH92klWaJavAUWxAh9Z0aU28zxW6A==}
-    deprecated: Rolling release, please update to 0.2.0
-
   serve-static@1.16.2:
     resolution: {integrity: sha512-VqpjJZKadQB/PEbEwvFdO43Ax5dFBZ2UECszz8bQ7pi7wt//PWe1P6MN7eCnjsatYtBT6EuiClbjSWP2WrIoTw==}
     engines: {node: '>= 0.8.0'}
@@ -4326,10 +4311,6 @@ packages:
 
   stringify-entities@4.0.4:
     resolution: {integrity: sha512-IwfBptatlO+QCJUo19AqvrPNqlVMpW9YEL2LIVY+Rpv2qsjCGxaDLNRgeGsQWJhfItebuJhsGSLjaBbNSQ+ieg==}
-
-  strip-ansi@5.2.0:
-    resolution: {integrity: sha512-DuRs1gKbBqsMKIZlrffwlug8MHkcnpjs5VPmL1PAh+mA30U0DTotfDZ0d2UUsXpPmPmMMJ6W773MaA3J+lbiWA==}
-    engines: {node: '>=6'}
 
   strip-ansi@6.0.1:
     resolution: {integrity: sha512-Y38VPSHcqkFrCpFnQ9vuSXmquuv5oXOKpGeT6aGrr3o3Gc9AlVa6JBfUSOCnbxGGZF+/0ooI7KrPuUSztUdU5A==}
@@ -5177,28 +5158,6 @@ snapshots:
   '@humanwhocodes/retry@0.4.3': {}
 
   '@inngest/ai@0.1.8': {}
-
-  '@inngest/realtime@0.4.7(@opentelemetry/core@2.11.0(@opentelemetry/api@1.9.0))(express@4.21.2)(react@19.1.0)(typescript@5.8.3)(zod@3.25.76)':
-    dependencies:
-      '@standard-schema/spec': 1.0.0
-      debug: 4.4.1
-      inngest: 3.54.2(@opentelemetry/core@2.11.0(@opentelemetry/api@1.9.0))(express@4.21.2)(typescript@5.8.3)(zod@3.25.76)
-      react: 19.1.0
-      zod: 3.25.76
-    transitivePeerDependencies:
-      - '@opentelemetry/core'
-      - '@sveltejs/kit'
-      - '@vercel/node'
-      - aws-lambda
-      - encoding
-      - express
-      - fastify
-      - h3
-      - hono
-      - koa
-      - next
-      - supports-color
-      - typescript
 
   '@isaacs/cliui@8.0.2':
     dependencies:
@@ -6704,8 +6663,6 @@ snapshots:
   '@rollup/rollup-win32-x64-msvc@4.41.1':
     optional: true
 
-  '@standard-schema/spec@1.0.0': {}
-
   '@standard-schema/spec@1.1.0': {}
 
   '@supabase/auth-js@2.71.1':
@@ -7059,8 +7016,6 @@ snapshots:
   ansi-escapes@7.0.0:
     dependencies:
       environment: 1.1.0
-
-  ansi-regex@4.1.1: {}
 
   ansi-regex@5.0.1: {}
 
@@ -8171,7 +8126,7 @@ snapshots:
 
   inline-style-parser@0.2.7: {}
 
-  inngest@3.54.2(@opentelemetry/core@2.11.0(@opentelemetry/api@1.9.0))(express@4.21.2)(typescript@5.8.3)(zod@3.25.76):
+  inngest@4.20.0(@opentelemetry/core@2.11.0(@opentelemetry/api@1.9.0))(express@4.21.2)(react@19.1.0)(typescript@5.8.3)(zod@3.25.76):
     dependencies:
       '@bufbuild/protobuf': 2.15.0
       '@inngest/ai': 0.1.8
@@ -8183,24 +8138,22 @@ snapshots:
       '@opentelemetry/instrumentation': 0.222.0(@opentelemetry/api@1.9.0)
       '@opentelemetry/resources': 2.11.0(@opentelemetry/api@1.9.0)
       '@opentelemetry/sdk-trace-base': 2.11.0(@opentelemetry/api@1.9.0)
-      '@standard-schema/spec': 1.0.0
+      '@standard-schema/spec': 1.1.0
       '@traceloop/instrumentation-anthropic': 0.20.0
       '@types/debug': 4.1.12
       '@types/ms': 2.1.0
       canonicalize: 1.0.8
-      chalk: 4.1.2
       cross-fetch: 4.1.0
       debug: 4.4.1
       hash.js: 1.1.7
       json-stringify-safe: 5.0.1
       ms: 2.1.3
-      serialize-error-cjs: 0.1.4
-      strip-ansi: 5.2.0
       temporal-polyfill: 0.2.5
       ulid: 2.4.0
       zod: 3.25.76
     optionalDependencies:
       express: 4.21.2
+      react: 19.1.0
       typescript: 5.8.3
     transitivePeerDependencies:
       - '@opentelemetry/core'
@@ -9592,8 +9545,6 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  serialize-error-cjs@0.1.4: {}
-
   serve-static@1.16.2:
     dependencies:
       encodeurl: 2.0.0
@@ -9779,10 +9730,6 @@ snapshots:
     dependencies:
       character-entities-html4: 2.1.0
       character-entities-legacy: 3.0.0
-
-  strip-ansi@5.2.0:
-    dependencies:
-      ansi-regex: 4.1.1
 
   strip-ansi@6.0.1:
     dependencies:

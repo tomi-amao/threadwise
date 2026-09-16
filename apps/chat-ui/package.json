@@ -9,7 +9,6 @@
     "typecheck": "react-router typegen && tsc"
   },
   "dependencies": {
-    "@inngest/realtime": "^0.4.5",
     "@langchain/core": "^1.0.2",
     "@langchain/langgraph-sdk": "^1.0.0",
     "@nivo/bar": "^0.99.0",
@@ -27,6 +26,7 @@
     "@types/react-syntax-highlighter": "^15.5.13",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
+    "inngest": "^4.20.0",
     "isbot": "^5.1.27",
     "katex": "^0.16.25",
     "lucide-react": "^0.468.0",

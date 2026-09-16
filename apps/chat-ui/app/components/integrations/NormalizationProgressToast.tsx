@@ -27,7 +27,7 @@ import {
   CurrencyCircleDollar,
   Receipt,
 } from 'phosphor-react';
-import { useInngestSubscription } from '@inngest/realtime/hooks';
+import { useRealtime } from 'inngest/react';
 import { cn } from '~/lib/utils';
 
 // =============================================================================
@@ -166,8 +166,12 @@ export function NormalizationProgressToast({
   };
 
   // Inngest realtime subscription
-  const { error, state, freshData } = useInngestSubscription({
-    refreshToken,
+  const {
+    error,
+    connectionStatus: state,
+    messages: { delta: freshData },
+  } = useRealtime({
+    token: refreshToken,
     bufferInterval: 100,
   });
 
