@@ -64,4 +64,3 @@ export function formatDate(timestamp: string | Date): string {
     }).format(date);
   }
 }
-

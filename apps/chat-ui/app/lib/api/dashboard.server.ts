@@ -282,4 +282,3 @@ export async function getDashboardData(request: Request): Promise<DashboardData>
     lastUpdated: new Date().toISOString(),
   };
 }
-
