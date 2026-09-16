@@ -81,5 +81,4 @@ def qualify_query(query: str, request, runtime: ToolRuntime):
     result = qualify_query_agent.invoke({
         "messages": [{"role": "user", "content": query}]
     })
-    print("Query Qualification Result:", result["messages"][-1].content)
     return result["messages"][-1].content

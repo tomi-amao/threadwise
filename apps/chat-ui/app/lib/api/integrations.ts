@@ -422,7 +422,6 @@ export async function getIncompleteTransactions(
   const baseUrl = getApiBaseUrl();
   const params = new URLSearchParams();
   if (sourceId) params.set('source_id', sourceId);
-  console.log(sourceId);
 
   params.set('limit', limit.toString());
   params.set('offset', offset.toString());

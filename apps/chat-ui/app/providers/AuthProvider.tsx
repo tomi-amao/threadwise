@@ -122,7 +122,6 @@ export function AuthProvider({ children }: AuthProviderProps) {
         } = await supabase.auth.getSession();
         setSession(session);
         setUser(session?.user ?? null);
-        console.log(session?.user);
 
         if (session?.user) {
           await fetchProfileAndEntity(session.user);

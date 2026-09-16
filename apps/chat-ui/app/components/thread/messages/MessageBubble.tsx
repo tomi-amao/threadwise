@@ -313,7 +313,6 @@ export function MessageBubble({ message }: MessageBubbleProps) {
   const isUser = message.type === 'human';
   const isAI = message.type === 'ai';
   const isTool = message.type === 'tool';
-  console.log('Messages from langgraph', message);
 
   // Check if message contains visualizations
   const hasToolCalls =

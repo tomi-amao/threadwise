@@ -348,7 +348,6 @@ def extract_file_data(human_msg: HumanMessage) -> dict | None:
 
             # Handle image_url format (for images or converted PDF pages)
             elif block_type == "image":
-                print(f"The block type: {block_type}")
                 try:
                     return {
                         "type": "base64",

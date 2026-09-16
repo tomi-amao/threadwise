@@ -5,15 +5,16 @@ LangGraph service for handling chat requests and agent interactions.
 import os
 import json
 import asyncio
+import logging
 from typing import Dict, Any, Optional, List
 from datetime import datetime
 
-from fastapi import logger
+logger = logging.getLogger(__name__)
 
 try:
     from langgraph_sdk import get_client
 except ImportError:
-    print("Warning: langgraph_sdk not available")
+    logger.warning("langgraph_sdk not available")
     get_client = None
 
 
@@ -28,14 +29,14 @@ class LangGraphService:
     async def initialize(self):
         """Initialize the LangGraph client."""
         if not get_client:
-            print("LangGraph SDK not available")
+            logger.warning("LangGraph SDK not available")
             return False
-            
+
         try:
             self.client = get_client(url=self.base_url)
             return True
         except Exception as e:
-            print(f"Failed to initialize LangGraph client: {e}")
+            logger.error(f"Failed to initialize LangGraph client: {e}")
             return False
 
     async def health_check(self) -> Dict[str, Any]:
@@ -43,7 +44,6 @@ class LangGraphService:
         try:
             if not self.client:
                 await self.initialize()
-            print(self.assistant)
             if not self.client:
                 return {"status": "error", "message": "LangGraph client not initialized"}
             assistants_count = await self.client.assistants.count()
@@ -145,16 +145,17 @@ class LangGraphService:
             # Add attachments if provided
             if attachments:
                 message_input["attachments"] = attachments
-            # logger.info(f"Sending message to thread {thread_id}: {message_input} Assistant ID: {self.assistant['assistant_id']}")
-
-            print(f"Sending message to thread {thread_id}: {message_input} Assistant ID: {assistant_id}")
+            logger.debug(
+                f"Sending message to thread {thread_id}: {message_input} "
+                f"Assistant ID: {assistant_id}"
+            )
             # Create and run the thread
             run = await self.client.runs.create(
                 thread_id=thread_id,
                 assistant_id=assistant_id,
                 input=message_input
             )
-            print(f"Run created: {run}")    
+            logger.debug(f"Run created: {run}")
             # Wait for completion
             await self.client.runs.join(thread_id=thread_id, run_id=run["run_id"])
             
