@@ -47,6 +47,11 @@ import {
 import { Button } from '~/components/ui/button';
 import { cn } from '~/lib/utils';
 import { InfoTooltip } from '~/components/ui/InfoTooltip';
+import { formatGbp, formatGbp0 } from '~/lib/format-currency';
+import { KPICard } from '~/components/reports/KPICard';
+import { FinRow } from '~/components/reports/FinRow';
+import { DrawerBadge } from '~/components/reports/DrawerBadge';
+import { DrilldownMetaRow } from '~/components/reports/DrilldownMetaRow';
 import { getReportsData } from '~/lib/api/reports.server';
 import type {
   AccountDrilldownData,
@@ -63,21 +68,8 @@ export const meta: MetaFunction = () => [
 
 // ─── Formatting Helpers ───────────────────────────────────────────────
 
-const GBP = (value: number) =>
-  new Intl.NumberFormat('en-GB', {
-    style: 'currency',
-    currency: 'GBP',
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  }).format(value);
-
-const GBP0 = (value: number) =>
-  new Intl.NumberFormat('en-GB', {
-    style: 'currency',
-    currency: 'GBP',
-    minimumFractionDigits: 0,
-    maximumFractionDigits: 0,
-  }).format(value);
+const GBP = formatGbp;
+const GBP0 = formatGbp0;
 
 const NUM = (value: number) => new Intl.NumberFormat('en-GB').format(value);
 
@@ -403,169 +395,6 @@ function DateRangeSelector({ currentFrom, currentTo }: { currentFrom: string; cu
           </Button>
         </div>
       )}
-    </div>
-  );
-}
-
-function KPICard({
-  title,
-  value,
-  icon,
-  iconColor,
-  tooltip,
-}: {
-  title: string;
-  value: string;
-  icon: React.ReactNode;
-  iconColor: string;
-  tooltip: string;
-}) {
-  return (
-    <div className="rounded-xl border border-border bg-card p-4">
-      <div className="flex items-start justify-between mb-2">
-        <div className={`w-9 h-9 rounded-lg flex items-center justify-center ${iconColor}`}>
-          {icon}
-        </div>
-        <InfoTooltip text={tooltip} />
-      </div>
-      <p className="text-xs text-muted-foreground mb-0.5">{title}</p>
-      <p className="text-xl font-bold text-foreground tracking-tight">{value}</p>
-    </div>
-  );
-}
-
-/** A single row in a financial statement table */
-function FinRow({
-  label,
-  amount,
-  isSection,
-  isTotal,
-  isGrandTotal,
-  indent,
-  tooltip,
-  negative,
-  onClick,
-  interactiveLabel,
-}: {
-  label: string;
-  amount?: number;
-  isSection?: boolean;
-  isTotal?: boolean;
-  isGrandTotal?: boolean;
-  indent?: number;
-  tooltip?: string;
-  negative?: boolean;
-  onClick?: () => void;
-  interactiveLabel?: string;
-}) {
-  const pl = (indent || 0) * 1.25;
-  const isInteractive = typeof onClick === 'function';
-
-  if (isSection) {
-    return (
-      <tr>
-        <td
-          className="py-2.5 text-xs font-semibold text-muted-foreground uppercase tracking-wider"
-          style={{ paddingLeft: `${pl}rem` }}
-          colSpan={2}
-        >
-          <span className="flex items-center">
-            {label}
-            {tooltip && <InfoTooltip text={tooltip} />}
-          </span>
-        </td>
-      </tr>
-    );
-  }
-
-  const formatted =
-    amount !== undefined ? (negative ? `(${GBP(Math.abs(amount))})` : GBP(amount)) : '';
-
-  const handleKeyDown = (event: React.KeyboardEvent<HTMLTableRowElement>) => {
-    if (!isInteractive) return;
-    if (event.key === 'Enter' || event.key === ' ') {
-      event.preventDefault();
-      onClick?.();
-    }
-  };
-
-  return (
-    <tr
-      onClick={onClick}
-      onKeyDown={handleKeyDown}
-      tabIndex={isInteractive ? 0 : undefined}
-      role={isInteractive ? 'button' : undefined}
-      aria-label={interactiveLabel}
-      className={`${
-        isGrandTotal ? 'border-t-2 border-foreground/20' : isTotal ? 'border-t border-border' : ''
-      } ${isInteractive ? 'cursor-pointer hover:bg-muted/30 focus:outline-none focus:bg-muted/30' : ''}`}
-    >
-      <td
-        className={`py-2 ${
-          isGrandTotal
-            ? 'font-bold text-foreground text-sm'
-            : isTotal
-              ? 'font-semibold text-foreground text-sm'
-              : 'text-muted-foreground text-sm'
-        }`}
-        style={{ paddingLeft: `${pl}rem` }}
-      >
-        <span className="flex items-center gap-2">
-          {label}
-          {tooltip && <InfoTooltip text={tooltip} />}
-          {isInteractive && !isTotal && !isGrandTotal && (
-            <span className="inline-flex items-center gap-1 text-[11px] font-medium text-muted-foreground">
-              View details
-              <CaretRight size={12} />
-            </span>
-          )}
-        </span>
-      </td>
-      <td
-        className={`py-2 text-right tabular-nums ${
-          isGrandTotal
-            ? 'font-bold text-foreground text-sm'
-            : isTotal
-              ? 'font-semibold text-foreground text-sm'
-              : 'text-foreground text-sm'
-        } ${amount !== undefined && amount < 0 && !negative ? 'text-rose-500' : ''}`}
-      >
-        {formatted}
-      </td>
-    </tr>
-  );
-}
-
-function DrawerBadge({
-  children,
-  tone = 'default',
-}: {
-  children: React.ReactNode;
-  tone?: 'default' | 'emerald' | 'blue' | 'amber';
-}) {
-  const className =
-    tone === 'emerald'
-      ? 'bg-emerald-500/10 text-emerald-500 border-emerald-500/20'
-      : tone === 'blue'
-        ? 'bg-blue-500/10 text-blue-500 border-blue-500/20'
-        : tone === 'amber'
-          ? 'bg-amber-500/10 text-amber-500 border-amber-500/20'
-          : 'bg-muted text-muted-foreground border-border';
-
-  return (
-    <span
-      className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-medium ${className}`}
-    >
-      {children}
-    </span>
-  );
-}
-
-function DrilldownMetaRow({ label, value }: { label: string; value: React.ReactNode }) {
-  return (
-    <div className="flex items-start justify-between gap-3 border-b border-border/50 py-2 text-sm last:border-0">
-      <span className="w-28 shrink-0 text-muted-foreground">{label}</span>
-      <span className="text-right text-foreground">{value}</span>
     </div>
   );
 }
