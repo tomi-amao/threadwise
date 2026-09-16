@@ -90,6 +90,15 @@ export async function getDashboardData(request: Request): Promise<DashboardData>
     getEntityInfo(request),
   ]);
 
+  if (ordersRaw.error) throw new Error(`Failed to load orders: ${ordersRaw.error.message}`);
+  if (lineItemsRaw.error)
+    throw new Error(`Failed to load order line items: ${lineItemsRaw.error.message}`);
+  if (paymentsRaw.error) throw new Error(`Failed to load payments: ${paymentsRaw.error.message}`);
+  if (recentOrdersRaw.error)
+    throw new Error(`Failed to load recent orders: ${recentOrdersRaw.error.message}`);
+  if (customerCountRaw.error)
+    throw new Error(`Failed to load customer count: ${customerCountRaw.error.message}`);
+
   const orders = ordersRaw.data || [];
   const lineItems = lineItemsRaw.data || [];
   const payments = paymentsRaw.data || [];

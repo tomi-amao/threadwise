@@ -47,10 +47,14 @@ export async function getDerivedBankBalances(
   options: { asOf?: string | null } = {}
 ): Promise<DerivedBankBalances> {
   const balanceAsOf = options.asOf ? endOfDay(options.asOf) : null;
-  const { data: bankAccounts } = await supabase
+  const { data: bankAccounts, error: bankAccountsError } = await supabase
     .from('bank_accounts')
     .select('id, name, currency, balance, source, updated_at, state')
     .eq('state', 'active');
+
+  if (bankAccountsError) {
+    throw new Error(`Failed to load bank accounts: ${bankAccountsError.message}`);
+  }
 
   const activeBankAccounts = (bankAccounts || []) as BankAccountRow[];
   if (activeBankAccounts.length === 0) {
@@ -83,7 +87,11 @@ export async function getDerivedBankBalances(
     txnsQuery = txnsQuery.gt('occurred_at', lowerBound);
   }
 
-  const { data: bankTransactions } = await txnsQuery;
+  const { data: bankTransactions, error: bankTransactionsError } = await txnsQuery;
+
+  if (bankTransactionsError) {
+    throw new Error(`Failed to load bank transactions: ${bankTransactionsError.message}`);
+  }
   const relevantTransactions = (bankTransactions || []) as BankTransactionRow[];
 
   const snapshotByAccountId = new Map(

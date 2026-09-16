@@ -172,7 +172,11 @@ export async function getRevenueMetricsData(
   if (from) paymentsQ = paymentsQ.gte('paid_on', dateGte(from));
   if (to) paymentsQ = paymentsQ.lte('paid_on', dateLte(to));
 
-  const [{ data: ordersData }, { data: paymentsData }] = await Promise.all([ordersQ, paymentsQ]);
+  const [{ data: ordersData, error: ordersError }, { data: paymentsData, error: paymentsError }] =
+    await Promise.all([ordersQ, paymentsQ]);
+
+  if (ordersError) throw new Error(`Failed to load orders: ${ordersError.message}`);
+  if (paymentsError) throw new Error(`Failed to load payments: ${paymentsError.message}`);
 
   const orders = (ordersData || []) as RevenueMetricOrder[];
   const payments = (paymentsData || []) as RevenueMetricPayment[];
@@ -185,10 +189,13 @@ export async function getRevenueMetricsData(
 
   let rawEvents: Array<{ id: string; payload: any }> = [];
   if (rawEventIds.length > 0) {
-    const { data } = await supabase
+    const { data, error: rawEventsError } = await supabase
       .from('external_raw_events')
       .select('id, payload')
       .in('id', rawEventIds);
+    if (rawEventsError) {
+      throw new Error(`Failed to load raw events: ${rawEventsError.message}`);
+    }
     rawEvents = data || [];
   }
 
