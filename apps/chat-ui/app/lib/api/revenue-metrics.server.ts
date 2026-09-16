@@ -9,6 +9,11 @@ export interface RevenueMetricOrder {
   refunded_total_amount: number | null;
   status: string | null;
   created_at: string | null;
+  // Embedded via the orders_raw_event_id_fkey FK — fetched alongside orders
+  // instead of a second query batched by ID, which used to build a
+  // .in('id', [...]) filter with 1000+ UUIDs and blow past PostgREST's
+  // request-URL length limit (400 Bad Request).
+  external_raw_events: { payload: any } | null;
 }
 
 interface PaymentFeeRow {
@@ -156,7 +161,7 @@ export async function getRevenueMetricsData(
   let ordersQ = supabase
     .from('orders')
     .select(
-      'id, raw_event_id, subtotal_amount, discount_total_amount, shipping_total_amount, tax_total_amount, grand_total_amount, refunded_total_amount, status, created_at'
+      'id, raw_event_id, subtotal_amount, discount_total_amount, shipping_total_amount, tax_total_amount, grand_total_amount, refunded_total_amount, status, created_at, external_raw_events(payload)'
     )
     .neq('status', 'cancelled')
     .limit(10000);
@@ -180,26 +185,6 @@ export async function getRevenueMetricsData(
 
   const orders = (ordersData || []) as RevenueMetricOrder[];
   const payments = (paymentsData || []) as RevenueMetricPayment[];
-
-  const rawEventIds = Array.from(
-    new Set(
-      orders.map(order => order.raw_event_id).filter((value): value is string => Boolean(value))
-    )
-  );
-
-  let rawEvents: Array<{ id: string; payload: any }> = [];
-  if (rawEventIds.length > 0) {
-    const { data, error: rawEventsError } = await supabase
-      .from('external_raw_events')
-      .select('id, payload')
-      .in('id', rawEventIds);
-    if (rawEventsError) {
-      throw new Error(`Failed to load raw events: ${rawEventsError.message}`);
-    }
-    rawEvents = data || [];
-  }
-
-  const payloadById = new Map(rawEvents.map(event => [event.id, event.payload]));
 
   let subtotalAmount = 0;
   let totalDiscountAmount = 0;
@@ -236,8 +221,7 @@ export async function getRevenueMetricsData(
     addAmountToMonthMap(taxAmountByMonth, order.created_at, toNumber(order.tax_total_amount));
     addAmountToMonthMap(orderCountByMonth, order.created_at, 1);
 
-    if (!order.raw_event_id) continue;
-    const payload = payloadById.get(order.raw_event_id);
+    const payload = order.external_raw_events?.payload;
     if (!payload) continue;
 
     const shippingDiscount = getShippingDiscountFromPayload(payload);
