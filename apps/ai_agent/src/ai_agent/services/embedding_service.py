@@ -21,7 +21,7 @@ import asyncio
 import httpx
 
 try:
-    from PyPDF2 import PdfReader
+    from pypdf import PdfReader
 except ImportError:
     PdfReader = None
 
@@ -500,7 +500,7 @@ class EmbeddingService:
         """Extract text from PDF file."""
         try:
             if PdfReader is None:
-                raise ImportError("PyPDF2 is not installed")
+                raise ImportError("pypdf is not installed")
             reader = PdfReader(BytesIO(file_content))
             text = ""
             for page in reader.pages:
