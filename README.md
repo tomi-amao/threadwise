@@ -38,7 +38,7 @@ make dev-api    # AI Agent API (port 8000)
 | Dev API | `pnpm dev:ai-agent`     | `make dev-api`   | Run Task: 🤖 Start AI Agent        |
 | Build   | `pnpm build`            | `make build`     | Run Task: 🏗️ Build All             |
 | Test    | `pnpm test`             | `make test`      | Run Task: 🧪 Run All Tests         |
-| Docker  | `pnpm docker:up`        | `make docker-up` | Run Task: 🐳 Docker: Build & Start |
+| Docker  | `pnpm docker:up`        | `make docker-up` | ⚠️ Experimental — see below         |
 
 ### Using VS Code (Recommended)
 
@@ -48,18 +48,11 @@ make dev-api    # AI Agent API (port 8000)
 
 ### Using Docker 🐳
 
-```bash
-# Development with hot reload
-make docker-dev
-
-# Production containers
-make docker-up
-
-# View logs
-make docker-logs
-```
-
-📖 **See [Docker Guide](docs/DOCKER.md) for detailed Docker usage**
+⚠️ **Experimental — not currently functional or part of the day-to-day dev
+workflow.** The compose files and `apps/ai_agent/Dockerfile` reference stale
+paths from before an app rename and haven't been kept in sync with the current
+structure. Use the `pnpm dev` / VS Code task workflow above instead. See the
+warning comment at the top of `docker-compose.yml` for specifics.
 
 ---
 

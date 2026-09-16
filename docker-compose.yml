@@ -1,3 +1,13 @@
+# ⚠️ EXPERIMENTAL / NOT CURRENTLY FUNCTIONAL — not part of day-to-day dev workflow.
+# Known issues as of the 2026-09 codebase health pass, none fixed here:
+#   - "react-router" service builds ./apps/react-router/Dockerfile, which does not
+#     exist (the frontend app is apps/chat-ui and has no Dockerfile at all).
+#   - "ai-agent" service's build context and volume mount use apps/ai-agent /
+#     apps/ai_agent/src/ai_agent (mixed hyphen/underscore paths that don't match
+#     the real apps/ai_agent directory).
+#   - apps/ai_agent/Dockerfile is unmodified `langgraph build` output (LangGraph
+#     Platform template), still referencing /deps/ai-agent throughout.
+# Use `pnpm dev` / `poetry run uvicorn ...` (see CLAUDE.md) for local development.
 services:
   react-router:
     build:
