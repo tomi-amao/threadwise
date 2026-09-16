@@ -9,6 +9,7 @@
 
 import React, { useState, useCallback, useMemo, useRef, useEffect } from 'react';
 import { createPortal } from 'react-dom';
+import { toast } from 'sonner';
 import type { MetaFunction, LoaderFunctionArgs, ActionFunctionArgs } from 'react-router';
 import { useLoaderData, useRevalidator, useFetcher } from 'react-router';
 import {
@@ -57,14 +58,54 @@ export const meta: MetaFunction = () => [
 
 // ─── Loader ───────────────────────────────────────────────────────────
 
+// Extracts a settled promise's value, or records a labeled error and falls
+// back to a safe empty default — so one section failing to load doesn't
+// blank the other three, which fetch independently of each other.
+function settledOr<T>(
+  result: PromiseSettledResult<T>,
+  fallback: T,
+  errors: string[],
+  label: string
+): T {
+  if (result.status === 'fulfilled') return result.value;
+  const message = result.reason instanceof Error ? result.reason.message : String(result.reason);
+  errors.push(`${label}: ${message}`);
+  return fallback;
+}
+
 export async function loader({ request }: LoaderFunctionArgs) {
-  const [inventoryData, movementsData, valuationData, stockData] = await Promise.all([
-    getInventoryProductList(),
-    getInventoryMovements(),
-    getInventoryValuation(),
-    getStockLevels(),
-  ]);
-  return { inventoryData, movementsData, valuationData, stockData };
+  const [inventoryResult, movementsResult, valuationResult, stockResult] = await Promise.allSettled(
+    [getInventoryProductList(), getInventoryMovements(), getInventoryValuation(), getStockLevels()]
+  );
+
+  const errors: string[] = [];
+
+  const inventoryData = settledOr(
+    inventoryResult,
+    { products: [], unlinkedItems: [], allItems: [], totalProducts: 0, totalInventoryItems: 0 },
+    errors,
+    'Inventory items'
+  );
+  const movementsData = settledOr(
+    movementsResult,
+    { movements: [], totalMovements: 0, totalQuantityPurchased: 0, totalInvested: 0 },
+    errors,
+    'Inventory movements'
+  );
+  const valuationData = settledOr(
+    valuationResult,
+    { items: [], totalInventoryValue: 0, totalUnitsPurchased: 0, uniqueProducts: 0 },
+    errors,
+    'Inventory valuation'
+  );
+  const stockData = settledOr(
+    stockResult,
+    { items: [], totalOnHand: 0, totalStockValue: 0, lowStockCount: 0, sampleCount: 0 },
+    errors,
+    'Stock levels'
+  );
+
+  return { inventoryData, movementsData, valuationData, stockData, errors };
 }
 
 // ─── Action ───────────────────────────────────────────────────────────
@@ -1409,9 +1450,19 @@ function ValuationTab({ items }: { items: InventoryValuationItem[] }) {
 // ─── Main Page ────────────────────────────────────────────────────────
 
 export default function InventoryPage() {
-  const { inventoryData, movementsData, valuationData, stockData } = useLoaderData<typeof loader>();
+  const { inventoryData, movementsData, valuationData, stockData, errors } =
+    useLoaderData<typeof loader>();
   const revalidator = useRevalidator();
   const fetcher = useFetcher<typeof action>();
+
+  // Each of the four sections above loads independently — surface a toast per
+  // section that failed rather than blanking the whole page, since the
+  // sections that did load are still showing real data.
+  useEffect(() => {
+    for (const message of errors) {
+      toast.error(message);
+    }
+  }, [errors]);
 
   const [activeTab, setActiveTab] = useState<TabId>('items');
   const [selectedItem, setSelectedItem] = useState<InventoryItemRow | null>(null);
