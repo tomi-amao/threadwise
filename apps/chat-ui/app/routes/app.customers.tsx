@@ -76,32 +76,25 @@ export async function loader({ request }: LoaderFunctionArgs) {
   }
 
   let customers: CustomerRow[] = Array.from(customerMap.values())
-    .map((c) => ({ ...c, isRepeat: c.orderCount > 1 }))
+    .map(c => ({ ...c, isRepeat: c.orderCount > 1 }))
     .sort((a, b) => b.totalSpent - a.totalSpent);
 
   if (filter === 'repeat') {
-    customers = customers.filter((c) => c.isRepeat);
+    customers = customers.filter(c => c.isRepeat);
   } else if (filter === 'one-time') {
-    customers = customers.filter((c) => !c.isRepeat);
+    customers = customers.filter(c => !c.isRepeat);
   }
 
   if (searchQuery) {
     const q = searchQuery.toLowerCase();
     customers = customers.filter(
-      (c) =>
-        c.name.toLowerCase().includes(q) ||
-        (c.email && c.email.toLowerCase().includes(q))
+      c => c.name.toLowerCase().includes(q) || (c.email && c.email.toLowerCase().includes(q))
     );
   }
 
   const totalCustomers = customerMap.size;
-  const repeatCustomers = Array.from(customerMap.values()).filter(
-    (c) => c.orderCount > 1
-  ).length;
-  const totalRevenue = Array.from(customerMap.values()).reduce(
-    (s, c) => s + c.totalSpent,
-    0
-  );
+  const repeatCustomers = Array.from(customerMap.values()).filter(c => c.orderCount > 1).length;
+  const totalRevenue = Array.from(customerMap.values()).reduce((s, c) => s + c.totalSpent, 0);
   const avgLTV = totalCustomers > 0 ? totalRevenue / totalCustomers : 0;
 
   return {
@@ -135,8 +128,7 @@ const formatDate = (dateStr: string | null) => {
 };
 
 export default function CustomersPage() {
-  const { customers, stats, currentFilter, searchQuery } =
-    useLoaderData<typeof loader>();
+  const { customers, stats, currentFilter, searchQuery } = useLoaderData<typeof loader>();
   const [search, setSearch] = useState(searchQuery);
 
   const filters = [
@@ -159,9 +151,8 @@ export default function CustomersPage() {
             <div>
               <h1 className="text-xl font-bold text-foreground">Customers</h1>
               <p className="text-xs text-muted-foreground">
-                {stats.total.toLocaleString()} customers ·{' '}
-                {stats.repeatRate.toFixed(1)}% repeat rate ·{' '}
-                {formatCurrency(stats.avgLTV)} avg LTV
+                {stats.total.toLocaleString()} customers · {stats.repeatRate.toFixed(1)}% repeat
+                rate · {formatCurrency(stats.avgLTV)} avg LTV
               </p>
             </div>
           </div>
@@ -181,13 +172,13 @@ export default function CustomersPage() {
               type="text"
               name="q"
               value={search}
-              onChange={(e) => setSearch(e.target.value)}
+              onChange={e => setSearch(e.target.value)}
               placeholder="Search by name or email..."
               className="w-full pl-9 pr-4 py-2 rounded-lg border border-border bg-card text-foreground text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/30"
             />
           </form>
           <div className="flex gap-1.5">
-            {filters.map((f) => (
+            {filters.map(f => (
               <Link
                 key={f.key}
                 to={`/customers?filter=${f.key}${search ? `&q=${encodeURIComponent(search)}` : ''}`}

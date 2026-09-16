@@ -25,8 +25,7 @@ const formatCurrency = (value: number, currency = 'GBP') =>
     maximumFractionDigits: 0,
   }).format(value);
 
-const formatNumber = (value: number) =>
-  new Intl.NumberFormat('en-GB').format(value);
+const formatNumber = (value: number) => new Intl.NumberFormat('en-GB').format(value);
 
 interface CardDef {
   title: string;
@@ -78,9 +77,10 @@ export function KPICards({ kpis, currency = 'GBP' }: KPICardsProps) {
     {
       title: 'Processing Fees',
       value: formatCurrency(kpis.processingFees, currency),
-      subtitle: kpis.grossRevenue > 0
-        ? `${((kpis.processingFees / kpis.grossRevenue) * 100).toFixed(1)}% of revenue`
-        : undefined,
+      subtitle:
+        kpis.grossRevenue > 0
+          ? `${((kpis.processingFees / kpis.grossRevenue) * 100).toFixed(1)}% of revenue`
+          : undefined,
       icon: <Receipt size={22} weight="duotone" />,
       iconBg: 'bg-rose-500/10 text-rose-500',
     },
@@ -89,7 +89,7 @@ export function KPICards({ kpis, currency = 'GBP' }: KPICardsProps) {
   return (
     <section>
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
-        {cards.map((card) => {
+        {cards.map(card => {
           const content = (
             <div
               key={card.title}
@@ -109,9 +109,7 @@ export function KPICards({ kpis, currency = 'GBP' }: KPICardsProps) {
                 )}
               </div>
               <p className="text-sm text-muted-foreground mb-1">{card.title}</p>
-              <p className="text-2xl font-bold text-foreground tracking-tight">
-                {card.value}
-              </p>
+              <p className="text-2xl font-bold text-foreground tracking-tight">{card.value}</p>
               {card.subtitle && (
                 <p className="text-xs text-muted-foreground mt-1">{card.subtitle}</p>
               )}

@@ -29,7 +29,13 @@ const formatValue = (value: number, format?: 'currency' | 'number' | 'percentage
   }
 };
 
-export function MetricCardViz({ title, value, format = 'currency', trend, description }: MetricCardProps) {
+export function MetricCardViz({
+  title,
+  value,
+  format = 'currency',
+  trend,
+  description,
+}: MetricCardProps) {
   const getTrendColor = (direction: 'up' | 'down' | 'neutral') => {
     switch (direction) {
       case 'up':
@@ -42,21 +48,14 @@ export function MetricCardViz({ title, value, format = 'currency', trend, descri
     }
   };
 
-  const TrendIcon = trend?.direction === 'up' 
-    ? TrendingUp 
-    : trend?.direction === 'down' 
-    ? TrendingDown 
-    : Minus;
+  const TrendIcon =
+    trend?.direction === 'up' ? TrendingUp : trend?.direction === 'down' ? TrendingDown : Minus;
 
   return (
     <div className="bg-neutral-900 rounded-lg p-6 border border-neutral-800 hover:border-neutral-700 transition-colors">
       <div className="flex flex-col gap-2">
-        <h3 className="text-sm font-medium text-neutral-400 uppercase tracking-wide">
-          {title}
-        </h3>
-        <div className="text-3xl font-bold text-white">
-          {formatValue(value, format)}
-        </div>
+        <h3 className="text-sm font-medium text-neutral-400 uppercase tracking-wide">{title}</h3>
+        <div className="text-3xl font-bold text-white">{formatValue(value, format)}</div>
         {trend && (
           <div className={`flex items-center gap-1 text-sm ${getTrendColor(trend.direction)}`}>
             <TrendIcon className="w-4 h-4" />
@@ -64,11 +63,7 @@ export function MetricCardViz({ title, value, format = 'currency', trend, descri
             <span className="text-neutral-500">{trend.period}</span>
           </div>
         )}
-        {description && (
-          <p className="text-sm text-neutral-400 mt-2">
-            {description}
-          </p>
-        )}
+        {description && <p className="text-sm text-neutral-400 mt-2">{description}</p>}
       </div>
     </div>
   );

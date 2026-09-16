@@ -599,7 +599,9 @@ export async function getStockLevels(): Promise<StockData> {
   const sellable = items.filter(i => i.itemType === 'sellable');
   const totalOnHand = sellable.reduce((s, i) => s + Math.max(0, i.onHand), 0);
   const totalStockValue = sellable.reduce((s, i) => s + i.stockValue, 0);
-  const lowStockCount = sellable.filter(i => !i.isUnlimited && i.onHand > 0 && i.onHand < 10).length;
+  const lowStockCount = sellable.filter(
+    i => !i.isUnlimited && i.onHand > 0 && i.onHand < 10
+  ).length;
   const sampleCount = items.filter(i => i.itemType === 'sample').length;
 
   return { items, totalOnHand, totalStockValue, lowStockCount, sampleCount };

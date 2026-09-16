@@ -14,7 +14,7 @@ export interface FinancialTableProps {
 
 const formatValue = (value: string | number, format?: 'currency' | 'number' | 'percentage') => {
   if (typeof value === 'string') return value;
-  
+
   switch (format) {
     case 'currency':
       return new Intl.NumberFormat('en-US', {

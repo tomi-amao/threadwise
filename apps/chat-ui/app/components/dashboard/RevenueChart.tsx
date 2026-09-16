@@ -29,7 +29,7 @@ export function RevenueChart({ data, currency = 'GBP' }: RevenueChartProps) {
   const lineData = [
     {
       id: 'Revenue',
-      data: chartData.map((d) => ({
+      data: chartData.map(d => ({
         x: formatMonth(d.month),
         y: d.revenue,
       })),
@@ -57,7 +57,7 @@ export function RevenueChart({ data, currency = 'GBP' }: RevenueChartProps) {
             margin={{ top: 10, right: 20, bottom: 50, left: 60 }}
             xScale={{ type: 'point' }}
             yScale={{ type: 'linear', min: 'auto', max: 'auto' }}
-            yFormat={(value) => formatCurrency(Number(value), currency)}
+            yFormat={value => formatCurrency(Number(value), currency)}
             axisBottom={{
               tickSize: 0,
               tickPadding: 8,
@@ -66,7 +66,7 @@ export function RevenueChart({ data, currency = 'GBP' }: RevenueChartProps) {
             axisLeft={{
               tickSize: 0,
               tickPadding: 8,
-              format: (value) =>
+              format: value =>
                 `£${Number(value) >= 1000 ? `${(Number(value) / 1000).toFixed(0)}k` : value}`,
             }}
             colors={['hsl(var(--primary))']}

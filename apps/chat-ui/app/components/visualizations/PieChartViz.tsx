@@ -55,14 +55,11 @@ export function PieChartViz({ title, data, format = 'number' }: PieChartProps) {
             from: 'color',
             modifiers: [['darker', 2]],
           }}
-          valueFormat={(value) => formatValue(value, format)}
+          valueFormat={value => formatValue(value, format)}
           tooltip={({ datum }) => (
             <div className="bg-neutral-800 px-3 py-2 rounded shadow-lg border border-neutral-700">
               <div className="flex items-center gap-2">
-                <div
-                  className="w-3 h-3 rounded"
-                  style={{ backgroundColor: datum.color }}
-                />
+                <div className="w-3 h-3 rounded" style={{ backgroundColor: datum.color }} />
                 <span className="text-white font-medium">{datum.label}</span>
               </div>
               <div className="text-neutral-300 text-sm mt-1">

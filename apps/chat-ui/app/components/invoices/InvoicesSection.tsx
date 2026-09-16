@@ -563,7 +563,10 @@ export function InvoicesSection({
             if (result.error) throw new Error(result.error);
             toast.success(
               `Recorded ${result.recorded ?? toInventoryOnly.length} stock movement(s)`,
-              { description: 'Inventory items created without product catalog entries.', duration: 5000 }
+              {
+                description: 'Inventory items created without product catalog entries.',
+                duration: 5000,
+              }
             );
           })
           .catch(err => {

@@ -33,7 +33,7 @@ export function BankAccounts({ accounts }: BankAccountsProps) {
         </div>
       ) : (
         <div className="space-y-2.5">
-          {accounts.map((account) => (
+          {accounts.map(account => (
             <div
               key={account.id}
               className="flex items-center gap-3 p-3 rounded-lg bg-muted/30 border border-border/50"

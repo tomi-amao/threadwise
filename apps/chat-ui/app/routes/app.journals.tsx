@@ -103,10 +103,7 @@ export async function loader(_: LoaderFunctionArgs): Promise<LoaderData> {
 
   // Sample items — unit_cost stored in USD
   const sampleItems = sampleItemsRes.data || [];
-  const usdTotal = sampleItems.reduce(
-    (s: number, i: any) => s + Number(i.unit_cost || 0),
-    0
-  );
+  const usdTotal = sampleItems.reduce((s: number, i: any) => s + Number(i.unit_cost || 0), 0);
 
   // Check if the reclassification journal already exists
   const { data: existingAdj } = await supabase
@@ -137,7 +134,7 @@ export async function loader(_: LoaderFunctionArgs): Promise<LoaderData> {
   }
 
   // Build account lookup
-  const accountMap = new Map(accounts.map((a) => [a.id, a]));
+  const accountMap = new Map(accounts.map(a => [a.id, a]));
 
   // Group line items by journal
   const linesByJournal = new Map<string, JournalLineSummary[]>();
@@ -231,11 +228,11 @@ function AccountSelect({
   return (
     <select
       value={value}
-      onChange={(e) => onChange(e.target.value)}
+      onChange={e => onChange(e.target.value)}
       className="w-full bg-muted border border-border rounded-lg px-2 py-1.5 text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50"
     >
       <option value="">{placeholder || '— Select account —'}</option>
-      {accounts.map((a) => (
+      {accounts.map(a => (
         <option key={a.id} value={a.id}>
           {a.account_number} — {a.name}
         </option>
@@ -277,7 +274,7 @@ function LineRow({
       <AccountSelect
         accounts={accounts}
         value={line.account_id}
-        onChange={(id) => onChange({ ...line, account_id: id })}
+        onChange={id => onChange({ ...line, account_id: id })}
       />
 
       {/* Debit */}
@@ -287,7 +284,9 @@ function LineRow({
         step="0.01"
         placeholder="0.00"
         value={line.debit}
-        onChange={(e) => onChange({ ...line, debit: e.target.value, credit: e.target.value ? '' : line.credit })}
+        onChange={e =>
+          onChange({ ...line, debit: e.target.value, credit: e.target.value ? '' : line.credit })
+        }
         className="bg-muted border border-border rounded-lg px-2 py-1.5 text-xs text-right text-foreground tabular-nums focus:outline-none focus:ring-2 focus:ring-primary/50"
       />
 
@@ -298,14 +297,16 @@ function LineRow({
         step="0.01"
         placeholder="0.00"
         value={line.credit}
-        onChange={(e) => onChange({ ...line, credit: e.target.value, debit: e.target.value ? '' : line.debit })}
+        onChange={e =>
+          onChange({ ...line, credit: e.target.value, debit: e.target.value ? '' : line.debit })
+        }
         className="bg-muted border border-border rounded-lg px-2 py-1.5 text-xs text-right text-foreground tabular-nums focus:outline-none focus:ring-2 focus:ring-primary/50"
       />
 
       {/* Currency */}
       <select
         value={line.currency}
-        onChange={(e) => onChange({ ...line, currency: e.target.value, gbp_equivalent: '' })}
+        onChange={e => onChange({ ...line, currency: e.target.value, gbp_equivalent: '' })}
         className="bg-muted border border-border rounded-lg px-1 py-1.5 text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50"
       >
         <option>GBP</option>
@@ -321,7 +322,7 @@ function LineRow({
           step="0.01"
           placeholder="GBP"
           value={line.gbp_equivalent}
-          onChange={(e) => onChange({ ...line, gbp_equivalent: e.target.value })}
+          onChange={e => onChange({ ...line, gbp_equivalent: e.target.value })}
           className="bg-amber-500/10 border border-amber-500/30 rounded-lg px-2 py-1.5 text-xs text-right text-amber-600 dark:text-amber-400 tabular-nums focus:outline-none focus:ring-2 focus:ring-amber-500/50"
         />
       ) : (
@@ -398,14 +399,14 @@ function NewJournalForm({
   const isBalanced = imbalance < 0.005;
 
   const updateLine = useCallback((id: string, updated: JournalLine) => {
-    setLines((prev) => prev.map((l) => (l.id === id ? updated : l)));
+    setLines(prev => prev.map(l => (l.id === id ? updated : l)));
   }, []);
 
   const removeLine = useCallback((id: string) => {
-    setLines((prev) => prev.filter((l) => l.id !== id));
+    setLines(prev => prev.filter(l => l.id !== id));
   }, []);
 
-  const addLine = () => setLines((prev) => [...prev, makeEmptyLine()]);
+  const addLine = () => setLines(prev => [...prev, makeEmptyLine()]);
 
   // Handle success
   React.useEffect(() => {
@@ -422,7 +423,7 @@ function NewJournalForm({
     e.preventDefault();
     if (!isBalanced) return;
 
-    const payload = lines.map((l) => ({
+    const payload = lines.map(l => ({
       account_id: l.account_id,
       debit: Number(l.debit) || 0,
       credit: Number(l.credit) || 0,
@@ -453,7 +454,7 @@ function NewJournalForm({
             type="date"
             required
             value={date}
-            onChange={(e) => setDate(e.target.value)}
+            onChange={e => setDate(e.target.value)}
             className="w-full bg-muted border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50"
           />
         </div>
@@ -463,7 +464,7 @@ function NewJournalForm({
             type="text"
             placeholder="e.g. Write-off gifted stock"
             value={description}
-            onChange={(e) => setDescription(e.target.value)}
+            onChange={e => setDescription(e.target.value)}
             className="w-full bg-muted border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50"
           />
         </div>
@@ -471,7 +472,7 @@ function NewJournalForm({
           <label className="block text-xs text-muted-foreground mb-1">Type</label>
           <select
             value={journalType}
-            onChange={(e) => setJournalType(e.target.value)}
+            onChange={e => setJournalType(e.target.value)}
             className="w-full bg-muted border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50"
           >
             <option value="adjustment">Adjustment</option>
@@ -491,18 +492,20 @@ function NewJournalForm({
           <span className="text-xs font-medium text-muted-foreground text-right">Debit</span>
           <span className="text-xs font-medium text-muted-foreground text-right">Credit</span>
           <span className="text-xs font-medium text-muted-foreground">Currency</span>
-          <span className="text-xs font-medium text-amber-600 dark:text-amber-400 text-right">GBP Equiv</span>
+          <span className="text-xs font-medium text-amber-600 dark:text-amber-400 text-right">
+            GBP Equiv
+          </span>
           <span />
         </div>
 
         {/* Lines */}
         <div className="px-4">
-          {lines.map((line) => (
+          {lines.map(line => (
             <LineRow
               key={line.id}
               line={line}
               accounts={accounts}
-              onChange={(updated) => updateLine(line.id, updated)}
+              onChange={updated => updateLine(line.id, updated)}
               onRemove={() => removeLine(line.id)}
               canRemove={lines.length > 2}
             />
@@ -543,11 +546,7 @@ function NewJournalForm({
             : 'bg-rose-500/10 text-rose-600 dark:text-rose-400'
         )}
       >
-        {isBalanced ? (
-          <CheckCircle size={14} weight="fill" />
-        ) : (
-          <Warning size={14} weight="fill" />
-        )}
+        {isBalanced ? <CheckCircle size={14} weight="fill" /> : <Warning size={14} weight="fill" />}
         {isBalanced
           ? `Balanced — debits equal credits (${GBP(totalDebit)})`
           : `Unbalanced — difference of ${GBP(imbalance)} (debits ${GBP(totalDebit)}, credits ${GBP(totalCredit)})`}
@@ -565,7 +564,7 @@ function NewJournalForm({
       <div className="flex justify-end">
         <Button
           type="submit"
-          disabled={!isBalanced || isSubmitting || lines.some((l) => !l.account_id)}
+          disabled={!isBalanced || isSubmitting || lines.some(l => !l.account_id)}
           className="flex items-center gap-2"
         >
           {isSubmitting ? (
@@ -593,7 +592,12 @@ function SamplesReclassificationCard({
   alreadyReclassified: boolean;
   onSuccess: () => void;
 }) {
-  const fetcher = useFetcher<{ ok?: boolean; journal_id?: string; gbp_amount?: number; error?: string }>();
+  const fetcher = useFetcher<{
+    ok?: boolean;
+    journal_id?: string;
+    gbp_amount?: number;
+    error?: string;
+  }>();
   const [expanded, setExpanded] = useState(!alreadyReclassified);
   const [debitAccId, setDebitAccId] = useState('');
   const [creditAccId, setCreditAccId] = useState('');
@@ -668,8 +672,8 @@ function SamplesReclassificationCard({
             <Info size={14} className="text-primary mt-0.5 shrink-0" />
             <span>
               The unit costs for these items are stored in <strong>USD</strong>. Enter the GBP
-              equivalent — the amount that currently appears on your Balance Sheet under Inventory
-              — Finished Goods for these {samples.count} items.
+              equivalent — the amount that currently appears on your Balance Sheet under Inventory —
+              Finished Goods for these {samples.count} items.
             </span>
           </div>
 
@@ -714,7 +718,7 @@ function SamplesReclassificationCard({
                   required
                   placeholder="673.20"
                   value={gbpAmount}
-                  onChange={(e) => setGbpAmount(e.target.value)}
+                  onChange={e => setGbpAmount(e.target.value)}
                   className="w-full bg-muted border border-border rounded-lg pl-7 pr-3 py-2 text-sm text-foreground tabular-nums focus:outline-none focus:ring-2 focus:ring-primary/50"
                 />
               </div>
@@ -728,7 +732,7 @@ function SamplesReclassificationCard({
                 type="date"
                 required
                 value={date}
-                onChange={(e) => setDate(e.target.value)}
+                onChange={e => setDate(e.target.value)}
                 className="w-full bg-muted border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50"
               />
             </div>
@@ -742,12 +746,7 @@ function SamplesReclassificationCard({
           )}
 
           <div className="flex justify-end gap-2">
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={() => setExpanded(false)}
-            >
+            <Button type="button" variant="outline" size="sm" onClick={() => setExpanded(false)}>
               Cancel
             </Button>
             <Button
@@ -805,15 +804,19 @@ function RecentJournalsTable({ journals }: { journals: RecentJournal[] }) {
           </tr>
         </thead>
         <tbody>
-          {journals.map((j) => (
+          {journals.map(j => (
             <React.Fragment key={j.id}>
               <tr
                 className="border-b border-border/60 hover:bg-muted/30 cursor-pointer transition-colors"
                 onClick={() => setExpanded(expanded === j.id ? null : j.id)}
               >
-                <td className="px-4 py-2.5 text-sm text-foreground tabular-nums">{j.journal_date}</td>
+                <td className="px-4 py-2.5 text-sm text-foreground tabular-nums">
+                  {j.journal_date}
+                </td>
                 <td className="px-4 py-2.5 text-sm text-foreground max-w-xs truncate">
-                  {j.description ?? <span className="text-muted-foreground italic">No description</span>}
+                  {j.description ?? (
+                    <span className="text-muted-foreground italic">No description</span>
+                  )}
                 </td>
                 <td className="px-4 py-2.5">
                   <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-primary/10 text-primary">
@@ -839,8 +842,12 @@ function RecentJournalsTable({ journals }: { journals: RecentJournal[] }) {
                             <th className="px-3 py-1.5 text-left text-muted-foreground">Account</th>
                             <th className="px-3 py-1.5 text-right text-muted-foreground">Debit</th>
                             <th className="px-3 py-1.5 text-right text-muted-foreground">Credit</th>
-                            <th className="px-3 py-1.5 text-left text-muted-foreground">Currency</th>
-                            <th className="px-3 py-1.5 text-right text-muted-foreground">GBP Equiv</th>
+                            <th className="px-3 py-1.5 text-left text-muted-foreground">
+                              Currency
+                            </th>
+                            <th className="px-3 py-1.5 text-right text-muted-foreground">
+                              GBP Equiv
+                            </th>
                           </tr>
                         </thead>
                         <tbody>
@@ -878,8 +885,7 @@ function RecentJournalsTable({ journals }: { journals: RecentJournal[] }) {
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function JournalsPage() {
-  const { accounts, recentJournals, samples, alreadyReclassified } =
-    useLoaderData<typeof loader>();
+  const { accounts, recentJournals, samples, alreadyReclassified } = useLoaderData<typeof loader>();
 
   const [successBanner, setSuccessBanner] = useState<string | null>(null);
 
@@ -929,10 +935,7 @@ export default function JournalsPage() {
           <BookOpen size={15} weight="duotone" />
           New Journal Entry
         </h2>
-        <NewJournalForm
-          accounts={accounts}
-          onSuccess={(id) => handleSuccess(id)}
-        />
+        <NewJournalForm accounts={accounts} onSuccess={id => handleSuccess(id)} />
       </section>
 
       {/* Recent journals */}

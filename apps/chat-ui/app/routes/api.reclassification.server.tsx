@@ -44,7 +44,8 @@ export async function action({ request }: ActionFunctionArgs) {
       .select('metadata')
       .eq('id', transactionId)
       .single();
-    if (fetchErr || !ft) return json({ error: fetchErr?.message ?? 'Transaction not found' }, { status: 404 });
+    if (fetchErr || !ft)
+      return json({ error: fetchErr?.message ?? 'Transaction not found' }, { status: 404 });
 
     const updatedMetadata = { ...(ft.metadata ?? {}), invoice_id: invoiceNumber ?? invoiceId };
     const { error: updateErr } = await supabase

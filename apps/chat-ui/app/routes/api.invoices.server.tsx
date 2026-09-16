@@ -276,10 +276,7 @@ export async function action({ request }: ActionFunctionArgs) {
         const linksJson = formData.get('links') as string;
 
         if (!invoiceId || !entityId || !linksJson) {
-          return json(
-            { error: 'invoiceId, entity_id, and links are required' },
-            { status: 400 }
-          );
+          return json({ error: 'invoiceId, entity_id, and links are required' }, { status: 400 });
         }
 
         let links: { line_item_id: string; product_id: string }[];

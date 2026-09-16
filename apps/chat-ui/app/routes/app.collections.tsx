@@ -203,11 +203,13 @@ function toSlug(value: string) {
 function toCostTypeFromAccount(accountName: string | null, accountNumber: string | null) {
   const source = `${accountName || ''} ${accountNumber || ''}`.trim();
   if (!source) return 'other';
-  return source
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '_')
-    .replace(/^_+|_+$/g, '')
-    .slice(0, 80) || 'other';
+  return (
+    source
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '_')
+      .replace(/^_+|_+$/g, '')
+      .slice(0, 80) || 'other'
+  );
 }
 
 function isExpenseAccount(account: any) {
@@ -251,15 +253,15 @@ function pickExpenseAccountFromJournal(lines: any[], accountMap: Map<string, any
   }
 
   const enriched = lines
-    .map((line) => ({
+    .map(line => ({
       line,
       account: accountMap.get(line.account_id) || null,
       debit: Number(line.debit || 0),
     }))
-    .filter((item) => item.account);
+    .filter(item => item.account);
 
   const expenseCandidates = enriched
-    .filter((item) => isExpenseAccount(item.account))
+    .filter(item => isExpenseAccount(item.account))
     .sort((a, b) => b.debit - a.debit);
 
   if (expenseCandidates[0]) {
@@ -372,7 +374,9 @@ async function inferTransactionCostInfo(
     .select('account_id, debit')
     .eq('journal_id', journal.id);
 
-  const accountIds = Array.from(new Set((lines ?? []).map((line: any) => line.account_id).filter(Boolean)));
+  const accountIds = Array.from(
+    new Set((lines ?? []).map((line: any) => line.account_id).filter(Boolean))
+  );
   if (!accountIds.length) {
     return {
       accountId: null,
@@ -387,7 +391,9 @@ async function inferTransactionCostInfo(
     .select('id, account_number, name, account_type')
     .in('id', accountIds);
 
-  const accountMap = new Map<string, any>((accounts ?? []).map((account: any) => [account.id, account]));
+  const accountMap = new Map<string, any>(
+    (accounts ?? []).map((account: any) => [account.id, account])
+  );
   const expenseAccount = pickExpenseAccountFromJournal(lines ?? [], accountMap);
   if (expenseAccount?.id) {
     const { data: account } = await supabase
@@ -432,7 +438,9 @@ async function inferTransactionCostInfo(
           name: accountName,
           account_number: accountNumber,
           account_type: accountType,
-        }) || metadataExpenseCategory || toCostTypeFromAccount(accountName, accountNumber),
+        }) ||
+        metadataExpenseCategory ||
+        toCostTypeFromAccount(accountName, accountNumber),
     };
   }
 
@@ -513,12 +521,11 @@ export async function loader({ request }: LoaderFunctionArgs): Promise<LoaderDat
         order_id: string;
         quantity: number;
         total_price_amount: number | null;
-      }>(
-        (from, to) =>
-          supabase
-            .from('order_line_items')
-            .select('id, product_id, product_name, order_id, quantity, total_price_amount')
-            .range(from, to)
+      }>((from, to) =>
+        supabase
+          .from('order_line_items')
+          .select('id, product_id, product_name, order_id, quantity, total_price_amount')
+          .range(from, to)
       ),
       paginateAll<{
         id: string;
@@ -534,7 +541,9 @@ export async function loader({ request }: LoaderFunctionArgs): Promise<LoaderDat
       }>((from, to) =>
         supabase
           .from('financial_transactions')
-          .select('id, entity_id, description, counterparty_name, amount, base_amount, occurred_at, currency_code, base_currency_code, metadata')
+          .select(
+            'id, entity_id, description, counterparty_name, amount, base_amount, occurred_at, currency_code, base_currency_code, metadata'
+          )
           .eq('entity_id', entityId)
           .range(from, to)
       ),
@@ -559,7 +568,10 @@ export async function loader({ request }: LoaderFunctionArgs): Promise<LoaderDat
     : { data: [] as any[] };
 
   const accountByNumber = new Map<string, any>(
-    (metadataAccountRows.data ?? []).map((account: any) => [String(account.account_number), account])
+    (metadataAccountRows.data ?? []).map((account: any) => [
+      String(account.account_number),
+      account,
+    ])
   );
 
   const transactionEntityIds = Array.from(
@@ -611,7 +623,9 @@ export async function loader({ request }: LoaderFunctionArgs): Promise<LoaderDat
     }
   }
 
-  const accountMap = new Map<string, any>(accountsData.map((account: any) => [account.id, account]));
+  const accountMap = new Map<string, any>(
+    accountsData.map((account: any) => [account.id, account])
+  );
   const journalBySourceId = new Map<string, any>();
   for (const journal of journalsData) {
     const sourceId = (journal as any).source_id;
@@ -640,9 +654,9 @@ export async function loader({ request }: LoaderFunctionArgs): Promise<LoaderDat
     };
   });
 
-  const productMap = new Map(productOptions.map((product) => [product.id, product]));
+  const productMap = new Map(productOptions.map(product => [product.id, product]));
 
-  const normalizedLineItems = lineItems.map((item) => ({
+  const normalizedLineItems = lineItems.map(item => ({
     id: item.id,
     productId: item.product_id,
     orderId: item.order_id,
@@ -670,31 +684,34 @@ export async function loader({ request }: LoaderFunctionArgs): Promise<LoaderDat
     updatedAt: collection.updated_at,
   }));
 
-  const memberships: CollectionProductRow[] = (membershipsRes.data ?? []).map((membership: any) => ({
-    id: membership.id,
-    collectionId: membership.collection_id,
-    productId: membership.product_id ?? null,
-    sku: membership.sku ?? null,
-    variantExternalId: membership.variant_external_id ?? null,
-    displayOrder: membership.display_order != null ? Number(membership.display_order) : null,
-    inclusionReason: membership.inclusion_reason ?? null,
-    allocationWeight: membership.allocation_weight != null ? Number(membership.allocation_weight) : null,
-    createdAt: membership.created_at,
-    product: membership.products
-      ? {
-          id: membership.products.id,
-          name: membership.products.name || 'Unnamed product',
-          provider: membership.products.provider ?? null,
-          status: membership.products.status,
-          productType: membership.products.product_type ?? null,
-          thumbnailUrl: Array.isArray(membership.products.metadata?.images)
-            ? membership.products.metadata.images[0]?.url ?? null
-            : null,
-        }
-      : membership.product_id
-        ? productMap.get(membership.product_id) ?? null
-        : null,
-  }));
+  const memberships: CollectionProductRow[] = (membershipsRes.data ?? []).map(
+    (membership: any) => ({
+      id: membership.id,
+      collectionId: membership.collection_id,
+      productId: membership.product_id ?? null,
+      sku: membership.sku ?? null,
+      variantExternalId: membership.variant_external_id ?? null,
+      displayOrder: membership.display_order != null ? Number(membership.display_order) : null,
+      inclusionReason: membership.inclusion_reason ?? null,
+      allocationWeight:
+        membership.allocation_weight != null ? Number(membership.allocation_weight) : null,
+      createdAt: membership.created_at,
+      product: membership.products
+        ? {
+            id: membership.products.id,
+            name: membership.products.name || 'Unnamed product',
+            provider: membership.products.provider ?? null,
+            status: membership.products.status,
+            productType: membership.products.product_type ?? null,
+            thumbnailUrl: Array.isArray(membership.products.metadata?.images)
+              ? (membership.products.metadata.images[0]?.url ?? null)
+              : null,
+          }
+        : membership.product_id
+          ? (productMap.get(membership.product_id) ?? null)
+          : null,
+    })
+  );
 
   const costs: CollectionCostRow[] = (costsRes.data ?? []).map((cost: any) => ({
     id: cost.id,
@@ -733,7 +750,9 @@ export async function loader({ request }: LoaderFunctionArgs): Promise<LoaderDat
 
   const transactionOptions: FinancialTransactionRow[] = transactions.map((transaction: any) => {
     const metadata = transaction.metadata ?? null;
-    const metadataAccountCode = metadata?.account_code ? String(metadata.account_code).trim() : null;
+    const metadataAccountCode = metadata?.account_code
+      ? String(metadata.account_code).trim()
+      : null;
     const metadataExpenseCategory = metadata?.expense_category
       ? String(metadata.expense_category).trim()
       : null;
@@ -741,7 +760,7 @@ export async function loader({ request }: LoaderFunctionArgs): Promise<LoaderDat
     const metadataAccount = metadataAccountCode ? accountByNumber.get(metadataAccountCode) : null;
 
     const journal = journalBySourceId.get(transaction.id);
-    const lines = journal ? journalLinesByJournalId.get(journal.id) ?? [] : [];
+    const lines = journal ? (journalLinesByJournalId.get(journal.id) ?? []) : [];
     const journalExpenseAccount = pickExpenseAccountFromJournal(lines, accountMap);
     const expenseAccount = journalExpenseAccount || metadataAccount;
     const expenseAccountName = expenseAccount?.name ?? null;
@@ -764,45 +783,44 @@ export async function loader({ request }: LoaderFunctionArgs): Promise<LoaderDat
       expenseAccountId: expenseAccount?.id ?? null,
       expenseAccountNumber,
       expenseAccountName,
-      inferredCostType:
-        journalExpenseAccount
-          ? deriveCollectionCostTypeFromAccount({
-              name: expenseAccountName,
-              account_number: expenseAccountNumber,
-              account_type: expenseAccountType,
-            })
-          : metadataExpenseCategory ||
-            deriveCollectionCostTypeFromAccount({
-              name: expenseAccountName,
-              account_number: expenseAccountNumber,
-              account_type: expenseAccountType,
-            }),
+      inferredCostType: journalExpenseAccount
+        ? deriveCollectionCostTypeFromAccount({
+            name: expenseAccountName,
+            account_number: expenseAccountNumber,
+            account_type: expenseAccountType,
+          })
+        : metadataExpenseCategory ||
+          deriveCollectionCostTypeFromAccount({
+            name: expenseAccountName,
+            account_number: expenseAccountNumber,
+            account_type: expenseAccountType,
+          }),
     };
   });
 
-  const summaries = collections.map<CollectionSummary>((collection) => {
+  const summaries = collections.map<CollectionSummary>(collection => {
     const collectionMemberships = memberships
-      .filter((membership) => membership.collectionId === collection.id)
+      .filter(membership => membership.collectionId === collection.id)
       .sort(
         (a, b) =>
           (a.displayOrder ?? Number.MAX_SAFE_INTEGER) - (b.displayOrder ?? Number.MAX_SAFE_INTEGER)
       );
-    const collectionCosts = costs.filter((cost) => cost.collectionId === collection.id);
+    const collectionCosts = costs.filter(cost => cost.collectionId === collection.id);
 
     const membershipProductIds = new Set(
       collectionMemberships
-        .map((membership) => membership.productId)
+        .map(membership => membership.productId)
         .filter((productId): productId is string => Boolean(productId))
     );
     const membershipNames = new Set(
       collectionMemberships
-        .map((membership) => normalizeProductKey(membership.product?.name))
-        .filter((name) => Boolean(name))
+        .map(membership => normalizeProductKey(membership.product?.name))
+        .filter(name => Boolean(name))
     );
     const membershipLooseNames = new Set(
       collectionMemberships
-        .map((membership) => normalizeLooseProductKey(membership.product?.name))
-        .filter((name) => Boolean(name))
+        .map(membership => normalizeLooseProductKey(membership.product?.name))
+        .filter(name => Boolean(name))
     );
 
     const matchedLineIds = new Set<string>();
@@ -854,11 +872,13 @@ export async function loader({ request }: LoaderFunctionArgs): Promise<LoaderDat
   });
 
   const selectedCollection =
-    summaries.find((summary) => summary.collection.id === selectedCollectionId) ?? summaries[0] ?? null;
+    summaries.find(summary => summary.collection.id === selectedCollectionId) ??
+    summaries[0] ??
+    null;
 
   const stats = {
     collections: summaries.length,
-    active: summaries.filter((summary) => summary.collection.status === 'active').length,
+    active: summaries.filter(summary => summary.collection.status === 'active').length,
     linkedProducts: memberships.length,
     linkedCosts: costs.length,
     totalRevenue: summaries.reduce((sum, summary) => sum + summary.revenue, 0),
@@ -1044,10 +1064,7 @@ export async function action({ request }: ActionFunctionArgs) {
       return { ok: false, error: 'Membership does not belong to this collection' };
     }
 
-    const { error } = await supabase
-      .from('collection_products')
-      .delete()
-      .eq('id', membershipId);
+    const { error } = await supabase.from('collection_products').delete().eq('id', membershipId);
 
     if (error) return { ok: false, error: error.message };
     return { ok: true, intent: 'remove_product' };
@@ -1075,10 +1092,7 @@ export async function action({ request }: ActionFunctionArgs) {
       return { ok: false, error: 'Unauthorized' };
     }
 
-    const { error } = await supabase
-      .from('collection_costs')
-      .delete()
-      .eq('id', costId);
+    const { error } = await supabase.from('collection_costs').delete().eq('id', costId);
 
     if (error) return { ok: false, error: error.message };
     return { ok: true, intent: 'remove_cost' };
@@ -1087,11 +1101,7 @@ export async function action({ request }: ActionFunctionArgs) {
   return { ok: false, error: `Unknown intent: ${intent}` };
 }
 
-function CreateCollectionForm({
-  onCreated,
-}: {
-  onCreated: (collectionId: string) => void;
-}) {
+function CreateCollectionForm({ onCreated }: { onCreated: (collectionId: string) => void }) {
   const fetcher = useFetcher();
   const revalidator = useRevalidator();
   const [name, setName] = useState('');
@@ -1133,7 +1143,10 @@ function CreateCollectionForm({
   }, [name, slugManuallyEdited]);
 
   return (
-    <fetcher.Form method="post" className="rounded-2xl border border-border bg-card p-4 space-y-4 shadow-sm">
+    <fetcher.Form
+      method="post"
+      className="rounded-2xl border border-border bg-card p-4 space-y-4 shadow-sm"
+    >
       <input type="hidden" name="intent" value="create_collection" />
 
       <div className="flex items-start justify-between gap-3">
@@ -1155,7 +1168,7 @@ function CreateCollectionForm({
             type="text"
             name="name"
             value={name}
-            onChange={(event) => setName(event.target.value)}
+            onChange={event => setName(event.target.value)}
             placeholder="AW26 Core Drop"
             className="mt-1 w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/20"
             required
@@ -1169,7 +1182,7 @@ function CreateCollectionForm({
               type="text"
               name="slug"
               value={slug}
-              onChange={(event) => {
+              onChange={event => {
                 const nextSlug = toSlug(event.target.value);
                 setSlug(nextSlug);
                 setSlugManuallyEdited(nextSlug !== toSlug(name));
@@ -1183,10 +1196,10 @@ function CreateCollectionForm({
             <select
               name="status"
               value={status}
-              onChange={(event) => setStatus(event.target.value)}
+              onChange={event => setStatus(event.target.value)}
               className="mt-1 w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/20"
             >
-              {['draft', 'active', 'planned', 'completed', 'archived'].map((value) => (
+              {['draft', 'active', 'planned', 'completed', 'archived'].map(value => (
                 <option key={value} value={value}>
                   {value}
                 </option>
@@ -1202,7 +1215,7 @@ function CreateCollectionForm({
               type="text"
               name="collectionType"
               value={collectionType}
-              onChange={(event) => setCollectionType(event.target.value)}
+              onChange={event => setCollectionType(event.target.value)}
               placeholder="seasonal / capsule / drop"
               className="mt-1 w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/20"
             />
@@ -1213,7 +1226,7 @@ function CreateCollectionForm({
               type="date"
               name="launchDate"
               value={launchDate}
-              onChange={(event) => setLaunchDate(event.target.value)}
+              onChange={event => setLaunchDate(event.target.value)}
               className="mt-1 w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/20"
             />
           </div>
@@ -1226,7 +1239,7 @@ function CreateCollectionForm({
               type="date"
               name="startsAt"
               value={startsAt}
-              onChange={(event) => setStartsAt(event.target.value)}
+              onChange={event => setStartsAt(event.target.value)}
               className="mt-1 w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/20"
             />
           </div>
@@ -1236,7 +1249,7 @@ function CreateCollectionForm({
               type="date"
               name="endsAt"
               value={endsAt}
-              onChange={(event) => setEndsAt(event.target.value)}
+              onChange={event => setEndsAt(event.target.value)}
               className="mt-1 w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/20"
             />
           </div>
@@ -1251,7 +1264,7 @@ function CreateCollectionForm({
               min="0"
               name="plannedBudgetAmount"
               value={plannedBudgetAmount}
-              onChange={(event) => setPlannedBudgetAmount(event.target.value)}
+              onChange={event => setPlannedBudgetAmount(event.target.value)}
               placeholder="Optional"
               className="mt-1 w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/20"
             />
@@ -1262,7 +1275,7 @@ function CreateCollectionForm({
               type="text"
               name="budgetCurrency"
               value={budgetCurrency}
-              onChange={(event) => setBudgetCurrency(event.target.value.toUpperCase().slice(0, 3))}
+              onChange={event => setBudgetCurrency(event.target.value.toUpperCase().slice(0, 3))}
               placeholder="GBP"
               className="mt-1 w-full rounded-xl border border-border bg-background px-3 py-2 text-sm uppercase text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/20"
             />
@@ -1271,7 +1284,9 @@ function CreateCollectionForm({
       </div>
 
       <div className="flex items-center justify-between gap-3 pt-1">
-        <p className="text-xs text-muted-foreground">After creation, the new collection is selected automatically.</p>
+        <p className="text-xs text-muted-foreground">
+          After creation, the new collection is selected automatically.
+        </p>
         <Button type="submit" disabled={fetcher.state !== 'idle'}>
           Create collection
         </Button>
@@ -1345,33 +1360,44 @@ function CollectionCard({ summary, active }: { summary: CollectionSummary; activ
         </div>
         <div>
           <p className="text-xs text-muted-foreground">Revenue</p>
-          <p className="font-medium text-foreground tabular-nums">{formatCurrency(summary.revenue)}</p>
+          <p className="font-medium text-foreground tabular-nums">
+            {formatCurrency(summary.revenue)}
+          </p>
         </div>
         <div>
           <p className="text-xs text-muted-foreground">Costs</p>
-          <p className="font-medium text-foreground tabular-nums">{formatCurrency(summary.costTotal)}</p>
+          <p className="font-medium text-foreground tabular-nums">
+            {formatCurrency(summary.costTotal)}
+          </p>
         </div>
         <div>
           <p className="text-xs text-muted-foreground">Margin</p>
-          <p className="font-medium text-foreground tabular-nums">{formatDecimal(summary.grossMargin, 1)}%</p>
+          <p className="font-medium text-foreground tabular-nums">
+            {formatDecimal(summary.grossMargin, 1)}%
+          </p>
         </div>
       </div>
     </Link>
   );
 }
 
-function RemoveProductButton({ membershipId, collectionId, productName }: { membershipId: string; collectionId: string; productName: string }) {
+function RemoveProductButton({
+  membershipId,
+  collectionId,
+  productName,
+}: {
+  membershipId: string;
+  collectionId: string;
+  productName: string;
+}) {
   const fetcher = useFetcher();
   const revalidator = useRevalidator();
   const [showConfirm, setShowConfirm] = useState(false);
-  const data = (fetcher.data as any);
+  const data = fetcher.data as any;
   const error = data?.error;
 
   const handleDelete = () => {
-    fetcher.submit(
-      { intent: 'remove_product', membershipId, collectionId },
-      { method: 'post' }
-    );
+    fetcher.submit({ intent: 'remove_product', membershipId, collectionId }, { method: 'post' });
   };
 
   useEffect(() => {
@@ -1384,12 +1410,13 @@ function RemoveProductButton({ membershipId, collectionId, productName }: { memb
   if (error && showConfirm) {
     return (
       <div className="flex gap-2 items-center">
-        <div className="text-xs text-red-600 bg-red-500/20 px-2 py-1 rounded">
-          {error}
-        </div>
+        <div className="text-xs text-red-600 bg-red-500/20 px-2 py-1 rounded">{error}</div>
         <button
           type="button"
-          onClick={() => { setShowConfirm(false); fetcher.data = null; }}
+          onClick={() => {
+            setShowConfirm(false);
+            fetcher.data = null;
+          }}
           disabled={fetcher.state !== 'idle'}
           className="px-2 py-1 text-xs rounded bg-muted hover:bg-muted/80 text-foreground disabled:opacity-50"
         >
@@ -1435,18 +1462,23 @@ function RemoveProductButton({ membershipId, collectionId, productName }: { memb
   );
 }
 
-function RemoveCostButton({ costId, collectionId, transactionName }: { costId: string; collectionId: string; transactionName: string }) {
+function RemoveCostButton({
+  costId,
+  collectionId,
+  transactionName,
+}: {
+  costId: string;
+  collectionId: string;
+  transactionName: string;
+}) {
   const fetcher = useFetcher();
   const revalidator = useRevalidator();
   const [showConfirm, setShowConfirm] = useState(false);
-  const data = (fetcher.data as any);
+  const data = fetcher.data as any;
   const error = data?.error;
 
   const handleDelete = () => {
-    fetcher.submit(
-      { intent: 'remove_cost', costId, collectionId },
-      { method: 'post' }
-    );
+    fetcher.submit({ intent: 'remove_cost', costId, collectionId }, { method: 'post' });
   };
 
   useEffect(() => {
@@ -1459,12 +1491,13 @@ function RemoveCostButton({ costId, collectionId, transactionName }: { costId: s
   if (error && showConfirm) {
     return (
       <div className="flex gap-2 items-center">
-        <div className="text-xs text-red-600 bg-red-500/20 px-2 py-1 rounded">
-          {error}
-        </div>
+        <div className="text-xs text-red-600 bg-red-500/20 px-2 py-1 rounded">{error}</div>
         <button
           type="button"
-          onClick={() => { setShowConfirm(false); fetcher.data = null; }}
+          onClick={() => {
+            setShowConfirm(false);
+            fetcher.data = null;
+          }}
           disabled={fetcher.state !== 'idle'}
           className="px-2 py-1 text-xs rounded bg-muted hover:bg-muted/80 text-foreground disabled:opacity-50"
         >
@@ -1510,7 +1543,13 @@ function RemoveCostButton({ costId, collectionId, transactionName }: { costId: s
   );
 }
 
-function AddProductForm({ collectionId, productOptions }: { collectionId: string; productOptions: ProductRow[] }) {
+function AddProductForm({
+  collectionId,
+  productOptions,
+}: {
+  collectionId: string;
+  productOptions: ProductRow[];
+}) {
   const fetcher = useFetcher();
   const revalidator = useRevalidator();
   const [query, setQuery] = useState('');
@@ -1522,7 +1561,7 @@ function AddProductForm({ collectionId, productOptions }: { collectionId: string
 
   const filteredProducts = useMemo(() => {
     const q = query.trim().toLowerCase();
-    return productOptions.filter((product) => {
+    return productOptions.filter(product => {
       if (!q) return true;
       const searchable = [product.name, product.provider, product.productType]
         .filter(Boolean)
@@ -1545,7 +1584,10 @@ function AddProductForm({ collectionId, productOptions }: { collectionId: string
   }, [fetcher.data, fetcher.state, revalidator]);
 
   return (
-    <fetcher.Form method="post" className="rounded-2xl border border-border bg-card p-4 space-y-4 shadow-sm">
+    <fetcher.Form
+      method="post"
+      className="rounded-2xl border border-border bg-card p-4 space-y-4 shadow-sm"
+    >
       <input type="hidden" name="intent" value="add_product" />
       <input type="hidden" name="collectionId" value={collectionId} />
 
@@ -1566,7 +1608,7 @@ function AddProductForm({ collectionId, productOptions }: { collectionId: string
         <input
           type="text"
           value={query}
-          onChange={(event) => setQuery(event.target.value)}
+          onChange={event => setQuery(event.target.value)}
           placeholder="Type a product name or provider..."
           className="mt-1 w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/20"
         />
@@ -1577,12 +1619,12 @@ function AddProductForm({ collectionId, productOptions }: { collectionId: string
         <select
           name="productId"
           value={selectedProductId}
-          onChange={(event) => setSelectedProductId(event.target.value)}
+          onChange={event => setSelectedProductId(event.target.value)}
           className="mt-1 w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/20"
           required
         >
           <option value="">Choose a product</option>
-          {filteredProducts.map((product) => (
+          {filteredProducts.map(product => (
             <option key={product.id} value={product.id}>
               {product.name}
               {product.provider ? ` · ${product.provider}` : ''}
@@ -1599,7 +1641,7 @@ function AddProductForm({ collectionId, productOptions }: { collectionId: string
             name="displayOrder"
             min="0"
             value={displayOrder}
-            onChange={(event) => setDisplayOrder(event.target.value)}
+            onChange={event => setDisplayOrder(event.target.value)}
             placeholder="Optional"
             className="mt-1 w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/20"
           />
@@ -1612,7 +1654,7 @@ function AddProductForm({ collectionId, productOptions }: { collectionId: string
             min="0"
             step="0.01"
             value={allocationWeight}
-            onChange={(event) => setAllocationWeight(event.target.value)}
+            onChange={event => setAllocationWeight(event.target.value)}
             placeholder="Optional"
             className="mt-1 w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/20"
           />
@@ -1624,7 +1666,7 @@ function AddProductForm({ collectionId, productOptions }: { collectionId: string
         <textarea
           name="inclusionReason"
           value={inclusionReason}
-          onChange={(event) => setInclusionReason(event.target.value)}
+          onChange={event => setInclusionReason(event.target.value)}
           placeholder="Why is this product in the collection?"
           rows={3}
           className="mt-1 w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/20 resize-none"
@@ -1664,7 +1706,7 @@ function AddCostForm({
   const lastState = useRef(fetcher.state);
 
   const selectedTransaction = useMemo(
-    () => transactionOptions.find((transaction) => transaction.id === selectedTransactionId) ?? null,
+    () => transactionOptions.find(transaction => transaction.id === selectedTransactionId) ?? null,
     [selectedTransactionId, transactionOptions]
   );
 
@@ -1696,7 +1738,7 @@ function AddCostForm({
 
   const filteredTransactions = useMemo(() => {
     const q = query.trim().toLowerCase();
-    return transactionOptions.filter((transaction) => {
+    return transactionOptions.filter(transaction => {
       if (!q) return true;
       const searchable = [
         transaction.description,
@@ -1745,7 +1787,9 @@ function AddCostForm({
         selectedTransaction.metadataExpenseCategory
           ? `Expense category: ${selectedTransaction.metadataExpenseCategory}`
           : null,
-        selectedTransaction.counterpartyName ? `Counterparty: ${selectedTransaction.counterpartyName}` : null,
+        selectedTransaction.counterpartyName
+          ? `Counterparty: ${selectedTransaction.counterpartyName}`
+          : null,
         selectedTransaction.description ? `Transaction: ${selectedTransaction.description}` : null,
       ]
         .filter(Boolean)
@@ -1755,7 +1799,10 @@ function AddCostForm({
   }, [notesManuallyEdited, selectedTransaction, selectedTransactionId]);
 
   return (
-    <fetcher.Form method="post" className="rounded-2xl border border-border bg-card p-4 space-y-4 shadow-sm">
+    <fetcher.Form
+      method="post"
+      className="rounded-2xl border border-border bg-card p-4 space-y-4 shadow-sm"
+    >
       <input type="hidden" name="intent" value="add_cost" />
       <input type="hidden" name="collectionId" value={collectionId} />
       <input type="hidden" name="costType" value={costType} />
@@ -1777,7 +1824,7 @@ function AddCostForm({
         <input
           type="text"
           value={query}
-          onChange={(event) => setQuery(event.target.value)}
+          onChange={event => setQuery(event.target.value)}
           placeholder="Description, counterparty, amount, or date..."
           className="mt-1 w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/20"
         />
@@ -1788,7 +1835,7 @@ function AddCostForm({
         <select
           name="financialTransactionId"
           value={selectedTransactionId}
-          onChange={(event) => {
+          onChange={event => {
             setSelectedTransactionId(event.target.value);
             setNotesManuallyEdited(false);
           }}
@@ -1796,7 +1843,7 @@ function AddCostForm({
           required
         >
           <option value="">Choose a transaction</option>
-          {filteredTransactions.map((transaction) => (
+          {filteredTransactions.map(transaction => (
             <option key={transaction.id} value={transaction.id}>
               {formatDate(transaction.occurredAt)}
               {transaction.counterpartyName ? ` · ${transaction.counterpartyName}` : ''}
@@ -1812,7 +1859,9 @@ function AddCostForm({
 
       <div className="grid grid-cols-1 gap-3">
         <div>
-          <label className="text-xs font-medium text-muted-foreground">Cost type (from expense account)</label>
+          <label className="text-xs font-medium text-muted-foreground">
+            Cost type (from expense account)
+          </label>
           <div className="mt-1 w-full rounded-xl border border-border bg-muted/30 px-3 py-2 text-sm text-foreground">
             {selectedTransaction
               ? `${costType} (${selectedTransaction.expenseAccountNumber ? `${selectedTransaction.expenseAccountNumber} - ` : ''}${selectedTransaction.expenseAccountName || selectedTransaction.metadataAccountCode || selectedTransaction.metadataExpenseCategory || 'Unmapped expense account'})`
@@ -1825,7 +1874,7 @@ function AddCostForm({
             type="text"
             name="notes"
             value={notes}
-            onChange={(event) => {
+            onChange={event => {
               setNotes(event.target.value);
               setNotesManuallyEdited(true);
             }}
@@ -1841,13 +1890,16 @@ function AddCostForm({
               source={debugInference.source} | txn={debugInference.transactionId}
             </p>
             <p className="text-[11px] text-amber-700 break-all">
-              expense_category={debugInference.metadataExpenseCategory} | account_code={debugInference.metadataAccountCode}
+              expense_category={debugInference.metadataExpenseCategory} | account_code=
+              {debugInference.metadataAccountCode}
             </p>
             <p className="text-[11px] text-amber-700 break-all">
-              expense_account_id={debugInference.expenseAccountId} | account_number={debugInference.expenseAccountNumber}
+              expense_account_id={debugInference.expenseAccountId} | account_number=
+              {debugInference.expenseAccountNumber}
             </p>
             <p className="text-[11px] text-amber-700 break-all">
-              account_name={debugInference.expenseAccountName} | inferred_cost_type={debugInference.inferredCostType}
+              account_name={debugInference.expenseAccountName} | inferred_cost_type=
+              {debugInference.inferredCostType}
             </p>
           </div>
         )}
@@ -1885,9 +1937,7 @@ function CollectionDetail({
       ? formatCurrency(collection.plannedBudgetAmount, budgetCurrency)
       : '—';
   const budgetRemainingLabel =
-    summary.budgetRemaining != null
-      ? formatCurrency(summary.budgetRemaining, budgetCurrency)
-      : '—';
+    summary.budgetRemaining != null ? formatCurrency(summary.budgetRemaining, budgetCurrency) : '—';
 
   return (
     <div className="space-y-6">
@@ -1915,8 +1965,8 @@ function CollectionDetail({
               </h2>
               <p className="text-sm text-muted-foreground mt-2 max-w-2xl">
                 This view answers the core collection questions directly: what belongs in the
-                collection, what spend is attributed to it, and what the resulting performance
-                looks like.
+                collection, what spend is attributed to it, and what the resulting performance looks
+                like.
               </p>
             </div>
             <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
@@ -2001,7 +2051,7 @@ function CollectionDetail({
                 'How many orders, units, and revenue came from the collection?',
                 'Which financial transactions count as collection costs?',
                 'What is the collection-level profitability?',
-              ].map((question) => (
+              ].map(question => (
                 <div key={question} className="rounded-xl border border-border bg-background p-4">
                   <p className="text-sm text-foreground leading-6">{question}</p>
                 </div>
@@ -2037,10 +2087,13 @@ function CollectionDetail({
                     </tr>
                   </thead>
                   <tbody>
-                    {summary.products.map((membership) => {
+                    {summary.products.map(membership => {
                       const product = membership.product;
                       return (
-                        <tr key={membership.id} className="border-t border-border/60 hover:bg-muted/20">
+                        <tr
+                          key={membership.id}
+                          className="border-t border-border/60 hover:bg-muted/20"
+                        >
                           <td className="px-5 py-4">
                             <div className="flex items-center gap-3 min-w-0">
                               <div className="w-9 h-9 rounded-xl bg-primary/10 flex items-center justify-center overflow-hidden shrink-0">
@@ -2056,10 +2109,16 @@ function CollectionDetail({
                               </div>
                               <div className="min-w-0">
                                 <p className="font-medium text-foreground truncate">
-                                  {product?.name || membership.sku || membership.variantExternalId || 'Unmapped product'}
+                                  {product?.name ||
+                                    membership.sku ||
+                                    membership.variantExternalId ||
+                                    'Unmapped product'}
                                 </p>
                                 <p className="text-xs text-muted-foreground truncate">
-                                  {product?.provider || membership.sku || membership.variantExternalId || 'Collection membership'}
+                                  {product?.provider ||
+                                    membership.sku ||
+                                    membership.variantExternalId ||
+                                    'Collection membership'}
                                 </p>
                               </div>
                             </div>
@@ -2076,11 +2135,15 @@ function CollectionDetail({
                               : '—'}
                           </td>
                           <td className="px-4 py-4">
-                            <RemoveProductButton membershipId={membership.id} collectionId={collection.id} productName={product?.name || 'Product'} />
+                            <RemoveProductButton
+                              membershipId={membership.id}
+                              collectionId={collection.id}
+                              productName={product?.name || 'Product'}
+                            />
                           </td>
-                       </tr>
-                     );
-                   })}
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
@@ -2115,12 +2178,14 @@ function CollectionDetail({
                     </tr>
                   </thead>
                   <tbody>
-                    {summary.costs.map((cost) => (
+                    {summary.costs.map(cost => (
                       <tr key={cost.id} className="border-t border-border/60 hover:bg-muted/20">
                         <td className="px-5 py-4">
                           <div>
                             <p className="font-medium text-foreground">
-                              {cost.transaction?.counterpartyName || cost.transaction?.description || 'Transaction'}
+                              {cost.transaction?.counterpartyName ||
+                                cost.transaction?.description ||
+                                'Transaction'}
                             </p>
                             <p className="text-xs text-muted-foreground mt-0.5">
                               {formatDate(cost.transaction?.occurredAt ?? null)}
@@ -2139,7 +2204,11 @@ function CollectionDetail({
                           {cost.notes || '—'}
                         </td>
                         <td className="px-4 py-4">
-                          <RemoveCostButton costId={cost.id} collectionId={collection.id} transactionName={cost.transaction?.counterpartyName || 'Cost'} />
+                          <RemoveCostButton
+                            costId={cost.id}
+                            collectionId={collection.id}
+                            transactionName={cost.transaction?.counterpartyName || 'Cost'}
+                          />
                         </td>
                       </tr>
                     ))}
@@ -2170,10 +2239,12 @@ function CollectionDetail({
                 {summary.products.length} products are currently tied to the collection.
               </div>
               <div className="rounded-xl bg-background border border-border p-3">
-                {summary.orders} orders and {formatDecimal(summary.units)} units are attributed to it.
+                {summary.orders} orders and {formatDecimal(summary.units)} units are attributed to
+                it.
               </div>
               <div className="rounded-xl bg-background border border-border p-3">
-                Profitability is shown as revenue less linked spend, using the original transaction values.
+                Profitability is shown as revenue less linked spend, using the original transaction
+                values.
               </div>
             </div>
           </section>
@@ -2184,8 +2255,14 @@ function CollectionDetail({
 }
 
 export default function CollectionsPage() {
-  const { stats, summaries, selectedCollectionId, selectedCollection, productOptions, transactionOptions } =
-    useLoaderData<LoaderData>();
+  const {
+    stats,
+    summaries,
+    selectedCollectionId,
+    selectedCollection,
+    productOptions,
+    transactionOptions,
+  } = useLoaderData<LoaderData>();
   const [searchParams, setSearchParams] = useSearchParams();
   const [query, setQuery] = useState('');
   const handleCollectionCreated = (collectionId: string) => {
@@ -2195,7 +2272,7 @@ export default function CollectionsPage() {
   const filteredSummaries = useMemo(() => {
     const q = query.trim().toLowerCase();
     if (!q) return summaries;
-    return summaries.filter((summary) => {
+    return summaries.filter(summary => {
       return [
         summary.collection.name,
         summary.collection.slug,
@@ -2283,7 +2360,7 @@ export default function CollectionsPage() {
             <input
               type="text"
               value={query}
-              onChange={(event) => setQuery(event.target.value)}
+              onChange={event => setQuery(event.target.value)}
               placeholder="Name, status, type, or slug..."
               className="mt-2 w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/20"
             />
@@ -2295,7 +2372,7 @@ export default function CollectionsPage() {
                 No collections match your search.
               </div>
             ) : (
-              filteredSummaries.map((summary) => (
+              filteredSummaries.map(summary => (
                 <CollectionCard
                   key={summary.collection.id}
                   summary={summary}

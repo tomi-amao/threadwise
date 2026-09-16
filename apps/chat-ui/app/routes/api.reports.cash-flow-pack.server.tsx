@@ -30,11 +30,7 @@ const formatDate = (value: string) => {
 };
 
 const escapeHtml = (value: string) =>
-  value
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
+  value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
 export async function loader({ request }: LoaderFunctionArgs) {
   const url = new URL(request.url);
@@ -79,10 +75,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
 
   // The chart on screen becomes a table here: the same numbers, legible in
   // print and in black and white.
-  const maxAbs = Math.max(
-    1,
-    ...cashInsights.monthly.map(month => Math.abs(month.operating))
-  );
+  const maxAbs = Math.max(1, ...cashInsights.monthly.map(month => Math.abs(month.operating)));
   const monthlyRows = cashInsights.monthly
     .map(month => {
       const pct = (Math.abs(month.operating) / maxAbs) * 100;
@@ -182,7 +175,10 @@ export async function loader({ request }: LoaderFunctionArgs) {
 </table>
 ${cashInsights.safeToSpendLines
   .filter(line => line.amount !== 0 || line.label.includes('bad month'))
-  .map(line => `<p style="font-size:11px;color:#777;margin:6px 0 0;"><strong>${escapeHtml(line.label)}:</strong> ${escapeHtml(line.detail)}</p>`)
+  .map(
+    line =>
+      `<p style="font-size:11px;color:#777;margin:6px 0 0;"><strong>${escapeHtml(line.label)}:</strong> ${escapeHtml(line.detail)}</p>`
+  )
   .join('')}
 
 <h2>Monthly operating cash</h2>

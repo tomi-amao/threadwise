@@ -30,9 +30,15 @@ const formatValue = (value: number, format?: 'currency' | 'number' | 'percentage
   }
 };
 
-export function BarChartViz({ title, data, xAxisLabel, yAxisLabel, format = 'number' }: BarChartProps) {
+export function BarChartViz({
+  title,
+  data,
+  xAxisLabel,
+  yAxisLabel,
+  format = 'number',
+}: BarChartProps) {
   // Transform data for Nivo
-  const chartData = data.map((item) => ({
+  const chartData = data.map(item => ({
     id: item.id,
     label: item.label,
     value: item.value,
@@ -73,7 +79,7 @@ export function BarChartViz({ title, data, xAxisLabel, yAxisLabel, format = 'num
             legend: yAxisLabel,
             legendPosition: 'middle',
             legendOffset: -60,
-            format: (value) => formatValue(value, format),
+            format: value => formatValue(value, format),
           }}
           labelSkipWidth={12}
           labelSkipHeight={12}
@@ -84,15 +90,10 @@ export function BarChartViz({ title, data, xAxisLabel, yAxisLabel, format = 'num
           tooltip={({ indexValue, value, color }) => (
             <div className="bg-neutral-800 px-3 py-2 rounded shadow-lg border border-neutral-700">
               <div className="flex items-center gap-2">
-                <div
-                  className="w-3 h-3 rounded"
-                  style={{ backgroundColor: color }}
-                />
+                <div className="w-3 h-3 rounded" style={{ backgroundColor: color }} />
                 <span className="text-white font-medium">{indexValue}</span>
               </div>
-              <div className="text-neutral-300 text-sm mt-1">
-                {formatValue(value, format)}
-              </div>
+              <div className="text-neutral-300 text-sm mt-1">{formatValue(value, format)}</div>
             </div>
           )}
           theme={{

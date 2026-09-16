@@ -30,11 +30,7 @@ const formatDate = (value: string) => {
 };
 
 const escapeHtml = (value: string) =>
-  value
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
+  value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
 export async function loader({ request }: LoaderFunctionArgs) {
   const url = new URL(request.url);
@@ -200,7 +196,10 @@ ${
           GBP(f(period.taxDue) + f(period.marginalRelief)),
           { box: 'CT600 475' }
         )
-      : row('Corporation tax', GBP(0), { box: 'CT600 475', note: 'No taxable profit for the period' })
+      : row('Corporation tax', GBP(0), {
+          box: 'CT600 475',
+          note: 'No taxable profit for the period',
+        })
   }
   ${f(period.marginalRelief) > 0 ? row('Less: marginal relief', `(${GBP(f(period.marginalRelief))})`, { indent: true }) : ''}
   ${row('Corporation tax payable', GBP(f(period.taxDue)), { bold: true, box: 'CT600 525' })}

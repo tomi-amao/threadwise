@@ -31,7 +31,13 @@ const formatValue = (value: number, format?: 'currency' | 'number' | 'percentage
   }
 };
 
-export function LineChartViz({ title, data, xAxisLabel, yAxisLabel, format = 'number' }: LineChartProps) {
+export function LineChartViz({
+  title,
+  data,
+  xAxisLabel,
+  yAxisLabel,
+  format = 'number',
+}: LineChartProps) {
   return (
     <div className="w-full bg-neutral-900 rounded-lg p-6 border border-neutral-800">
       <h3 className="text-lg font-semibold text-white mb-4">{title}</h3>
@@ -47,7 +53,7 @@ export function LineChartViz({ title, data, xAxisLabel, yAxisLabel, format = 'nu
             stacked: false,
             reverse: false,
           }}
-          yFormat={(value) => formatValue(Number(value), format)}
+          yFormat={value => formatValue(Number(value), format)}
           axisTop={null}
           axisRight={null}
           axisBottom={{
@@ -65,7 +71,7 @@ export function LineChartViz({ title, data, xAxisLabel, yAxisLabel, format = 'nu
             legend: yAxisLabel,
             legendOffset: -60,
             legendPosition: 'middle',
-            format: (value) => formatValue(value, format),
+            format: value => formatValue(value, format),
           }}
           pointSize={8}
           pointColor={{ theme: 'background' }}
@@ -79,10 +85,7 @@ export function LineChartViz({ title, data, xAxisLabel, yAxisLabel, format = 'nu
           tooltip={({ point }) => (
             <div className="bg-neutral-800 px-3 py-2 rounded shadow-lg border border-neutral-700">
               <div className="flex items-center gap-2">
-                <div
-                  className="w-3 h-3 rounded-full"
-                  style={{ backgroundColor: point.color }}
-                />
+                <div className="w-3 h-3 rounded-full" style={{ backgroundColor: point.color }} />
                 <span className="text-white font-medium">{point.seriesId}</span>
               </div>
               <div className="text-neutral-300 text-sm mt-1">

@@ -45,9 +45,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
     query = query.eq('status', statusFilter);
   }
   if (searchQuery) {
-    query = query.or(
-      `order_number.ilike.%${searchQuery}%,customer_email.ilike.%${searchQuery}%`
-    );
+    query = query.or(`order_number.ilike.%${searchQuery}%,customer_email.ilike.%${searchQuery}%`);
   }
 
   const [ordersRes, statusCountsRes] = await Promise.all([
@@ -136,15 +134,16 @@ export default function OrdersPage() {
               type="text"
               name="q"
               value={search}
-              onChange={(e) => setSearch(e.target.value)}
+              onChange={e => setSearch(e.target.value)}
               placeholder="Search by order # or email..."
               className="w-full pl-9 pr-4 py-2 rounded-lg border border-border bg-card text-foreground text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/30"
             />
           </form>
           <div className="flex gap-1.5 overflow-x-auto">
-            {statuses.map((s) => {
+            {statuses.map(s => {
               const count = s === 'all' ? totalCount : statusCounts[s] || 0;
-              const label = s === 'all' ? 'All' : s.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+              const label =
+                s === 'all' ? 'All' : s.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
               return (
                 <Link
                   key={s}
@@ -196,16 +195,18 @@ export default function OrdersPage() {
                     </td>
                   </tr>
                 ) : (
-                  orders.map((order) => {
-                    const custName = order.customers && order.customers.length > 0
-                      ? [order.customers[0].first_name, order.customers[0].last_name]
-                          .filter(Boolean)
-                          .join(' ')
-                      : null;
-                    const colorClass = statusColors[order.status] || 'bg-muted text-muted-foreground';
+                  orders.map(order => {
+                    const custName =
+                      order.customers && order.customers.length > 0
+                        ? [order.customers[0].first_name, order.customers[0].last_name]
+                            .filter(Boolean)
+                            .join(' ')
+                        : null;
+                    const colorClass =
+                      statusColors[order.status] || 'bg-muted text-muted-foreground';
                     const statusLabel = order.status
                       .replace(/_/g, ' ')
-                      .replace(/\b\w/g, (c) => c.toUpperCase());
+                      .replace(/\b\w/g, c => c.toUpperCase());
 
                     return (
                       <tr
@@ -234,10 +235,7 @@ export default function OrdersPage() {
                         </td>
                         <td className="px-3 py-3 text-right text-muted-foreground whitespace-nowrap">
                           {order.refunded_total_amount > 0
-                            ? formatCurrency(
-                                order.refunded_total_amount,
-                                order.currency || 'GBP'
-                              )
+                            ? formatCurrency(order.refunded_total_amount, order.currency || 'GBP')
                             : '—'}
                         </td>
                         <td className="px-5 py-3 text-right text-muted-foreground text-xs whitespace-nowrap">

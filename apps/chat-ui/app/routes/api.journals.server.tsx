@@ -40,7 +40,12 @@ export async function action({ request }: ActionFunctionArgs) {
 
   // ── createJournal ──────────────────────────────────────────────────────────
   if (intent === 'createJournal') {
-    const { journal_date, description, journal_type, lines: rawLines } = body as {
+    const {
+      journal_date,
+      description,
+      journal_type,
+      lines: rawLines,
+    } = body as {
       journal_date: string;
       description: string;
       journal_type?: string;
@@ -91,7 +96,9 @@ export async function action({ request }: ActionFunctionArgs) {
 
     if (Math.abs(gbpDebit - gbpCredit) > 0.005) {
       return json(
-        { error: `Journal is unbalanced: debits £${gbpDebit.toFixed(2)} ≠ credits £${gbpCredit.toFixed(2)}` },
+        {
+          error: `Journal is unbalanced: debits £${gbpDebit.toFixed(2)} ≠ credits £${gbpCredit.toFixed(2)}`,
+        },
         { status: 400 }
       );
     }
@@ -119,7 +126,7 @@ export async function action({ request }: ActionFunctionArgs) {
     }
 
     // Insert line items
-    const lineRows = lines.map((l) => ({
+    const lineRows = lines.map(l => ({
       journal_id: journal.id,
       account_id: l.account_id,
       debit: Number(l.debit) || 0,
@@ -151,7 +158,10 @@ export async function action({ request }: ActionFunctionArgs) {
     };
 
     if (!debit_account_id || !credit_account_id) {
-      return json({ error: 'Both debit_account_id and credit_account_id are required' }, { status: 400 });
+      return json(
+        { error: 'Both debit_account_id and credit_account_id are required' },
+        { status: 400 }
+      );
     }
 
     const gbpAmt = Number(gbp_amount);
@@ -169,7 +179,8 @@ export async function action({ request }: ActionFunctionArgs) {
         entity_id: ENTITY_ID,
         journal_date: date,
         journal_type: 'adjustment',
-        description: 'Reclassify sample / unlinked inventory items out of Finished Goods to Samples & Product Development Expense',
+        description:
+          'Reclassify sample / unlinked inventory items out of Finished Goods to Samples & Product Development Expense',
         source_type: 'manual',
         source_id: null,
         status: 'posted',

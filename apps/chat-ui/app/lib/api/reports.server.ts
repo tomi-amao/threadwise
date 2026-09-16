@@ -492,7 +492,7 @@ export async function getReportsData(from: string | null, to: string | null): Pr
   const txnsQ = fetchAllTransactions();
 
   // Order line items for order-driven monthly grouping
-  let orderLineItemsQ = supabase
+  const orderLineItemsQ = supabase
     .from('order_line_items')
     .select('id, order_id, product_id, quantity, created_at')
     .limit(50000);
@@ -513,23 +513,18 @@ export async function getReportsData(from: string | null, to: string | null): Pr
     .limit(50000);
 
   // Fetch all data in parallel (except journals and journal_line_items which need pagination)
-  const [
-    revenueData,
-    accountsRes,
-    txnsRes,
-    orderLineItemsRes,
-    inventoryMovementsRes,
-  ] = await Promise.all([
-    revenueDataPromise,
-    supabase
-      .from('chart_of_accounts')
-      .select('id, name, account_type, account_number, normal_balance, is_header')
-      .eq('status', 'active')
-      .eq('is_header', false),
-    txnsQ,
-    orderLineItemsQ,
-    inventoryMovementsQ,
-  ]);
+  const [revenueData, accountsRes, txnsRes, orderLineItemsRes, inventoryMovementsRes] =
+    await Promise.all([
+      revenueDataPromise,
+      supabase
+        .from('chart_of_accounts')
+        .select('id, name, account_type, account_number, normal_balance, is_header')
+        .eq('status', 'active')
+        .eq('is_header', false),
+      txnsQ,
+      orderLineItemsQ,
+      inventoryMovementsQ,
+    ]);
 
   // Paginate journals — Supabase PostgREST caps rows at 1,000 per request
   // regardless of the .limit() value set on the client, so we must page through them.
@@ -558,9 +553,7 @@ export async function getReportsData(from: string | null, to: string | null): Pr
     .eq('status', 'draft')
     .eq('source_type', 'financial_transaction');
   const txnIdsWithDraftJournal = new Set(
-    (draftJournalRows || [])
-      .map((row: any) => String(row.source_id || ''))
-      .filter(Boolean)
+    (draftJournalRows || []).map((row: any) => String(row.source_id || '')).filter(Boolean)
   );
 
   // Paginate journal_line_items — Supabase PostgREST caps rows at 1,000 per request
@@ -1085,8 +1078,7 @@ export async function getReportsData(from: string | null, to: string | null): Pr
     // reducing it. Dormant today only because no contra-asset (2 accounts,
     // credit-normal) or contra-equity (1 account, debit-normal) has ever
     // been posted to — same bug class as the P&L fix above, same fix.
-    const balance =
-      type === 'asset' ? totals.debit - totals.credit : totals.credit - totals.debit;
+    const balance = type === 'asset' ? totals.debit - totals.credit : totals.credit - totals.debit;
 
     // Accumulate all-time P&L for retained earnings
     if (type === 'revenue') allTimeRevenue += totals.credit - totals.debit;
@@ -1338,9 +1330,7 @@ export async function getReportsData(from: string | null, to: string | null): Pr
   const totalInvesting = round2(investing.reduce((s, a) => s + a.amount, 0));
   const totalFinancing = round2(financing.reduce((s, a) => s + a.amount, 0));
   const totalUnclassified = round2(unclassified.reduce((s, a) => s + a.amount, 0));
-  const netChange = round2(
-    totalOperating + totalInvesting + totalFinancing + totalUnclassified
-  );
+  const netChange = round2(totalOperating + totalInvesting + totalFinancing + totalUnclassified);
 
   // Opening cash: roll the bank's own snapshot back to the day before the
   // period starts. For an all-time view there is no prior day, so the opening
@@ -1383,8 +1373,7 @@ export async function getReportsData(from: string | null, to: string | null): Pr
     reconciliationVariance,
     reconciles: Math.abs(reconciliationVariance) < 0.01,
     varianceIsMaterial:
-      Math.abs(reconciliationVariance) >
-      Math.max(1, Math.abs(closingBalancePerBank) * 0.001),
+      Math.abs(reconciliationVariance) > Math.max(1, Math.abs(closingBalancePerBank) * 0.001),
     openingBalanceImplausible,
     internalTransfersEliminated,
     coverage: {
@@ -1416,10 +1405,7 @@ export async function getReportsData(from: string | null, to: string | null): Pr
   const now = new Date();
   const currentMonthKey = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, '0')}`;
 
-  const monthlyAgg = new Map<
-    string,
-    { operating: number; financing: number; investing: number }
-  >();
+  const monthlyAgg = new Map<string, { operating: number; financing: number; investing: number }>();
   // Cumulative split of where the money in the bank came from.
   let tradingCumulative = 0;
   let directorCumulative = 0;
@@ -1486,7 +1472,9 @@ export async function getReportsData(from: string | null, to: string | null): Pr
     completeMonths.slice(-12).reduce((sum, point) => sum + point.financing, 0)
   );
   const avgMonthlyOperating =
-    completeMonths.length > 0 ? round2(trailing12Operating / Math.min(completeMonths.length, 12)) : 0;
+    completeMonths.length > 0
+      ? round2(trailing12Operating / Math.min(completeMonths.length, 12))
+      : 0;
 
   const sortedByOperating = [...completeMonths].sort((a, b) => a.operating - b.operating);
   const worstMonth = sortedByOperating[0]
@@ -1580,7 +1568,8 @@ export async function getReportsData(from: string | null, to: string | null): Pr
     {
       label: 'Cash in the bank',
       amount: cashOnHand,
-      detail: "Derived from the bank's own reported balance, rolled forward through later transactions.",
+      detail:
+        "Derived from the bank's own reported balance, rolled forward through later transactions.",
     },
     { label: 'Less: corporation tax set aside', amount: -taxReserve, detail: taxReserveDetail },
     {

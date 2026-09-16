@@ -181,10 +181,7 @@ export async function getTaxData(): Promise<TaxData> {
   if (entityError) throw new Error(`Failed to load entity: ${entityError.message}`);
   // Cast: the generated Supabase types predate the tax columns added for this
   // feature, so the row is otherwise inferred as an error union.
-  const entityRow = (((entityRows || [])[0] ?? null) as unknown) as Record<
-    string,
-    unknown
-  > | null;
+  const entityRow = ((entityRows || [])[0] ?? null) as unknown as Record<string, unknown> | null;
   if (!entityRow) throw new Error('No entity configured');
 
   const entityId = entityRow.id as string;
@@ -194,9 +191,7 @@ export async function getTaxData(): Promise<TaxData> {
       supabase.rpc('compute_corporation_tax', { p_entity_id: entityId }),
       supabase
         .from('tax_adjustments')
-        .select(
-          'id, period_id, direction, category, description, amount, source, account_number'
-        ),
+        .select('id, period_id, direction, category, description, amount, source, account_number'),
       supabase.from('tax_review_items').select('*'),
       supabase.from('accounting_periods').select('id, filed_net_assets, notes'),
       supabase
@@ -335,8 +330,7 @@ export async function getTaxData(): Promise<TaxData> {
       //
       // NOTE: a past date only means this app holds no record of the
       // obligation being met — it cannot see HMRC.
-      const satisfied =
-        p.status === 'filed' || (kind === 'payment' && p.taxDue === 0);
+      const satisfied = p.status === 'filed' || (kind === 'payment' && p.taxDue === 0);
       deadlines.push({
         label: p.label,
         kind,
@@ -426,8 +420,18 @@ export async function getTaxData(): Promise<TaxData> {
     entityRow.year_end_day && entityRow.year_end_month
       ? `${entityRow.year_end_day} ${
           [
-            'January','February','March','April','May','June',
-            'July','August','September','October','November','December',
+            'January',
+            'February',
+            'March',
+            'April',
+            'May',
+            'June',
+            'July',
+            'August',
+            'September',
+            'October',
+            'November',
+            'December',
           ][(entityRow.year_end_month as number) - 1]
         }`
       : null;

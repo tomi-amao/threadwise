@@ -37,9 +37,11 @@ const statusColors: Record<string, string> = {
 
 function StatusBadge({ status }: { status: string }) {
   const colorClass = statusColors[status] || 'bg-muted text-muted-foreground';
-  const label = status.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+  const label = status.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
   return (
-    <span className={`inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-medium ${colorClass}`}>
+    <span
+      className={`inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-medium ${colorClass}`}
+    >
       {label}
     </span>
   );
@@ -68,15 +70,25 @@ export function RecentOrders({ orders, currency = 'GBP' }: RecentOrdersProps) {
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-border">
-                <th className="text-left text-xs font-medium text-muted-foreground px-5 py-2">Order</th>
-                <th className="text-left text-xs font-medium text-muted-foreground px-3 py-2">Customer</th>
-                <th className="text-left text-xs font-medium text-muted-foreground px-3 py-2">Status</th>
-                <th className="text-right text-xs font-medium text-muted-foreground px-3 py-2">Amount</th>
-                <th className="text-right text-xs font-medium text-muted-foreground px-5 py-2">Date</th>
+                <th className="text-left text-xs font-medium text-muted-foreground px-5 py-2">
+                  Order
+                </th>
+                <th className="text-left text-xs font-medium text-muted-foreground px-3 py-2">
+                  Customer
+                </th>
+                <th className="text-left text-xs font-medium text-muted-foreground px-3 py-2">
+                  Status
+                </th>
+                <th className="text-right text-xs font-medium text-muted-foreground px-3 py-2">
+                  Amount
+                </th>
+                <th className="text-right text-xs font-medium text-muted-foreground px-5 py-2">
+                  Date
+                </th>
               </tr>
             </thead>
             <tbody>
-              {orders.map((order) => (
+              {orders.map(order => (
                 <tr
                   key={order.id}
                   className="border-b border-border/50 last:border-0 hover:bg-muted/30 transition-colors"

@@ -1,11 +1,4 @@
-import {
-  CheckCircle,
-  Clock,
-  XCircle,
-  ArrowsClockwise,
-  Package,
-  Truck,
-} from 'phosphor-react';
+import { CheckCircle, Clock, XCircle, ArrowsClockwise, Package, Truck } from 'phosphor-react';
 import type { OrderStatusBreakdown } from '~/types/dashboard';
 
 interface OrderStatusCardsProps {
@@ -64,14 +57,16 @@ export function OrderStatusCards({ statuses, totalOrders }: OrderStatusCardsProp
       </div>
 
       <div className="space-y-3">
-        {statuses.map((s) => {
+        {statuses.map(s => {
           const config = statusConfig[s.status] || defaultConfig;
           const pct = totalOrders > 0 ? (s.count / totalOrders) * 100 : 0;
-          const label = s.status.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+          const label = s.status.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
 
           return (
             <div key={s.status} className="flex items-center gap-3">
-              <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${config.color}`}>
+              <div
+                className={`w-8 h-8 rounded-lg flex items-center justify-center ${config.color}`}
+              >
                 {config.icon}
               </div>
               <div className="flex-1 min-w-0">

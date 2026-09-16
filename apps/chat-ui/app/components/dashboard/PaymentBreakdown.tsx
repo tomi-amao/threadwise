@@ -18,8 +18,8 @@ const COLORS = [
   'hsl(221, 83%, 53%)', // blue
   'hsl(262, 83%, 58%)', // violet
   'hsl(142, 71%, 45%)', // green
-  'hsl(38, 92%, 50%)',  // amber
-  'hsl(0, 84%, 60%)',   // red
+  'hsl(38, 92%, 50%)', // amber
+  'hsl(0, 84%, 60%)', // red
   'hsl(199, 89%, 48%)', // cyan
   'hsl(330, 81%, 60%)', // pink
 ];
@@ -77,13 +77,10 @@ export function PaymentBreakdown({ data, currency = 'GBP' }: PaymentBreakdownPro
             />
           </div>
           <div className="mt-3 space-y-2">
-            {pieData.map((d) => (
+            {pieData.map(d => (
               <div key={d.id} className="flex items-center justify-between text-xs">
                 <div className="flex items-center gap-2">
-                  <div
-                    className="w-2.5 h-2.5 rounded-full"
-                    style={{ backgroundColor: d.color }}
-                  />
+                  <div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: d.color }} />
                   <span className="text-muted-foreground">{d.label}</span>
                 </div>
                 <span className="font-medium text-foreground">

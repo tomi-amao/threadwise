@@ -571,9 +571,9 @@ export function JournalGenerationModal({ isOpen, onClose, entityId }: JournalGen
                       <Info size={18} className="text-zinc-400 mt-0.5 shrink-0" />
                       <div className="text-sm text-zinc-400">
                         <p>
-                          This will generate all pending payment and transaction journals
-                          (accruals, settlements, inbound transfers, expenses) in a single pass.
-                          Existing journals are never duplicated.
+                          This will generate all pending payment and transaction journals (accruals,
+                          settlements, inbound transfers, expenses) in a single pass. Existing
+                          journals are never duplicated.
                         </p>
                       </div>
                     </div>

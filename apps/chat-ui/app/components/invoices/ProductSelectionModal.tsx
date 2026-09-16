@@ -35,10 +35,28 @@ import type { InvoiceLineItem, InvoiceType } from '~/types/invoice';
 
 // ─── Fee / non-product heuristic ──────────────────────────────────────────────
 const FEE_KEYWORDS = [
-  'fee', 'fees', 'charge', 'charges', 'shipping', 'postage', 'delivery',
-  'handling', 'discount', 'credit', 'adjustment', 'service charge', 'surcharge',
-  'commission', 'tax', 'vat', 'duty', 'tariff', 'insurance', 'refund',
-  'packing', 'packaging',
+  'fee',
+  'fees',
+  'charge',
+  'charges',
+  'shipping',
+  'postage',
+  'delivery',
+  'handling',
+  'discount',
+  'credit',
+  'adjustment',
+  'service charge',
+  'surcharge',
+  'commission',
+  'tax',
+  'vat',
+  'duty',
+  'tariff',
+  'insurance',
+  'refund',
+  'packing',
+  'packaging',
 ];
 const FEE_PATTERN = new RegExp(
   `\\b(?:${FEE_KEYWORDS.map(k => k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})\\b`,
@@ -175,7 +193,9 @@ function ProductCombobox({
     <div ref={ref} className="relative w-full">
       <div
         className={`flex items-center gap-2 rounded-lg border bg-background px-2.5 py-1.5 cursor-pointer text-sm transition-colors ${
-          open ? 'border-primary ring-1 ring-primary/40' : 'border-border hover:border-muted-foreground/40'
+          open
+            ? 'border-primary ring-1 ring-primary/40'
+            : 'border-border hover:border-muted-foreground/40'
         }`}
         onClick={() => {
           setOpen(true);
@@ -209,44 +229,54 @@ function ProductCombobox({
         )}
       </div>
 
-      {open && filtered.length > 0 && typeof document !== 'undefined' && createPortal(
-        <div
-          ref={dropdownRef}
-          style={dropdownStyle}
-          onPointerDown={e => e.stopPropagation()}
-          onMouseDown={e => e.stopPropagation()}
-          className="rounded-lg border border-border bg-card shadow-xl max-h-52 overflow-y-auto"
-        >
-          {filtered.map(product => (
-            <button
-              key={product.id}
-              type="button"
-              onClick={() => handleSelect(product)}
-              className={`w-full flex items-center gap-2 px-3 py-2 text-left text-xs hover:bg-muted transition-colors ${
-                product.id === value ? 'bg-primary/10 text-primary font-medium' : 'text-foreground'
-              }`}
-            >
-              <Package size={12} className="shrink-0 text-muted-foreground" />
-              <span className="truncate">{product.name}</span>
-              {product.id === value && <Check size={12} className="ml-auto shrink-0 text-primary" />}
-            </button>
-          ))}
-        </div>,
-        document.body
-      )}
+      {open &&
+        filtered.length > 0 &&
+        typeof document !== 'undefined' &&
+        createPortal(
+          <div
+            ref={dropdownRef}
+            style={dropdownStyle}
+            onPointerDown={e => e.stopPropagation()}
+            onMouseDown={e => e.stopPropagation()}
+            className="rounded-lg border border-border bg-card shadow-xl max-h-52 overflow-y-auto"
+          >
+            {filtered.map(product => (
+              <button
+                key={product.id}
+                type="button"
+                onClick={() => handleSelect(product)}
+                className={`w-full flex items-center gap-2 px-3 py-2 text-left text-xs hover:bg-muted transition-colors ${
+                  product.id === value
+                    ? 'bg-primary/10 text-primary font-medium'
+                    : 'text-foreground'
+                }`}
+              >
+                <Package size={12} className="shrink-0 text-muted-foreground" />
+                <span className="truncate">{product.name}</span>
+                {product.id === value && (
+                  <Check size={12} className="ml-auto shrink-0 text-primary" />
+                )}
+              </button>
+            ))}
+          </div>,
+          document.body
+        )}
 
-      {open && filtered.length === 0 && typeof document !== 'undefined' && createPortal(
-        <div
-          ref={dropdownRef}
-          style={dropdownStyle}
-          onPointerDown={e => e.stopPropagation()}
-          onMouseDown={e => e.stopPropagation()}
-          className="rounded-lg border border-border bg-card shadow-xl px-3 py-3 text-xs text-muted-foreground"
-        >
-          {query.trim() ? `No products match "${query}"` : 'No products available'}
-        </div>,
-        document.body
-      )}
+      {open &&
+        filtered.length === 0 &&
+        typeof document !== 'undefined' &&
+        createPortal(
+          <div
+            ref={dropdownRef}
+            style={dropdownStyle}
+            onPointerDown={e => e.stopPropagation()}
+            onMouseDown={e => e.stopPropagation()}
+            className="rounded-lg border border-border bg-card shadow-xl px-3 py-3 text-xs text-muted-foreground"
+          >
+            {query.trim() ? `No products match "${query}"` : 'No products available'}
+          </div>,
+          document.body
+        )}
     </div>
   );
 }
@@ -317,7 +347,11 @@ interface CandidateRowProps {
   onModeChange: (id: string, mode: CandidateMode) => void;
   onFieldChange: (id: string, field: 'name' | 'sku', value: string) => void;
   onLinkProduct: (id: string, productId: string, productName: string) => void;
-  onAccountChange: (id: string, field: 'assetAccountId' | 'cogsAccountId', value: string | null) => void;
+  onAccountChange: (
+    id: string,
+    field: 'assetAccountId' | 'cogsAccountId',
+    value: string | null
+  ) => void;
   onInventoryToggle: (id: string, value: boolean) => void;
 }
 
@@ -361,9 +395,7 @@ function CandidateRow({
                 {formatCurrency(candidate.unitCost, currency)} / unit
               </span>
             )}
-            {candidate.sku && (
-              <span className="font-mono opacity-70">{candidate.sku}</span>
-            )}
+            {candidate.sku && <span className="font-mono opacity-70">{candidate.sku}</span>}
           </div>
         </div>
 
@@ -470,7 +502,8 @@ function CandidateRow({
               <div>
                 <label className="flex items-center gap-1 text-[11px] font-medium text-muted-foreground mb-1">
                   <PencilSimple size={11} />
-                  SKU <span className="font-normal opacity-60">(optional — auto-derived if blank)</span>
+                  SKU{' '}
+                  <span className="font-normal opacity-60">(optional — auto-derived if blank)</span>
                 </label>
                 <input
                   type="text"
@@ -542,8 +575,8 @@ function CandidateRow({
             )}
             {candidate.linkedProductId && (
               <p className="mt-1.5 text-[11px] text-muted-foreground">
-                All variants of this product will have their unit cost updated.
-                Adjust individual variants on the Inventory Costs page.
+                All variants of this product will have their unit cost updated. Adjust individual
+                variants on the Inventory Costs page.
               </p>
             )}
           </div>
@@ -700,14 +733,17 @@ export function ProductSelectionModal({
   const newCount = candidates.filter(c => c.mode === 'new').length;
   const linkCount = candidates.filter(c => c.mode === 'link' && c.linkedProductId).length;
   const linkPendingCount = candidates.filter(c => c.mode === 'link' && !c.linkedProductId).length;
-  const inventoryOnlyCount = candidates.filter(c => c.mode === 'skip' && c.createInventoryRecord).length;
+  const inventoryOnlyCount = candidates.filter(
+    c => c.mode === 'skip' && c.createInventoryRecord
+  ).length;
   const activeCount = candidates.filter(c => c.mode !== 'skip' || c.createInventoryRecord).length;
 
   const submitLabel = (() => {
     const parts: string[] = [];
     if (newCount > 0) parts.push(`Create ${newCount} new`);
     if (linkCount > 0) parts.push(`Link ${linkCount}`);
-    if (inventoryOnlyCount > 0) parts.push(`Record ${inventoryOnlyCount} movement${inventoryOnlyCount !== 1 ? 's' : ''}`);
+    if (inventoryOnlyCount > 0)
+      parts.push(`Record ${inventoryOnlyCount} movement${inventoryOnlyCount !== 1 ? 's' : ''}`);
     return parts.length > 0 ? parts.join(' · ') : 'Continue';
   })();
 
@@ -731,8 +767,8 @@ export function ProductSelectionModal({
           <Info size={16} className="text-violet-400 mt-0.5 shrink-0" />
           <div className="text-violet-300/90 space-y-0.5 text-xs">
             <p>
-              <strong>Link</strong> — matches to an existing product and updates its unit cost on all
-              variants. Best for backfilling costs on products already synced from your store.
+              <strong>Link</strong> — matches to an existing product and updates its unit cost on
+              all variants. Best for backfilling costs on products already synced from your store.
             </p>
             <p>
               <strong>New</strong> — creates a new draft product and inventory entry.
@@ -744,26 +780,26 @@ export function ProductSelectionModal({
         </div>
 
         {/* Summary chips */}
-{(newCount > 0 || linkCount > 0 || linkPendingCount > 0 || inventoryOnlyCount > 0) && (
-            <div className="flex items-center gap-2 flex-wrap text-xs">
-              {linkCount > 0 && (
-                <span className="px-2 py-0.5 rounded-full bg-violet-500/10 text-violet-400 border border-violet-500/20 font-medium">
-                  {linkCount} ready to link
-                </span>
-              )}
-              {linkPendingCount > 0 && (
-                <span className="px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-400 border border-amber-500/20 font-medium">
-                  {linkPendingCount} awaiting product selection
-                </span>
-              )}
-              {newCount > 0 && (
-                <span className="px-2 py-0.5 rounded-full bg-primary/10 text-primary border border-primary/20 font-medium">
-                  {newCount} new product{newCount !== 1 ? 's' : ''}
-                </span>
-              )}
-              {inventoryOnlyCount > 0 && (
-                <span className="px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-medium">
-                  {inventoryOnlyCount} stock movement{inventoryOnlyCount !== 1 ? 's' : ''}
+        {(newCount > 0 || linkCount > 0 || linkPendingCount > 0 || inventoryOnlyCount > 0) && (
+          <div className="flex items-center gap-2 flex-wrap text-xs">
+            {linkCount > 0 && (
+              <span className="px-2 py-0.5 rounded-full bg-violet-500/10 text-violet-400 border border-violet-500/20 font-medium">
+                {linkCount} ready to link
+              </span>
+            )}
+            {linkPendingCount > 0 && (
+              <span className="px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-400 border border-amber-500/20 font-medium">
+                {linkPendingCount} awaiting product selection
+              </span>
+            )}
+            {newCount > 0 && (
+              <span className="px-2 py-0.5 rounded-full bg-primary/10 text-primary border border-primary/20 font-medium">
+                {newCount} new product{newCount !== 1 ? 's' : ''}
+              </span>
+            )}
+            {inventoryOnlyCount > 0 && (
+              <span className="px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-medium">
+                {inventoryOnlyCount} stock movement{inventoryOnlyCount !== 1 ? 's' : ''}
               </span>
             )}
           </div>
@@ -796,7 +832,9 @@ export function ProductSelectionModal({
           </button>
           <button
             onClick={handleConfirm}
-            disabled={isSubmitting || (newCount === 0 && linkCount === 0 && inventoryOnlyCount === 0)}
+            disabled={
+              isSubmitting || (newCount === 0 && linkCount === 0 && inventoryOnlyCount === 0)
+            }
             className="px-4 py-2 text-sm font-medium bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center gap-2"
           >
             {isSubmitting ? (

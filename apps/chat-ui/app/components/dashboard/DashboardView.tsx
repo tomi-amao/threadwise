@@ -65,10 +65,7 @@ export function DashboardView({ data }: DashboardViewProps) {
           <div className="lg:col-span-2">
             <RevenueChart data={data.revenueByMonth} currency={currency} />
           </div>
-          <OrderStatusCards
-            statuses={data.ordersByStatus}
-            totalOrders={data.kpis.totalOrders}
-          />
+          <OrderStatusCards statuses={data.ordersByStatus} totalOrders={data.kpis.totalOrders} />
         </div>
 
         {/* Top Products + Payment Breakdown */}

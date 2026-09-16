@@ -655,7 +655,9 @@ function ItemsTab({
   onSelectItem: (item: InventoryItemRow) => void;
 }) {
   const [searchQuery, setSearchQuery] = useState('');
-  const [filterLinked, setFilterLinked] = useState<'all' | 'linked' | 'unlinked' | 'samples'>('all');
+  const [filterLinked, setFilterLinked] = useState<'all' | 'linked' | 'unlinked' | 'samples'>(
+    'all'
+  );
 
   // Samples are never linked to a product by design, so they're excluded from the
   // linked/unlinked split entirely — counting them as "unlinked" made the warning

@@ -728,9 +728,9 @@ function ExpenseDetailsDrawer({
   const otherOutboundDetails = data.otherOutboundDetailsByMonth[target.month];
 
   const lines = isShipping
-    ? (shippingDetails?.lines || [])
-    : [...(otherExpenseDetails?.lines || []), ...(otherOutboundDetails?.lines || [])].sort(
-        (a, b) => b.occurredAt.localeCompare(a.occurredAt)
+    ? shippingDetails?.lines || []
+    : [...(otherExpenseDetails?.lines || []), ...(otherOutboundDetails?.lines || [])].sort((a, b) =>
+        b.occurredAt.localeCompare(a.occurredAt)
       );
 
   const totalAmount = isShipping
@@ -1327,7 +1327,9 @@ function RevenueAnalysisTab({
       cogs: totals.cogs + month.cogs,
       shippingCost: totals.shippingCost + month.shippingCost,
       otherOutbound:
-        totals.otherOutbound + Math.max(month.operatingExpenses - month.shippingCost, 0) + month.otherOutbound,
+        totals.otherOutbound +
+        Math.max(month.operatingExpenses - month.shippingCost, 0) +
+        month.otherOutbound,
       netIncome: totals.netIncome + month.netIncome,
       orders: totals.orders + month.orders,
     }),
@@ -2037,7 +2039,9 @@ function CashHealthCard({ insights }: { insights: CashInsights }) {
               <div className="h-2 flex-1 overflow-hidden rounded-full bg-muted">
                 <div
                   className="h-full rounded-full bg-emerald-500"
-                  style={{ width: `${Math.max(0, Math.min(100, insights.selfFunding.pctFromTrading))}%` }}
+                  style={{
+                    width: `${Math.max(0, Math.min(100, insights.selfFunding.pctFromTrading))}%`,
+                  }}
                 />
               </div>
               <span className="text-sm font-semibold tabular-nums text-foreground">
@@ -2211,9 +2215,7 @@ function CashTrendChart({ insights }: { insights: CashInsights }) {
                 Trading: {GBP((d as any).operating)}
               </p>
               {(d as any)._financing !== 0 && (
-                <p className="text-muted-foreground">
-                  Funding in: {GBP((d as any)._financing)}
-                </p>
+                <p className="text-muted-foreground">Funding in: {GBP((d as any)._financing)}</p>
               )}
               <p className="text-muted-foreground border-t border-border pt-0.5 mt-0.5">
                 Net change: {GBP((d as any)._net)}
@@ -2227,13 +2229,7 @@ function CashTrendChart({ insights }: { insights: CashInsights }) {
 }
 
 /** Full derivation of safe-to-spend, one line at a time. */
-function SafeToSpendDrawer({
-  insights,
-  onClose,
-}: {
-  insights: CashInsights;
-  onClose: () => void;
-}) {
+function SafeToSpendDrawer({ insights, onClose }: { insights: CashInsights; onClose: () => void }) {
   useEffect(() => {
     const handleEscape = (event: KeyboardEvent) => {
       if (event.key === 'Escape') onClose();
@@ -2338,12 +2334,12 @@ function CashFlowIntegrity({ cashFlow }: { cashFlow: ReportsData['cashFlow'] }) 
           <FinRow label="Opening cash" amount={cashFlow.openingBalance} indent={1} />
           <FinRow label="Net change in cash" amount={cashFlow.netChange} indent={1} />
           <FinRow label="Expected closing cash" amount={cashFlow.closingBalance} isTotal />
-          <FinRow label="Closing cash per bank" amount={cashFlow.closingBalancePerBank} indent={1} />
           <FinRow
-            label="Unexplained difference"
-            amount={cashFlow.reconciliationVariance}
-            isTotal
+            label="Closing cash per bank"
+            amount={cashFlow.closingBalancePerBank}
+            indent={1}
           />
+          <FinRow label="Unexplained difference" amount={cashFlow.reconciliationVariance} isTotal />
         </tbody>
       </table>
 
@@ -2352,8 +2348,8 @@ function CashFlowIntegrity({ cashFlow }: { cashFlow: ReportsData['cashFlow'] }) 
           <p className="text-xs text-emerald-500 flex items-start gap-1.5">
             <span aria-hidden>✓</span>
             <span>
-              The statement ties to the bank. Every pound that moved is accounted for in a
-              category above.
+              The statement ties to the bank. Every pound that moved is accounted for in a category
+              above.
             </span>
           </p>
         ) : cashFlow.varianceIsMaterial ? (
@@ -2368,10 +2364,9 @@ function CashFlowIntegrity({ cashFlow }: { cashFlow: ReportsData['cashFlow'] }) 
           <p className="text-xs text-muted-foreground flex items-start gap-1.5">
             <span aria-hidden>·</span>
             <span>
-              Ties to the bank within {GBP(Math.abs(cashFlow.reconciliationVariance))}. This
-              period contains a currency conversion whose opposite leg was excluded as noise, so
-              the bank figure counts one side of it as an inflow. Too small to affect any
-              decision.
+              Ties to the bank within {GBP(Math.abs(cashFlow.reconciliationVariance))}. This period
+              contains a currency conversion whose opposite leg was excluded as noise, so the bank
+              figure counts one side of it as an inflow. Too small to affect any decision.
             </span>
           </p>
         )}
@@ -2380,10 +2375,10 @@ function CashFlowIntegrity({ cashFlow }: { cashFlow: ReportsData['cashFlow'] }) 
           <p className="text-xs text-amber-500 flex items-start gap-1.5">
             <span aria-hidden>!</span>
             <span>
-              This all-time view implies an opening balance of{' '}
-              {GBP(cashFlow.openingBalance)}, but the business started from nothing. Bank history
-              doesn&rsquo;t reach back far enough to explain the bank&rsquo;s own earliest balance,
-              so figures spanning the earliest periods are understated by roughly this amount.
+              This all-time view implies an opening balance of {GBP(cashFlow.openingBalance)}, but
+              the business started from nothing. Bank history doesn&rsquo;t reach back far enough to
+              explain the bank&rsquo;s own earliest balance, so figures spanning the earliest
+              periods are understated by roughly this amount.
             </span>
           </p>
         )}
@@ -2404,9 +2399,9 @@ function CashFlowIntegrity({ cashFlow }: { cashFlow: ReportsData['cashFlow'] }) 
               )}
               {coverage.noJournalTxns > 0 && (
                 <>
-                  {coverage.noJournalTxns}{' '}
-                  {coverage.noJournalTxns === 1 ? 'has' : 'have'} no journal at all; running
-                  Generate Journals will create {coverage.noJournalTxns === 1 ? 'it' : 'them'}.
+                  {coverage.noJournalTxns} {coverage.noJournalTxns === 1 ? 'has' : 'have'} no
+                  journal at all; running Generate Journals will create{' '}
+                  {coverage.noJournalTxns === 1 ? 'it' : 'them'}.
                 </>
               )}
             </span>
@@ -2457,8 +2452,8 @@ function CashFlowTab({ data }: { data: ReportsData }) {
           asked far more often than "show me the statement". */}
       <div className="flex items-center justify-between gap-3">
         <p className="text-xs text-muted-foreground">
-          Cash health and safe-to-spend look at a trailing window ending today, so they
-          don&rsquo;t change with the date filter above.
+          Cash health and safe-to-spend look at a trailing window ending today, so they don&rsquo;t
+          change with the date filter above.
         </p>
         <a
           href="/api/reports/cash-flow-pack"
@@ -2473,10 +2468,7 @@ function CashFlowTab({ data }: { data: ReportsData }) {
 
       <div className="grid gap-4 lg:grid-cols-2">
         <CashHealthCard insights={cashInsights} />
-        <SafeToSpendCard
-          insights={cashInsights}
-          onOpenBreakdown={() => setSafeToSpendOpen(true)}
-        />
+        <SafeToSpendCard insights={cashInsights} onOpenBreakdown={() => setSafeToSpendOpen(true)} />
       </div>
 
       {cashInsights.monthly.length > 1 && <CashTrendChart insights={cashInsights} />}
@@ -2491,8 +2483,8 @@ function CashFlowTab({ data }: { data: ReportsData }) {
           <InfoTooltip text="Direct method. Cash movement comes from bank transactions; each movement is categorised by the account on the other side of its journal entry, not by the payee's name." />
         </h3>
         <p className="text-xs text-muted-foreground mb-4">
-          Bank accounts only. PayPal activity is excluded — it passes through the same bank
-          account, so counting it would count the same money twice.
+          Bank accounts only. PayPal activity is excluded — it passes through the same bank account,
+          so counting it would count the same money twice.
         </p>
         <table className="w-full">
           <tbody>
@@ -2533,7 +2525,9 @@ function CashFlowTab({ data }: { data: ReportsData }) {
                 {cashFlow.investing.map(item => (
                   <FinRow
                     key={item.label}
-                    label={item.accountNumber ? `${item.accountNumber} · ${item.label}` : item.label}
+                    label={
+                      item.accountNumber ? `${item.accountNumber} · ${item.label}` : item.label
+                    }
                     amount={item.amount}
                     indent={1}
                   />
@@ -2552,7 +2546,9 @@ function CashFlowTab({ data }: { data: ReportsData }) {
                 {cashFlow.financing.map(item => (
                   <FinRow
                     key={item.label}
-                    label={item.accountNumber ? `${item.accountNumber} · ${item.label}` : item.label}
+                    label={
+                      item.accountNumber ? `${item.accountNumber} · ${item.label}` : item.label
+                    }
                     amount={item.amount}
                     indent={1}
                   />

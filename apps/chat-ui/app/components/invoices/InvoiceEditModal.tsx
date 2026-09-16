@@ -116,7 +116,8 @@ export function InvoiceEditModal({
       // Collect changed GL accounts
       const changedGl: Record<string, string | null> = {};
       for (const [id, val] of Object.entries(lineGl)) {
-        const original = invoice.invoice_line_items?.find(li => li.id === id)?.gl_account_id ?? null;
+        const original =
+          invoice.invoice_line_items?.find(li => li.id === id)?.gl_account_id ?? null;
         if (val !== original) changedGl[id] = val;
       }
       if (Object.keys(changedGl).length > 0) {
@@ -139,16 +140,15 @@ export function InvoiceEditModal({
             Edit Invoice
           </DialogTitle>
           <DialogDescription>
-            Correct AI-extracted fields. Financial amounts are calculated and cannot be edited directly.
+            Correct AI-extracted fields. Financial amounts are calculated and cannot be edited
+            directly.
           </DialogDescription>
         </DialogHeader>
 
         <div className="flex-1 overflow-y-auto min-h-0 space-y-5 pr-1">
           {/* Invoice type */}
           <div className="space-y-2">
-            <label className="block text-sm font-medium text-foreground">
-              Invoice Type
-            </label>
+            <label className="block text-sm font-medium text-foreground">Invoice Type</label>
             <div className="flex gap-2">
               {(['SALE', 'PURCHASE'] as InvoiceType[]).map(type => (
                 <button
@@ -249,8 +249,11 @@ export function InvoiceEditModal({
                       renderValue={opt =>
                         opt && opt.value ? (
                           <span className="truncate">
-                            <span className="font-mono text-muted-foreground">{glAccounts.find(a => a.id === opt.value)?.account_number}</span>
-                            {' — '}{opt.label}
+                            <span className="font-mono text-muted-foreground">
+                              {glAccounts.find(a => a.id === opt.value)?.account_number}
+                            </span>
+                            {' — '}
+                            {opt.label}
                           </span>
                         ) : (
                           <span className="text-muted-foreground">No account</span>
@@ -263,7 +266,9 @@ export function InvoiceEditModal({
                           <div className="flex-1 min-w-0">
                             <span className="truncate block">{opt.label}</span>
                             {opt.meta && (
-                              <span className="text-[11px] font-mono text-muted-foreground">{opt.meta}</span>
+                              <span className="text-[11px] font-mono text-muted-foreground">
+                                {opt.meta}
+                              </span>
                             )}
                           </div>
                         )

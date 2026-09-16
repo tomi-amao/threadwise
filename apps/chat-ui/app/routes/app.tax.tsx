@@ -145,9 +145,7 @@ function Row({
         </span>
         {hint && <p className="text-[11px] text-muted-foreground/70 mt-0.5">{hint}</p>}
       </div>
-      <span
-        className={`text-sm tabular-nums shrink-0 ${bold ? 'font-semibold' : ''} ${toneClass}`}
-      >
+      <span className={`text-sm tabular-nums shrink-0 ${bold ? 'font-semibold' : ''} ${toneClass}`}>
         {value}
       </span>
     </div>
@@ -174,9 +172,9 @@ function Computation({
               No computation available for this period
             </p>
             <p className="text-xs text-muted-foreground mt-1">
-              It predates reliable bookkeeping in this system, so no figures are shown rather
-              than ones that would look authoritative but be guesses. The real numbers are in
-              the accounts filed at Companies House and your accountant&apos;s records.
+              It predates reliable bookkeeping in this system, so no figures are shown rather than
+              ones that would look authoritative but be guesses. The real numbers are in the
+              accounts filed at Companies House and your accountant&apos;s records.
             </p>
             {period.notes && (
               <p className="text-[11px] text-muted-foreground/80 mt-2 border-l-2 border-border pl-2">
@@ -248,7 +246,12 @@ function Computation({
       />
 
       {n(period.marginalRelief) > 0 && (
-        <Row label="Marginal relief" value={`− ${GBP(n(period.marginalRelief))}`} tone="positive" indent />
+        <Row
+          label="Marginal relief"
+          value={`− ${GBP(n(period.marginalRelief))}`}
+          tone="positive"
+          indent
+        />
       )}
 
       <Row
@@ -277,10 +280,22 @@ function Computation({
 
 function DeadlineRow({ deadline }: { deadline: TaxDeadline }) {
   const cfg = {
-    overdue: { cls: 'text-rose-400 border-rose-500/20 bg-rose-500/5', icon: <WarningCircle size={14} weight="fill" /> },
-    due_soon: { cls: 'text-amber-400 border-amber-500/20 bg-amber-500/5', icon: <Warning size={14} weight="fill" /> },
-    upcoming: { cls: 'text-muted-foreground border-border bg-background', icon: <CalendarCheck size={14} /> },
-    satisfied: { cls: 'text-emerald-400 border-emerald-500/20 bg-emerald-500/5', icon: <CheckCircle size={14} weight="fill" /> },
+    overdue: {
+      cls: 'text-rose-400 border-rose-500/20 bg-rose-500/5',
+      icon: <WarningCircle size={14} weight="fill" />,
+    },
+    due_soon: {
+      cls: 'text-amber-400 border-amber-500/20 bg-amber-500/5',
+      icon: <Warning size={14} weight="fill" />,
+    },
+    upcoming: {
+      cls: 'text-muted-foreground border-border bg-background',
+      icon: <CalendarCheck size={14} />,
+    },
+    satisfied: {
+      cls: 'text-emerald-400 border-emerald-500/20 bg-emerald-500/5',
+      icon: <CheckCircle size={14} weight="fill" />,
+    },
   }[deadline.status];
 
   const when =
@@ -498,9 +513,7 @@ function ProfitBreakdownDrawer({
           ))}
 
           <div className="rounded-lg border border-primary/30 bg-primary/5 px-4 py-3 flex items-center justify-between">
-            <span className="text-sm font-semibold text-foreground">
-              Revenue − COGS − Expenses
-            </span>
+            <span className="text-sm font-semibold text-foreground">Revenue − COGS − Expenses</span>
             <span
               className={`text-base font-bold tabular-nums ${netProfit < 0 ? 'text-rose-500' : 'text-foreground'}`}
             >
@@ -659,8 +672,8 @@ export default function TaxPage() {
             {selected.isProjection && (
               <div className="mb-4 rounded-lg border border-amber-500/20 bg-amber-500/5 px-3 py-2">
                 <p className="text-xs text-amber-400">
-                  This period is still open — {selected.monthsElapsed} of{' '}
-                  {selected.monthsInPeriod} months. Treat every figure below as a projection.
+                  This period is still open — {selected.monthsElapsed} of {selected.monthsInPeriod}{' '}
+                  months. Treat every figure below as a projection.
                 </p>
               </div>
             )}
@@ -757,9 +770,7 @@ export default function TaxPage() {
               </p>
             </div>
           ) : (
-            <p className="text-[11px] text-emerald-400 mt-3">
-              In credit — no s455 charge arises.
-            </p>
+            <p className="text-[11px] text-emerald-400 mt-3">In credit — no s455 charge arises.</p>
           )}
         </Card>
 
@@ -803,7 +814,10 @@ export default function TaxPage() {
       </div>
 
       {/* CT600 pack */}
-      <Card title="CT600 preparation pack" icon={<FileArrowDown size={16} className="text-primary" />}>
+      <Card
+        title="CT600 preparation pack"
+        icon={<FileArrowDown size={16} className="text-primary" />}
+      >
         <p className="text-sm text-muted-foreground">
           Generates the full computation for a period with every figure mapped to its CT600 box
           number — the working paper an accountant would prepare, ready to hand over or type in.

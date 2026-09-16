@@ -740,7 +740,7 @@ export async function getCashFlow(): Promise<CashFlowData> {
   ]);
 
   let operating = 0;
-  let investing = 0;
+  const investing = 0;
   let financing = 0;
 
   for (const txn of txnsRes.data || []) {
