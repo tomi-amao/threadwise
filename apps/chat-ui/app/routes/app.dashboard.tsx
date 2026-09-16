@@ -7,6 +7,7 @@
 import type { MetaFunction, LoaderFunctionArgs } from 'react-router';
 import { useLoaderData } from 'react-router';
 import { DashboardView } from '~/components/dashboard/DashboardView';
+import { RouteErrorBoundary } from '~/components/RouteErrorBoundary';
 import { getDashboardData } from '~/lib/api/dashboard.server';
 import type { DashboardData } from '~/types/dashboard';
 
@@ -27,4 +28,8 @@ export async function loader({
 export default function DashboardPage() {
   const { dashboard } = useLoaderData<typeof loader>();
   return <DashboardView data={dashboard} />;
+}
+
+export function ErrorBoundary() {
+  return <RouteErrorBoundary what="dashboard" />;
 }
