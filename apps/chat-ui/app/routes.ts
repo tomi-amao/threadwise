@@ -46,11 +46,11 @@ export default [
   ]),
 
   // API routes
-  route('api/invoices', 'routes/api.invoices.server.tsx'),
-  route('api/reclassification', 'routes/api.reclassification.server.tsx'),
-  route('api/journals', 'routes/api.journals.server.tsx'),
-  route('api/inventory', 'routes/api.inventory.server.tsx'),
-  route('api/reports/account-drilldown', 'routes/api.reports.account-drilldown.server.tsx'),
-  route('api/reports/cash-flow-pack', 'routes/api.reports.cash-flow-pack.server.tsx'),
-  route('api/tax/ct600-pack', 'routes/api.tax.ct600-pack.server.tsx'),
+  route('api/invoices', 'routes/api.invoices.tsx'),
+  route('api/reclassification', 'routes/api.reclassification.tsx'),
+  route('api/journals', 'routes/api.journals.tsx'),
+  route('api/inventory', 'routes/api.inventory.tsx'),
+  route('api/reports/account-drilldown', 'routes/api.reports.account-drilldown.tsx'),
+  route('api/reports/cash-flow-pack', 'routes/api.reports.cash-flow-pack.tsx'),
+  route('api/tax/ct600-pack', 'routes/api.tax.ct600-pack.tsx'),
 ] satisfies RouteConfig;
