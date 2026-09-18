@@ -9,6 +9,7 @@
     "format": "prettier --write .",
     "prepare": "husky",
     "dev": "concurrently --names \"WEB,API\" --prefix-colors \"blue,green\" \"pnpm dev:react-router\" \"pnpm dev:ai-agent\"",
+    "dev:all": "mprocs",
     "dev:react-router": "pnpm --filter threadwise-chat-ui dev",
     "dev:ai-agent": "cd apps/ai_agent && poetry run uvicorn src.ai_agent.main:app --reload --host 0.0.0.0 --port 8000",
     "dev:web": "pnpm dev:react-router",
@@ -53,6 +54,7 @@
     "globals": "^16.5.0",
     "husky": "^9.1.7",
     "lint-staged": "^16.4.0",
+    "mprocs": "^0.9.6",
     "prettier": "^3.9.7",
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.70.0"

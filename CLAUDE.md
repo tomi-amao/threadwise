@@ -67,6 +67,9 @@ make setup                    # or: pnpm setup
 # Dev servers
 pnpm dev:react-router          # chat-ui, http://localhost:5174 (or --filter threadwise-chat-ui dev)
 pnpm dev:ai-agent               # FastAPI, http://localhost:8000, --reload
+pnpm dev:all                    # or: make dev-all — chat-ui + langgraph dev (:2024) + inngest-cli dev
+                                 # together in one mprocs TUI (mprocs.yaml); this is the workflow
+                                 # that exercises realtime/Inngest — dev:ai-agent's plain uvicorn does not
 
 # Frontend-specific (cd apps/chat-ui, or --filter threadwise-chat-ui from root)
 pnpm typecheck                # react-router typegen && tsc
