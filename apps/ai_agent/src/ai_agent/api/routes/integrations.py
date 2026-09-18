@@ -80,6 +80,15 @@ class TriggerSyncRequest(BaseModel):
         None,
         description="Specific endpoint to sync (products, orders, etc.). If not provided, syncs all."
     )
+    force_full: bool = Field(
+        False,
+        description=(
+            "If true, ignore each endpoint's incremental sync watermark and "
+            "fetch full history. If false (default), only endpoints with a "
+            "prior successful sync fetch records updated since then; "
+            "endpoints with no watermark yet still do a full fetch."
+        ),
+    )
 
 
 class TriggerSyncResponse(BaseModel):
@@ -384,6 +393,7 @@ async def trigger_sync(source_id: str, request: Optional[TriggerSyncRequest] = N
         inngest_client = get_client()
 
         provider = source.get("provider", "squarespace")
+        force_full = request.force_full if request else False
 
         # Trigger appropriate sync event based on provider
         if request and request.endpoint:
@@ -393,23 +403,30 @@ async def trigger_sync(source_id: str, request: Optional[TriggerSyncRequest] = N
                     name=f"{provider}/sync.endpoint",
                     data={
                     "source_id": source_id,
-                    "endpoint": request.endpoint
+                    "endpoint": request.endpoint,
+                    "force_full": force_full,
                     }
                 )
                 )
 
-            message = f"Triggered sync for {request.endpoint}"
+            sync_kind = "full" if force_full else "incremental"
+            message = f"Triggered {sync_kind} sync for {request.endpoint}"
         else:
             # Full sync
             event_ids = await inngest_client.send(
                 inngest.Event(
                     name=f"{provider}/sync.requested",
                     data={
-                        "source_id": source_id
+                        "source_id": source_id,
+                        "force_full": force_full,
                     }
                 )
             )
-            message = "Triggered full sync for all endpoints"
+            message = (
+                "Triggered full historical sync for all endpoints"
+                if force_full
+                else "Triggered incremental sync for all endpoints"
+            )
 
         logger.info(f"{message} for source {source_id} (provider={provider})")
         

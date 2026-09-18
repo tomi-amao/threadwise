@@ -183,25 +183,41 @@ class SquarespaceAdapter:
     async def fetch_page(
         self,
         endpoint: str,
-        cursor: Optional[str] = None
+        cursor: Optional[str] = None,
+        since: Optional[datetime] = None,
+        until: Optional[datetime] = None,
     ) -> PaginatedResult:
         """Fetch a single page of data from an endpoint.
-        
+
         Args:
             endpoint: Endpoint name (products, store_pages, orders, inventory, transactions, profiles, etc.)
             cursor: Pagination cursor from previous request
-            
+            since: Only fetch records modified at-or-after this time (Orders
+                API ``modifiedAfter``). Only honored for ``orders`` — it's
+                the only Squarespace Commerce endpoint with an update-time
+                filter — and only when cursor is None: the API rejects
+                modifiedAfter/modifiedBefore combined with a cursor, since
+                the cursor already encodes the original date range.
+            until: Upper bound for the same filter (``modifiedBefore``).
+                Squarespace requires both bounds together; defaults to now.
+
         Returns:
             PaginatedResult with items and next cursor
         """
         url = ENDPOINTS.get(endpoint)
         if not url:
             raise ValueError(f"Unknown endpoint: {endpoint}")
-        
+
         params = {"pageSize": self.page_size}
         if cursor:
             params["cursor"] = cursor
-        
+        elif since is not None and endpoint == "orders":
+            date_fmt = "%Y-%m-%dT%H:%M:%S.%fZ"
+            params["modifiedAfter"] = since.strftime(date_fmt)
+            params["modifiedBefore"] = (until or datetime.now(timezone.utc)).strftime(
+                date_fmt
+            )
+
         logger.info(f"Fetching {endpoint} page (cursor: {cursor or 'start'})")
         
         response = await self._make_request(url, params)
@@ -237,17 +253,22 @@ class SquarespaceAdapter:
     async def stream_endpoint(
         self,
         endpoint: str,
-        start_cursor: Optional[str] = None
+        start_cursor: Optional[str] = None,
+        since: Optional[datetime] = None,
     ) -> AsyncIterator[RawEventRecord]:
         """Stream all items from an endpoint as raw event records.
-        
+
         Yields items one by one for memory efficiency.
         Never transforms data - exact API payloads are stored.
-        
+
         Args:
             endpoint: Endpoint name
             start_cursor: Optional cursor to resume from
-            
+            since: Only fetch records modified at-or-after this time.
+                Ignored (full fetch) for every endpoint except ``orders`` —
+                products/inventory/store_pages/profiles have no update-time
+                filter in the Commerce API.
+
         Yields:
             RawEventRecord for each item
         """
@@ -255,12 +276,24 @@ class SquarespaceAdapter:
         cursor = start_cursor
         page_count = 0
         total_items = 0
-        
+
+        if since is not None and endpoint != "orders":
+            logger.info(
+                "Squarespace %s has no update-time filter available - "
+                "ignoring `since` and doing a full fetch",
+                endpoint,
+            )
+            since = None
+        # Fixed upper bound for the whole run, not recomputed per page - a
+        # page-2+ moving "now" would create a gap between the last item of
+        # page N and modifiedBefore on a hypothetical re-windowed page N+1.
+        until = datetime.now(timezone.utc) if since is not None else None
+
         while True:
             page_count += 1
-            
+
             try:
-                result = await self.fetch_page(endpoint, cursor)
+                result = await self.fetch_page(endpoint, cursor, since=since, until=until)
             except httpx.HTTPStatusError as e:
                 logger.error(
                     f"HTTP error fetching {endpoint}: {e.response.status_code}"

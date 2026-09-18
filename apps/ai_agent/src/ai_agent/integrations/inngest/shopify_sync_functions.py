@@ -5,7 +5,7 @@ with paginated extraction and raw event storage.
 """
 
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 import httpx
@@ -15,6 +15,7 @@ from inngest.experimental import realtime
 from .config import get_client
 from .channels import get_sync_channel, SyncProgressData, SyncStatusData
 from ...services.external_sync_service import sync_service
+from ...integrations.common import resolve_sync_since
 from ...integrations.shopify import ShopifyAdapter, ENDPOINTS
 
 logger = logging.getLogger(__name__)
@@ -37,11 +38,15 @@ async def shopify_sync_all(ctx: inngest.Context) -> Dict[str, Any]:
     try:
         event_data = ctx.event.data
         source_id = event_data.get("source_id")
+        force_full = bool(event_data.get("force_full", False))
 
         if not source_id:
             raise ValueError("source_id is required")
 
-        ctx.logger.info(f"Starting full Shopify sync for source {source_id}")
+        ctx.logger.info(
+            f"Starting {'full' if force_full else 'incremental'} Shopify sync "
+            f"for source {source_id}"
+        )
 
         channel = get_sync_channel(source_id)
         await realtime.publish(
@@ -73,6 +78,7 @@ async def shopify_sync_all(ctx: inngest.Context) -> Dict[str, Any]:
                 data={
                     "source_id": source_id,
                     "endpoint": endpoint,
+                    "force_full": force_full,
                 },
             )
             results[endpoint] = endpoint_result
@@ -187,6 +193,7 @@ async def shopify_sync_endpoint(ctx: inngest.Context) -> Dict[str, Any]:
         source_id = event_data.get("source_id")
         endpoint = event_data.get("endpoint", "unknown")
         resume_cursor = event_data.get("cursor")
+        force_full = bool(event_data.get("force_full", False))
 
         if not source_id or endpoint == "unknown":
             raise ValueError("source_id and endpoint are required")
@@ -196,8 +203,30 @@ async def shopify_sync_endpoint(ctx: inngest.Context) -> Dict[str, Any]:
 
         ctx.logger.info(
             f"Syncing Shopify {endpoint} for source {source_id} "
-            f"(cursor: {resume_cursor or 'start'})"
+            f"(cursor: {resume_cursor or 'start'}, force_full: {force_full})"
         )
+
+        # Captured via step.run so it's stable across Inngest replays, and
+        # recorded as the watermark on success — using the run's *start*
+        # time (not its completion time) means we never miss a record that
+        # Shopify updated while this run was still fetching.
+        run_started_at = datetime.fromisoformat(
+            await ctx.step.run(
+                "get-run-start-time",
+                lambda: datetime.now(timezone.utc).isoformat(),
+            )
+        )
+
+        since = None
+        if not force_full:
+
+            async def _get_watermark() -> Optional[str]:
+                watermark = await sync_service.get_sync_watermark(source_id, endpoint)
+                return watermark.isoformat() if watermark else None
+
+            watermark_iso = await ctx.step.run("get-sync-watermark", _get_watermark)
+            watermark = datetime.fromisoformat(watermark_iso) if watermark_iso else None
+            since = resolve_sync_since(watermark, force_full=False)
 
         channel = get_sync_channel(source_id)
         await realtime.publish(
@@ -246,7 +275,7 @@ async def shopify_sync_endpoint(ctx: inngest.Context) -> Dict[str, Any]:
         pages_processed = 0
         batch: List[Dict[str, Any]] = []
 
-        async for record in adapter.stream_endpoint(endpoint, cursor):
+        async for record in adapter.stream_endpoint(endpoint, cursor, since=since):
             batch.append(
                 {
                     "entity_type": record.entity_type,
@@ -316,6 +345,13 @@ async def shopify_sync_endpoint(ctx: inngest.Context) -> Dict[str, Any]:
             f"{items_stored} items, {pages_processed} pages"
         )
 
+        await ctx.step.run(
+            "set-sync-watermark",
+            lambda: sync_service.set_sync_watermark(
+                source_id, endpoint, status="completed", synced_at=run_started_at
+            ),
+        )
+
         # When orders are synced directly, also fetch order transactions
         # so non-Shopify-Payments payments are always captured.
         if endpoint == "orders":
@@ -354,6 +390,16 @@ async def shopify_sync_endpoint(ctx: inngest.Context) -> Dict[str, Any]:
                         total_items=None,
                         error=str(e),
                         timestamp=datetime.now().isoformat(),
+                    ),
+                )
+                # Doesn't advance the watermark (synced_at is omitted) - the
+                # next run retries from the last known-good point. Recorded
+                # purely for observability (surfacing "last sync failed" in
+                # the UI).
+                await ctx.step.run(
+                    "set-sync-watermark-error",
+                    lambda: sync_service.set_sync_watermark(
+                        source_id, endpoint, status="error", error=str(e)
                     ),
                 )
         except Exception as pub_err:

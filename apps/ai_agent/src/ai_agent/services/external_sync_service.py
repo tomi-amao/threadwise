@@ -307,7 +307,85 @@ class ExternalSyncService:
             .execute()
         )
         return result.data[0] if result.data else None
-    
+
+    # =========================================================================
+    # PER-ENDPOINT SYNC WATERMARKS (incremental sync)
+    # =========================================================================
+    #
+    # `external_sources.last_synced_at`/`sync_cursor` above are source-level
+    # (one value for the whole source) and only ever set on full-run
+    # completion — they can't tell an individual endpoint's sync where to
+    # resume from. `external_source_sync_state` holds one watermark per
+    # (source_id, endpoint) instead, read before a run to bound the fetch
+    # window and written after each endpoint finishes (success or error).
+
+    async def get_sync_watermark(
+        self, source_id: str, endpoint: str
+    ) -> Optional[datetime]:
+        """Get the last successful sync watermark for one endpoint.
+
+        Returns None if this endpoint has never completed a sync — callers
+        should treat that as "do a full historical fetch". Note this is
+        independent of the *most recent* run's status: `last_synced_at` is
+        only ever written by a completed run (see set_sync_watermark), so a
+        subsequent failed run doesn't clear or roll back a prior good
+        watermark — the next run retries from the last known-good point.
+        """
+        result = await asyncio.to_thread(
+            lambda: self.client.table("external_source_sync_state")
+            .select("last_synced_at")
+            .eq("source_id", source_id)
+            .eq("endpoint", endpoint)
+            .limit(1)
+            .execute()
+        )
+        if not result.data or not result.data[0].get("last_synced_at"):
+            return None
+        return datetime.fromisoformat(
+            result.data[0]["last_synced_at"].replace("Z", "+00:00")
+        )
+
+    async def set_sync_watermark(
+        self,
+        source_id: str,
+        endpoint: str,
+        *,
+        status: str,
+        synced_at: Optional[datetime] = None,
+        error: Optional[str] = None,
+    ) -> None:
+        """Record the outcome of one endpoint's sync run.
+
+        Args:
+            source_id: Parent external source ID
+            endpoint: Endpoint name (e.g. "orders")
+            status: "completed" or "error"
+            synced_at: The run's *start* time (not completion time) — using
+                the start avoids missing records updated by the provider
+                while this run was still in flight. Required when
+                status="completed"; ignored otherwise (a failed run doesn't
+                advance the watermark, so the next run retries the same
+                window).
+            error: Error message when status="error"
+        """
+        data: Dict[str, Any] = {
+            "source_id": source_id,
+            "endpoint": endpoint,
+            "last_run_status": status,
+            "last_run_error": error,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+        if status == "completed":
+            if synced_at is None:
+                raise ValueError("synced_at is required when status='completed'")
+            data["last_synced_at"] = synced_at.isoformat()
+
+        await asyncio.to_thread(
+            lambda: self.client.table("external_source_sync_state")
+            .upsert(data, on_conflict="source_id,endpoint")
+            .execute()
+        )
+
     # =========================================================================
     # RAW EVENT STORAGE
     # =========================================================================

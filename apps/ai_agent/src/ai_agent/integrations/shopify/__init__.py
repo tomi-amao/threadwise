@@ -54,6 +54,12 @@ ENTITY_TYPE_MAP = {
 # If these return 402/404/422 we skip gracefully instead of failing the sync.
 PAYMENTS_ONLY_ENDPOINTS = {"balance_transactions"}
 
+# Endpoints whose Admin REST API accepts `updated_at_min` for incremental
+# fetching. `inventory` (inventory_levels) is a live point-in-time snapshot
+# with no update-time filter, and `balance_transactions` has none either —
+# both always do a full fetch regardless of watermark.
+SUPPORTS_UPDATED_SINCE = {"orders", "products", "customers"}
+
 # Buffer before token expiry to trigger a refresh (5 minutes)
 TOKEN_EXPIRY_BUFFER_SECONDS = 300
 
@@ -331,8 +337,18 @@ class ShopifyAdapter:
         endpoint: str,
         cursor: Optional[str] = None,
         extra_params: Optional[Dict[str, Any]] = None,
+        since: Optional[datetime] = None,
     ) -> PaginatedResult:
-        """Fetch a single page from a Shopify endpoint."""
+        """Fetch a single page from a Shopify endpoint.
+
+        Args:
+            since: Only fetch records updated at-or-after this time (Admin
+                API ``updated_at_min``). Only honored for endpoints in
+                SUPPORTS_UPDATED_SINCE and only on the first page — once
+                Shopify's cursor-based ``page_info`` is in play, no other
+                filter params are allowed (they're already baked into the
+                cursor from the initial request).
+        """
         if endpoint not in ENDPOINTS:
             raise ValueError(f"Unknown endpoint: {endpoint}")
 
@@ -346,6 +362,8 @@ class ShopifyAdapter:
                 params["status"] = "any"
             elif endpoint == "products":
                 params["status"] = "active"
+            if since is not None and endpoint in SUPPORTS_UPDATED_SINCE:
+                params["updated_at_min"] = since.strftime("%Y-%m-%dT%H:%M:%S%z")
             if extra_params:
                 params.update(extra_params)
 
@@ -383,12 +401,26 @@ class ShopifyAdapter:
         self,
         endpoint: str,
         start_cursor: Optional[str] = None,
+        since: Optional[datetime] = None,
     ) -> AsyncIterator[RawEventRecord]:
-        """Stream all items from an endpoint as raw event records."""
+        """Stream all items from an endpoint as raw event records.
+
+        Args:
+            since: Only fetch records updated at-or-after this time. Ignored
+                (full fetch) for endpoints not in SUPPORTS_UPDATED_SINCE.
+        """
         entity_type = self._get_entity_type(endpoint)
         cursor = start_cursor
         page_count = 0
         total_items = 0
+
+        if since is not None and endpoint not in SUPPORTS_UPDATED_SINCE:
+            logger.info(
+                "Shopify %s has no update-time filter available - ignoring "
+                "`since` and doing a full fetch",
+                endpoint,
+            )
+            since = None
 
         # inventory_levels requires location_ids — fetch them once up front.
         extra_params: Optional[Dict[str, Any]] = None
@@ -407,6 +439,7 @@ class ShopifyAdapter:
                     endpoint,
                     cursor,
                     extra_params=extra_params if not cursor else None,
+                    since=since,
                 )
             except httpx.HTTPStatusError as e:
                 status_code = e.response.status_code

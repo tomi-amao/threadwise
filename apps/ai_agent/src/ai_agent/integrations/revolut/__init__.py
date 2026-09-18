@@ -164,6 +164,7 @@ class RevolutAdapter:
         self,
         endpoint: str,
         cursor: Optional[str] = None,
+        since: Optional[datetime] = None,
     ) -> PaginatedResult:
         """Fetch a single page of data from an endpoint.
 
@@ -177,6 +178,11 @@ class RevolutAdapter:
         Args:
             endpoint: Endpoint name (``transactions``, ``accounts``, or ``expenses``)
             cursor: Pagination cursor (ISO-8601 timestamp for transactions/expenses)
+            since: Only fetch records at-or-after this time (Revolut's
+                ``from`` parameter, inclusive). Sent on every page, not just
+                the first — unlike Shopify's opaque cursor, Revolut's `to`
+                cursor is a plain param that composes with `from` throughout
+                pagination, so the lower bound stays enforced page to page.
 
         Returns:
             PaginatedResult with items and next cursor
@@ -192,6 +198,8 @@ class RevolutAdapter:
             if cursor:
                 # cursor is an ISO-8601 timestamp used as the upper bound
                 params["to"] = cursor
+            if since is not None:
+                params["from"] = since.isoformat()
 
         logger.info(
             f"Fetching {endpoint} page (cursor: {cursor or 'start'}, count: {params.get('count', 'N/A')})"
@@ -236,6 +244,7 @@ class RevolutAdapter:
         self,
         endpoint: str,
         start_cursor: Optional[str] = None,
+        since: Optional[datetime] = None,
     ) -> AsyncIterator[RawEventRecord]:
         """Stream all items from an endpoint as raw event records.
 
@@ -245,6 +254,9 @@ class RevolutAdapter:
         Args:
             endpoint: Endpoint name
             start_cursor: Optional cursor to resume from
+            since: Only fetch records at-or-after this time. Ignored for
+                ``accounts``, which is a point-in-time snapshot with no
+                created/updated timestamp to filter on.
 
         Yields:
             RawEventRecord for each item
@@ -258,7 +270,7 @@ class RevolutAdapter:
             page_count += 1
 
             try:
-                result = await self.fetch_page(endpoint, cursor)
+                result = await self.fetch_page(endpoint, cursor, since=since)
             except httpx.HTTPStatusError as e:
                 logger.error(
                     f"HTTP error fetching {endpoint}: {e.response.status_code}"

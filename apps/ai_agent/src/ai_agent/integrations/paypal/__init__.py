@@ -327,12 +327,13 @@ class PayPalAdapter:
         self,
         endpoint: str,
         start_cursor: Optional[str] = None,
+        since: Optional[datetime] = None,
     ) -> AsyncIterator[RawEventRecord]:
         """Stream all items from an endpoint as raw event records.
 
-        Splits the configured ``lookback_days`` period into ``MAX_DATE_WINDOW_DAYS``
-        (31-day) windows to comply with PayPal's per-request date-range limit.
-        Within each window all pages are exhausted before moving to the next.
+        Splits the covered period into ``MAX_DATE_WINDOW_DAYS`` (31-day)
+        windows to comply with PayPal's per-request date-range limit. Within
+        each window all pages are exhausted before moving to the next.
 
         Yields items one by one for memory efficiency.
         Never transforms data - exact API payloads are stored.
@@ -341,6 +342,11 @@ class PayPalAdapter:
             endpoint: Endpoint name
             start_cursor: Ignored (kept for API compatibility); windowing always
                           starts from the oldest window.
+            since: Only fetch records at-or-after this time, raising the
+                   lower bound of the windowed range above
+                   ``now - lookback_days`` (never below it — lookback_days
+                   still caps how far back a fresh source can look). None
+                   means the full ``lookback_days`` history, as before.
 
         Yields:
             RawEventRecord for each item
@@ -349,10 +355,12 @@ class PayPalAdapter:
         page_count = 0
         total_items = 0
 
-        # Build contiguous 31-day windows covering the full lookback period,
+        # Build contiguous 31-day windows covering the covered period,
         # ordered from oldest to most recent.
         now = datetime.now(timezone.utc)
         lookback_start = now - timedelta(days=self.lookback_days)
+        if since is not None:
+            lookback_start = max(lookback_start, since)
 
         windows: list[tuple[datetime, datetime]] = []
         window_end = now
@@ -367,10 +375,10 @@ class PayPalAdapter:
         windows.reverse()  # oldest first
 
         logger.info(
-            "Streaming %s over %d date windows (%d-day lookback)",
+            "Streaming %s over %d date windows (from %s)",
             endpoint,
             len(windows),
-            self.lookback_days,
+            lookback_start.date().isoformat(),
         )
 
         for win_start, win_end in windows:
