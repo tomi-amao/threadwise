@@ -155,7 +155,20 @@ export function NormalizationProgressToast({
     if (!response.ok) {
       throw new Error(`Failed to get subscription token: ${response.statusText}`);
     }
-    return response.json();
+    // Backend returns the signed token under `token`; inngest/react's
+    // TokenSubscription reads it from `key`, and only checks for
+    // `channel`+`topics` (not `key`) to decide the shape is valid, so a
+    // mismatched field name here fails silently until connect() is called.
+    // api_base_url must also be forwarded: the token is signed against
+    // whichever Inngest origin minted it (dev server vs. cloud), and the
+    // WebSocket has to connect to that same origin or the token is rejected.
+    const data = await response.json();
+    return {
+      channel: data.channel,
+      topics: data.topics,
+      key: data.token,
+      apiBaseUrl: data.api_base_url,
+    };
   };
 
   // Inngest realtime subscription
@@ -178,9 +191,20 @@ export function NormalizationProgressToast({
           const incoming = message.data as NormalizationStatusData;
           if (!prev) return incoming;
 
-          const incomingTime = new Date(incoming.timestamp).getTime();
-          const prevTime = new Date(prev.timestamp).getTime();
-          if (incomingTime <= prevTime) return prev;
+          // Inngest re-runs any code that isn't wrapped in ctx.step.run() on
+          // every step replay, so the backend can re-publish an earlier status
+          // with a fresher timestamp than one already applied. Guard on
+          // status priority and entity-type count, not just wall-clock time,
+          // or a replayed "processing: 0/N" can overwrite a later one.
+          const incomingPriority = STATUS_PRIORITY[incoming.status] ?? 0;
+          const prevPriority = STATUS_PRIORITY[prev.status] ?? 0;
+          if (incomingPriority < prevPriority) return prev;
+          if (
+            incomingPriority === prevPriority &&
+            incoming.entity_types_completed < prev.entity_types_completed
+          ) {
+            return prev;
+          }
 
           return incoming;
         });

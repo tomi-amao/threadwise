@@ -46,7 +46,12 @@ async def get_subscription_token(channel: str, topics: list[str]) -> dict[str, A
         channel=channel,
         topics=topics,
     )
-    return token
+    # The JWT is minted against client.api_origin (dev server vs. cloud,
+    # per INNGEST_DEV) - the frontend must open its realtime WebSocket
+    # against that same origin, or a dev-server-signed token gets rejected
+    # by the default `wss://api.inngest.com` endpoint the JS SDK falls
+    # back to when no origin is given.
+    return {**token, "apiBaseUrl": client.api_origin}
 
 
 def validate_config() -> Dict[str, Any]:

@@ -75,6 +75,14 @@ class SubscriptionTokenResponse(BaseModel):
     channel_type: str = Field(..., description="Type of channel")
     topics: List[str] = Field(..., description="Subscribed topics")
     expires_in: int = Field(default=60, description="Token expiration in seconds")
+    api_base_url: str = Field(
+        ...,
+        description=(
+            "Origin the client must open its realtime WebSocket against "
+            "(the Inngest Dev Server or Inngest Cloud, matching wherever "
+            "this token was minted)"
+        ),
+    )
 
 
 # =============================================================================
@@ -148,6 +156,7 @@ async def create_subscription_token(
             channel_type=request.channel_type.value,
             topics=topics,
             expires_in=60,
+            api_base_url=token_data["apiBaseUrl"],
         )
         
     except HTTPException:
