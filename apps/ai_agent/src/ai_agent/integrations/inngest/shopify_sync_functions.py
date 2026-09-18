@@ -8,6 +8,7 @@ import logging
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
+import httpx
 import inngest
 from inngest.experimental import realtime
 
@@ -224,13 +225,15 @@ async def shopify_sync_endpoint(ctx: inngest.Context) -> Dict[str, Any]:
 
         credentials_json = await sync_service.get_api_key(source_id)
         if not credentials_json:
-            raise ValueError(
+            raise inngest.NonRetriableError(
                 "Credentials not found - please configure Shopify client_id and client_secret"
             )
 
         shop_domain = source.get("external_account_id", "")
         if not shop_domain:
-            raise ValueError("Shop domain (external_account_id) is not configured")
+            raise inngest.NonRetriableError(
+                "Shop domain (external_account_id) is not configured"
+            )
 
         adapter = ShopifyAdapter(
             credentials_json=credentials_json,
@@ -355,6 +358,17 @@ async def shopify_sync_endpoint(ctx: inngest.Context) -> Dict[str, Any]:
                 )
         except Exception as pub_err:
             ctx.logger.error(f"Failed to publish error status: {str(pub_err)}")
+
+        # 401/403 are permanent - the same credentials will fail every
+        # retry, so don't burn ~100s of exponential backoff (retries=3)
+        # on a call that can never succeed.
+        if isinstance(e, httpx.HTTPStatusError) and e.response.status_code in (
+            401,
+            403,
+        ):
+            raise inngest.NonRetriableError(
+                f"Shopify API authentication failed: {e}"
+            ) from e
 
         raise
 

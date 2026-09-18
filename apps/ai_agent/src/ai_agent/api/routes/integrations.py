@@ -401,12 +401,14 @@ async def trigger_sync(source_id: str, request: Optional[TriggerSyncRequest] = N
             message = f"Triggered sync for {request.endpoint}"
         else:
             # Full sync
-            event_ids = await inngest_client.send({
-                "name": f"{provider}/sync.requested",
-                "data": {
-                    "source_id": source_id
-                }
-            })
+            event_ids = await inngest_client.send(
+                inngest.Event(
+                    name=f"{provider}/sync.requested",
+                    data={
+                        "source_id": source_id
+                    }
+                )
+            )
             message = "Triggered full sync for all endpoints"
 
         logger.info(f"{message} for source {source_id} (provider={provider})")
