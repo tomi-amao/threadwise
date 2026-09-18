@@ -31,6 +31,10 @@ logger = logging.getLogger(__name__)
 def get_services():
     """Initialize and return service instances."""
     langgraph_service = None
+    # The embedding service is deliberately NOT created here: constructing it
+    # loads a sentence-transformers model (torch) and makes blocking Pinecone
+    # network calls, which ran on every server start and hot reload. Routes and
+    # graph nodes call get_embedding_service() lazily on first use instead.
     embedding_service = None
     inngest_client = None
     inngest_functions = []
@@ -38,15 +42,11 @@ def get_services():
     
     # Import services
     try:
-        from .services.embedding_service import get_embedding_service
         from .services.langgraph_service import LangGraphService
-        embedding_service = get_embedding_service()
         langgraph_service = LangGraphService()
     except ImportError:
         try:
-            from ai_agent.services.embedding_service import get_embedding_service
             from ai_agent.services.langgraph_service import LangGraphService
-            embedding_service = get_embedding_service()
             langgraph_service = LangGraphService()
         except ImportError:
             logger.warning("Services not available")
@@ -88,9 +88,6 @@ async def lifespan(app: FastAPI):
     if langgraph_service:
         await langgraph_service.initialize()
         logger.info("LangGraph service initialized")
-    
-    if embedding_service:
-        logger.info("Embedding service available")
     
     if inngest_client and validate_inngest_config:
         config_status = validate_inngest_config()

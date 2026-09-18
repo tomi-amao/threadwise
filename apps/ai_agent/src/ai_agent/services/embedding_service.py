@@ -30,13 +30,11 @@ try:
 except ImportError:
     DocxDocument = None
 
-try:
-    from langchain_huggingface import HuggingFaceEmbeddings
-except ImportError:
-    HuggingFaceEmbeddings = None
-
-from langchain_community.document_loaders import PyPDFLoader
-from langchain_text_splitters import RecursiveCharacterTextSplitter
+# langchain_huggingface, langchain_community.document_loaders and
+# langchain_text_splitters are imported lazily where they're used: each of them
+# (transitively) imports sentence_transformers → transformers → torch, which
+# costs ~9s. Importing them here made every importer of this module — including
+# the LangGraph graph and the FastAPI app — pay that cost at startup/reload.
 
 try:
     from pinecone import Pinecone, ServerlessSpec
@@ -46,10 +44,10 @@ except ImportError:
 
 from dotenv import load_dotenv
 
-# Load environment variables
-load_dotenv(
-    dotenv_path="/Users/trendstomi/projects/web-applications/threadwise/apps/ai_agent/.env"
-)
+# Load environment variables (relative to cwd, matching core/config.py's
+# load_dotenv(dotenv_path=".env") — do not hardcode an absolute path here,
+# it only worked on one developer's machine)
+load_dotenv(dotenv_path=".env", override=True)
 
 logger = logging.getLogger(__name__)
 
@@ -122,11 +120,13 @@ def get_embeddings():
     """Get or initialize the embedding model (singleton pattern)."""
     global _embeddings
     if _embeddings is None:
-        if HuggingFaceEmbeddings is None:
+        try:
+            from langchain_huggingface import HuggingFaceEmbeddings
+        except ImportError as e:
             raise ImportError(
                 "langchain-huggingface is not installed. "
                 "Install with: pip install langchain-huggingface"
-            )
+            ) from e
         logger.info(f"Initializing embedding model: {EMBEDDING_MODEL}")
         _embeddings = HuggingFaceEmbeddings(
             model_name=EMBEDDING_MODEL,
@@ -597,6 +597,9 @@ class EmbeddingService:
         try:
             # Load and split PDF using PyPDFLoader
             def load_and_split_pdf():
+                from langchain_community.document_loaders import PyPDFLoader
+                from langchain_text_splitters import RecursiveCharacterTextSplitter
+
                 pdf_loader = PyPDFLoader(
                     file_path=file_url,
                     mode="single",

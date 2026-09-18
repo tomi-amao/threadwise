@@ -1,4 +1,4 @@
-.PHONY: help setup dev build start test clean docker-up docker-down docker-logs
+.PHONY: help setup dev clean-agent-state build start test clean docker-up docker-down docker-logs
 
 # Colors for output
 GREEN := \033[32m
@@ -55,6 +55,10 @@ format: ## Format all files
 clean: ## Clean all build artifacts and caches
 	@echo "$(YELLOW)Cleaning build artifacts...$(RESET)"
 	pnpm clean
+
+clean-agent-state: ## Wipe langgraph dev's local threads/checkpoints (stop the agent server first)
+	@echo "$(YELLOW)Removing apps/ai_agent/.langgraph_api ($$(du -sh apps/ai_agent/.langgraph_api 2>/dev/null | cut -f1))...$(RESET)"
+	rm -rf apps/ai_agent/.langgraph_api
 
 reset: ## Reset environment (clean + reinstall)
 	@echo "$(YELLOW)Resetting environment...$(RESET)"
