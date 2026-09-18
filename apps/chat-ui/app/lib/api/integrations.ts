@@ -122,7 +122,8 @@ export async function getIntegrationsSummary(entityId?: string): Promise<Integra
  */
 export async function triggerSync(
   sourceId: string,
-  endpoint?: string
+  endpoint?: string,
+  forceFull?: boolean
 ): Promise<TriggerSyncResponse | null> {
   const baseUrl = getApiBaseUrl();
 
@@ -132,7 +133,9 @@ export async function triggerSync(
       headers: {
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ endpoint }),
+      // force_full=false (default) fetches only records updated since each
+      // endpoint's last successful sync; true re-fetches full history.
+      body: JSON.stringify({ endpoint, force_full: forceFull ?? false }),
     });
 
     if (!response.ok) {

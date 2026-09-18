@@ -235,7 +235,7 @@ function IntegrationCard({
   isRemoving,
 }: {
   integration: IntegrationSummary;
-  onSync: () => void;
+  onSync: (forceFull: boolean) => void;
   onSyncEndpoint: (endpoint: string) => void;
   onValidateApiKey: () => void;
   onUpdateApiKey: (apiKey: string) => void;
@@ -661,27 +661,7 @@ function IntegrationCard({
                 isNormalizing={isNormalizing}
               />
             )}
-            <Button
-              onClick={onSync}
-              disabled={isSyncActive}
-              className={cn(
-                'bg-gradient-to-r from-primary to-primary/90',
-                'hover:from-primary/90 hover:to-primary/80',
-                'shadow-lg shadow-primary/20'
-              )}
-            >
-              {isSyncActive ? (
-                <>
-                  <ArrowsClockwise size={16} weight="bold" className="mr-2 animate-spin" />
-                  Syncing...
-                </>
-              ) : (
-                <>
-                  <ArrowsClockwise size={16} weight="bold" className="mr-2" />
-                  Sync All Data
-                </>
-              )}
-            </Button>
+            <SyncButton onSync={onSync} disabled={isSyncActive} isSyncing={isSyncActive} />
           </div>
         </div>
       </div>
@@ -696,6 +676,111 @@ function IntegrationCard({
  * Soft mode (default): Only processes new/pending events.
  * Hard mode: Resets everything and reprocesses from scratch.
  */
+function SyncButton({
+  onSync,
+  disabled,
+  isSyncing,
+}: {
+  onSync: (forceFull: boolean) => void;
+  disabled: boolean;
+  isSyncing: boolean;
+}) {
+  const [showModeMenu, setShowModeMenu] = useState(false);
+
+  return (
+    <div className="relative">
+      <div className="flex items-center">
+        {/* Main button - incremental sync by default */}
+        <Button
+          onClick={() => onSync(false)}
+          disabled={disabled}
+          className={cn(
+            'rounded-r-none border-r-0',
+            'bg-gradient-to-r from-primary to-primary/90',
+            'hover:from-primary/90 hover:to-primary/80',
+            'shadow-lg shadow-primary/20'
+          )}
+        >
+          {isSyncing ? (
+            <>
+              <ArrowsClockwise size={16} weight="bold" className="mr-2 animate-spin" />
+              Syncing...
+            </>
+          ) : (
+            <>
+              <ArrowsClockwise size={16} weight="bold" className="mr-2" />
+              Sync All Data
+            </>
+          )}
+        </Button>
+        {/* Mode dropdown toggle */}
+        <Button
+          disabled={disabled}
+          className={cn(
+            'rounded-l-none px-2',
+            'bg-gradient-to-r from-primary to-primary/90',
+            'hover:from-primary/90 hover:to-primary/80',
+            'shadow-lg shadow-primary/20'
+          )}
+          onClick={() => setShowModeMenu(!showModeMenu)}
+        >
+          <CaretDown size={14} />
+        </Button>
+      </div>
+
+      {/* Mode dropdown menu */}
+      {showModeMenu && (
+        <div
+          className={cn(
+            'absolute right-0 bottom-full mb-2 w-64 z-50',
+            'bg-card border border-border rounded-xl shadow-xl',
+            'animate-in fade-in slide-in-from-bottom-2 duration-150'
+          )}
+          onMouseLeave={() => setShowModeMenu(false)}
+        >
+          <div className="p-2">
+            <button
+              onClick={() => {
+                onSync(false);
+                setShowModeMenu(false);
+              }}
+              className="w-full text-left p-3 rounded-lg hover:bg-accent transition-colors"
+            >
+              <div className="flex items-center gap-2 mb-1">
+                <span className="text-sm font-medium text-foreground">Sync</span>
+                <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-blue-500/10 text-blue-400">
+                  DEFAULT
+                </span>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Only fetches records updated since the last successful sync. Fast, safe to re-run.
+              </p>
+            </button>
+            <button
+              onClick={() => {
+                onSync(true);
+                setShowModeMenu(false);
+              }}
+              className="w-full text-left p-3 rounded-lg hover:bg-accent transition-colors"
+            >
+              <div className="flex items-center gap-2 mb-1">
+                <span className="text-sm font-medium text-foreground">Full Resync</span>
+                <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-orange-500/10 text-orange-400">
+                  RESET
+                </span>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Ignores the sync watermark and re-fetches full history for every endpoint. Use if
+                data looks incomplete or was corrected retroactively.
+              </p>
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function LoadDataButton({
   onLoadData,
   disabled,
@@ -1204,20 +1289,25 @@ export default function IntegrationsPage() {
     }
   };
 
-  // Handle sync
-  const handleSync = async (sourceId: string, endpoint?: string) => {
+  // Handle sync. forceFull=false (default) only fetches records updated
+  // since each endpoint's last successful sync; true re-fetches full
+  // history, ignoring any watermark.
+  const handleSync = async (sourceId: string, endpoint?: string, forceFull = false) => {
     setSyncingIds(prev => new Set([...prev, sourceId]));
 
     setActiveSyncSource({ id: sourceId, name: '' }); // Name can be set if needed
+    const syncKind = forceFull ? 'full resync' : 'sync';
     if (endpoint) {
       setSyncingEndpoints(prev => new Map(prev).set(sourceId, endpoint));
-      toast.loading(`Syncing ${endpoint}...`, { id: `sync-${sourceId}-${endpoint}` });
+      toast.loading(`Running ${syncKind} for ${endpoint}...`, {
+        id: `sync-${sourceId}-${endpoint}`,
+      });
     } else {
-      toast.loading('Syncing all data...', { id: `sync-${sourceId}` });
+      toast.loading(`Running ${syncKind} for all data...`, { id: `sync-${sourceId}` });
     }
 
     try {
-      const response = await triggerSync(sourceId, endpoint);
+      const response = await triggerSync(sourceId, endpoint, forceFull);
       if (response?.status != 'triggered') {
         throw new Error('Sync did not trigger successfully');
       }
@@ -1226,7 +1316,10 @@ export default function IntegrationsPage() {
       if (endpoint) {
         toast.success(`${endpoint} triggered successfully`, { id: `sync-${sourceId}-${endpoint}` });
       } else {
-        toast.success('Full sync triggered successfully', { id: `sync-${sourceId}` });
+        toast.success(
+          forceFull ? 'Full resync triggered successfully' : 'Sync triggered successfully',
+          { id: `sync-${sourceId}` }
+        );
       }
     } catch (error) {
       console.error('Failed to trigger sync:', error);
@@ -1444,7 +1537,7 @@ export default function IntegrationsPage() {
               <IntegrationCard
                 key={integration.id}
                 integration={integration}
-                onSync={() => handleSync(integration.id)}
+                onSync={forceFull => handleSync(integration.id, undefined, forceFull)}
                 onSyncEndpoint={endpoint => handleSync(integration.id, endpoint)}
                 onValidateApiKey={() => handleValidateApiKey(integration.id)}
                 onUpdateApiKey={apiKey => handleUpdateApiKey(integration.id, apiKey)}
