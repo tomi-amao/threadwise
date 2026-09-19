@@ -10,8 +10,7 @@
 
 import type { ActionFunctionArgs } from 'react-router';
 import { getServerSupabaseClient } from '~/lib/supabase';
-
-const ENTITY_ID = 'f49f608d-0868-4e63-b0bb-d4c60d74db68';
+import { getEntityInfo } from '~/lib/api/dashboard.server';
 
 function json(data: unknown, init?: ResponseInit) {
   return new Response(JSON.stringify(data), {
@@ -21,6 +20,15 @@ function json(data: unknown, init?: ResponseInit) {
 }
 
 export async function action({ request }: ActionFunctionArgs) {
+  // Resolve the entity from the caller's own session — never from a
+  // client-supplied value, which would let any authenticated user post a
+  // journal into an arbitrary entity's books by passing a different id.
+  const entity = await getEntityInfo(request);
+  if (!entity) {
+    return json({ error: 'No entity found for the current user' }, { status: 403 });
+  }
+  const entityId = entity.id;
+
   const supabase = getServerSupabaseClient();
 
   let body: Record<string, unknown>;
@@ -108,7 +116,7 @@ export async function action({ request }: ActionFunctionArgs) {
     const { data: journal, error: journalErr } = await supabase
       .from('journals')
       .insert({
-        entity_id: ENTITY_ID,
+        entity_id: entityId,
         journal_date,
         journal_type: journal_type || 'adjustment',
         description: description || null,
@@ -176,7 +184,7 @@ export async function action({ request }: ActionFunctionArgs) {
     const { data: journal, error: journalErr } = await supabase
       .from('journals')
       .insert({
-        entity_id: ENTITY_ID,
+        entity_id: entityId,
         journal_date: date,
         journal_type: 'adjustment',
         description:

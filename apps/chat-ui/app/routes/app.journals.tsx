@@ -23,10 +23,9 @@ import {
   Info,
 } from 'phosphor-react';
 import { getServerSupabaseClient } from '~/lib/supabase';
+import { getEntityInfo } from '~/lib/api/dashboard.server';
 import { cn } from '~/lib/utils';
 import { Button } from '~/components/ui/button';
-
-const ENTITY_ID = 'f49f608d-0868-4e63-b0bb-d4c60d74db68';
 
 export const meta: MetaFunction = () => [
   { title: 'Journal Entries - ThreadWise' },
@@ -76,7 +75,16 @@ interface LoaderData {
 
 // ─── Loader ───────────────────────────────────────────────────────────────────
 
-export async function loader(_: LoaderFunctionArgs): Promise<LoaderData> {
+export async function loader({ request }: LoaderFunctionArgs): Promise<LoaderData> {
+  // Resolve the entity from the logged-in user's session rather than a
+  // hardcoded id — this page previously always read and wrote a single
+  // fixed entity's books regardless of who was signed in.
+  const entity = await getEntityInfo(request);
+  if (!entity) {
+    throw new Response('No entity found for the current user', { status: 403 });
+  }
+  const entityId = entity.id;
+
   const supabase = getServerSupabaseClient();
 
   const [accountsRes, sampleItemsRes] = await Promise.all([
@@ -90,7 +98,7 @@ export async function loader(_: LoaderFunctionArgs): Promise<LoaderData> {
       .from('inventory_items')
       .select('id, unit_cost')
       .is('product_id', null)
-      .eq('entity_id', ENTITY_ID),
+      .eq('entity_id', entityId),
   ]);
 
   const accounts: Account[] = (accountsRes.data || []).map((a: any) => ({
@@ -109,7 +117,7 @@ export async function loader(_: LoaderFunctionArgs): Promise<LoaderData> {
   const { data: existingAdj } = await supabase
     .from('journals')
     .select('id')
-    .eq('entity_id', ENTITY_ID)
+    .eq('entity_id', entityId)
     .eq('source_type', 'manual')
     .ilike('description', '%sample%reclassif%')
     .limit(1);
@@ -118,7 +126,7 @@ export async function loader(_: LoaderFunctionArgs): Promise<LoaderData> {
   const { data: rawJournals } = await supabase
     .from('journals')
     .select('id, journal_date, journal_type, description, posted_at')
-    .eq('entity_id', ENTITY_ID)
+    .eq('entity_id', entityId)
     .eq('source_type', 'manual')
     .order('journal_date', { ascending: false })
     .limit(30);
