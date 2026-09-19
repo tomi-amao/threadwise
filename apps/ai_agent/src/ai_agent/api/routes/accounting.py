@@ -1256,10 +1256,18 @@ async def update_transaction(transaction_id: str, request: UpdateTransactionRequ
                         UUID(entity_id), UUID(existing_journal["id"])
                     )
                     journal_action = "reversed_and_recreated"
-                    # Recreate expense journal for the updated transaction
+                    # Recreate expense journal for the updated transaction.
+                    # force=True is required here: reverse_journal soft-voids
+                    # (never deletes) the old journal, so without it
+                    # create_expense_journal's own idempotency check would
+                    # find that same now-reversed journal and hand it back
+                    # unchanged instead of creating one under the new account
+                    # — silently leaving the transaction journaled under its
+                    # old, wrong account despite journal_action claiming
+                    # "reversed_and_recreated".
                     try:
                         new_journal = await journal_service.create_expense_journal(
-                            UUID(entity_id), UUID(transaction_id)
+                            UUID(entity_id), UUID(transaction_id), force=True
                         )
                     except (JournalError, Exception) as je:
                         logger.warning("Could not recreate journal: %s", je)

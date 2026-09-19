@@ -153,6 +153,7 @@ class JournalService:
         self,
         entity_id: UUID,
         payment_id: UUID,
+        force: bool = False,
     ) -> Dict[str, Any]:
         """Create an accrual journal entry for a captured payment.
 
@@ -168,6 +169,14 @@ class JournalService:
             CREDIT 4020 Shipping Revenue         = shipping_total
             CREDIT 2030 Tax Payable              = tax_total
 
+        Args:
+            force: If True, (re)create even if a journal already exists for
+                this payment — used to regenerate one whose only existing
+                journal was reversed (see reverse_journal's soft-void
+                design: the natural key is free again once reversed, but by
+                default this method still won't silently resurrect
+                something a human explicitly reversed).
+
         Raises:
             JournalError: If payment/order not found, or debits != credits
         """
@@ -178,7 +187,7 @@ class JournalService:
 
         # Check idempotency
         existing = await self._find_journal(entity_id, "payment", payment_id, "accrual")
-        if existing:
+        if existing and not force:
             return existing
 
         # Start in the payment currency, then convert fee proportionally if the
@@ -344,6 +353,7 @@ class JournalService:
         self,
         entity_id: UUID,
         financial_transaction_id: UUID,
+        force: bool = False,
     ) -> Dict[str, Any]:
         """Create a settlement journal for an inbound gateway transfer.
 
@@ -354,6 +364,11 @@ class JournalService:
         Journal entries:
             DEBIT  1014/1015/1016 Cash (Revolut)     = transfer amount
             CREDIT 1012 Payment Gateway Clearing      = transfer amount
+
+        Args:
+            force: If True, (re)create even if a journal already exists —
+                see create_accrual_journal's docstring for why this defaults
+                to False.
 
         Raises:
             JournalError: If transaction not found or not a settlement-eligible transfer
@@ -374,7 +389,7 @@ class JournalService:
         existing = await self._find_journal(
             entity_id, "financial_transaction", financial_transaction_id, "settlement"
         )
-        if existing:
+        if existing and not force:
             return existing
 
         amount = Decimal(str(abs(txn.get("amount", 0))))
@@ -453,6 +468,7 @@ class JournalService:
         self,
         entity_id: UUID,
         financial_transaction_id: UUID,
+        force: bool = False,
     ) -> Dict[str, Any]:
         """Create a funding journal for an inbound personal or external transfer.
 
@@ -467,6 +483,11 @@ class JournalService:
         Merchant / third-party funding:
             DEBIT  1014/1019/... Cash    = amount
             CREDIT 4020 Revenue          = amount  (general sales receipt)
+
+        Args:
+            force: If True, (re)create even if a journal already exists —
+                see create_accrual_journal's docstring for why this defaults
+                to False.
         """
         txn = await self._fetch_financial_transaction(str(financial_transaction_id))
         if not txn:
@@ -476,7 +497,7 @@ class JournalService:
         existing = await self._find_journal(
             entity_id, "financial_transaction", financial_transaction_id, "funding"
         )
-        if existing:
+        if existing and not force:
             return existing
 
         txn_type = txn.get("transaction_type", "")
@@ -593,6 +614,7 @@ class JournalService:
         self,
         entity_id: UUID,
         financial_transaction_id: UUID,
+        force: bool = False,
     ) -> Dict[str, Any]:
         """Create a sales receipt journal for a direct PayPal sale.
 
@@ -602,6 +624,11 @@ class JournalService:
             DEBIT  1019 PayPal Account   = gross amount
             DEBIT  8020 Bank Charges     = fee amount  (if any)
             CREDIT 4020 Revenue          = gross amount + fee
+
+        Args:
+            force: If True, (re)create even if a journal already exists —
+                see create_accrual_journal's docstring for why this defaults
+                to False.
         """
         txn = await self._fetch_financial_transaction(str(financial_transaction_id))
         if not txn:
@@ -610,7 +637,7 @@ class JournalService:
         existing = await self._find_journal(
             entity_id, "financial_transaction", financial_transaction_id, "sales_receipt"
         )
-        if existing:
+        if existing and not force:
             return existing
 
         raw_currency = (txn.get("currency_code") or "GBP").upper()
@@ -724,11 +751,17 @@ class JournalService:
         self,
         entity_id: UUID,
         financial_transaction_id: UUID,
+        force: bool = False,
     ) -> Dict[str, Any]:
         """Create a refund journal for an inbound refund transaction.
 
             DEBIT  1014/... Cash        = refund amount
             CREDIT 6xxx/... Expense     = refund amount  (resolved from counterparty)
+
+        Args:
+            force: If True, (re)create even if a journal already exists —
+                see create_accrual_journal's docstring for why this defaults
+                to False.
         """
         txn = await self._fetch_financial_transaction(str(financial_transaction_id))
         if not txn:
@@ -737,7 +770,7 @@ class JournalService:
         existing = await self._find_journal(
             entity_id, "financial_transaction", financial_transaction_id, "refund"
         )
-        if existing:
+        if existing and not force:
             return existing
 
         amount = Decimal(str(abs(txn.get("amount", 0))))
@@ -811,6 +844,7 @@ class JournalService:
         self,
         entity_id: UUID,
         financial_transaction_id: UUID,
+        force: bool = False,
     ) -> Dict[str, Any]:
         """Create an FX conversion journal.
 
@@ -819,6 +853,11 @@ class JournalService:
             DEBIT  1014/1015/1016 Target Cash  = converted amount
             CREDIT 1014/1015/1016 Source Cash   = base amount
             DEBIT/CREDIT 8030 FX Loss/Gain      = difference  (if fee)
+
+        Args:
+            force: If True, (re)create even if a journal already exists —
+                see create_accrual_journal's docstring for why this defaults
+                to False.
         """
         txn = await self._fetch_financial_transaction(str(financial_transaction_id))
         if not txn:
@@ -827,7 +866,7 @@ class JournalService:
         existing = await self._find_journal(
             entity_id, "financial_transaction", financial_transaction_id, "fx_conversion"
         )
-        if existing:
+        if existing and not force:
             return existing
 
         amount = Decimal(str(abs(txn.get("amount", 0))))
@@ -1877,6 +1916,7 @@ class JournalService:
         self,
         entity_id: UUID,
         financial_transaction_id: UUID,
+        force: bool = False,
     ) -> Dict[str, Any]:
         """Create an expense journal from a categorized bank transaction.
 
@@ -1894,6 +1934,15 @@ class JournalService:
         Args:
             entity_id: The entity
             financial_transaction_id: The financial transaction to journal
+            force: If True, (re)create even if a journal already exists for
+                this transaction. Needed by the reclassification flow
+                (api/routes/accounting.py's update_transaction): it reverses
+                the old journal and immediately recreates one with the new
+                account, and without force this call would just find that
+                same now-reversed journal (reverse_journal never deletes it
+                — see its docstring) and hand it straight back unchanged,
+                silently leaving the transaction journaled under its old,
+                wrong account.
 
         Returns:
             Journal record with line items
@@ -1929,7 +1978,7 @@ class JournalService:
         existing = await self._find_journal(
             entity_id, "financial_transaction", financial_transaction_id, "expense"
         )
-        if existing:
+        if existing and not force:
             return existing
 
         raw_currency = (txn.get("currency_code") or txn.get("currency", "GBP") or "GBP").upper()
@@ -2061,7 +2110,14 @@ class JournalService:
                 )
 
             try:
-                await self.create_expense_journal(entity_id, txn_id)
+                # force=True: financial_transactions support an explicit
+                # exclude/un-exclude workflow (update_transaction in
+                # api/routes/accounting.py) where un-excluding a transaction
+                # whose journal was reversed is expected to produce a fresh
+                # journal once auto_journal_expenses next sweeps it up —
+                # _find_unjournaled_expenses only returns ids with no
+                # *active* journal, so any existing one here is reversed.
+                await self.create_expense_journal(entity_id, txn_id, force=True)
                 results["created"] += 1
             except JournalError as e:
                 err_msg = str(e).lower()
@@ -2477,7 +2533,12 @@ class JournalService:
                 await asyncio.sleep(0.5)
 
             try:
-                await self.create_settlement_journal(entity_id, tid)
+                # force=True: same reasoning as auto_journal_expenses above —
+                # a settlement-eligible transaction reaches this loop with an
+                # existing journal only if it was reversed, and financial
+                # transactions support the exclude/un-exclude-then-resweep
+                # workflow in update_transaction.
+                await self.create_settlement_journal(entity_id, tid, force=True)
                 results["created"] += 1
             except JournalError as e:
                 if "already" in str(e).lower() or "existing" in str(e).lower():
@@ -2554,7 +2615,11 @@ class JournalService:
                     await asyncio.sleep(0.5)
 
                 try:
-                    await method(entity_id, UUID(txn["id"]))
+                    # force=True: same reasoning as auto_journal_expenses —
+                    # _find_unjournaled_inbound only returns ids with no
+                    # active journal, so an existing one here is reversed
+                    # and should be regenerated once swept up again.
+                    await method(entity_id, UUID(txn["id"]), force=True)
                     cat_results["created"] += 1
                     results["created"] += 1
                 except JournalError as e:
@@ -2983,6 +3048,16 @@ class JournalService:
     async def _find_unjournaled_payments(self, entity_id: UUID) -> List[UUID]:
         """Find captured payments without accrual journals.
 
+        Unlike financial_transactions, payments have no excluded_reason /
+        un-exclude workflow — there's no supported path that expects a
+        reversed accrual journal to be automatically regenerated later, so
+        (unlike the *_find_unjournaled_settlements/_inbound/_expenses*
+        below) a payment with ANY existing accrual journal, reversed or
+        not, is excluded here rather than re-offered to auto_journal_payments
+        on every run. create_accrual_journal's `force` param remains
+        available for a deliberate, explicit regeneration outside this
+        automatic sweep.
+
         Uses pagination to bypass Supabase's 1000-record default limit.
         """
         def _query():
@@ -3016,7 +3091,6 @@ class JournalService:
                     .eq("entity_id", str(entity_id)) \
                     .eq("source_type", "payment") \
                     .eq("journal_type", "accrual") \
-                    .neq("status", "reversed") \
                     .range(offset, offset + page_size - 1) \
                     .execute()
                 if not result.data:
