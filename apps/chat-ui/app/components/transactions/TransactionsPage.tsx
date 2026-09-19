@@ -558,17 +558,26 @@ export function TransactionsPage() {
                 <RowStatus txn={txn} />
               </span>
 
-              {/* Amount */}
+              {/* Amount — GBP base amount is primary (GBP is the trading
+                  currency); the original-currency amount, if different,
+                  shows as a smaller secondary line. */}
               <div className="flex items-center gap-1.5 justify-end">
-                <span
-                  className={cn(
-                    'text-sm font-mono font-semibold whitespace-nowrap',
-                    txn.direction === 'in' ? 'text-emerald-400' : 'text-rose-400'
+                <div className="flex flex-col items-end">
+                  <span
+                    className={cn(
+                      'text-sm font-mono font-semibold whitespace-nowrap',
+                      txn.direction === 'in' ? 'text-emerald-400' : 'text-rose-400'
+                    )}
+                  >
+                    {txn.direction === 'in' ? '+' : '−'}
+                    {formatMoney(txn.base_amount ?? txn.amount, txn.base_currency_code ?? 'GBP')}
+                  </span>
+                  {txn.base_currency_code && txn.currency_code !== txn.base_currency_code && (
+                    <span className="text-[10px] font-mono text-muted-foreground whitespace-nowrap">
+                      {formatMoney(txn.amount, txn.currency_code)}
+                    </span>
                   )}
-                >
-                  {txn.direction === 'in' ? '+' : '−'}
-                  {formatMoney(txn.amount, txn.currency_code)}
-                </span>
+                </div>
                 <CaretRight
                   size={14}
                   className="text-muted-foreground group-hover:text-foreground transition-colors shrink-0"

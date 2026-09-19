@@ -1004,6 +1004,7 @@ async def list_transactions(
             client.table("financial_transactions")
             .select(
                 "id, entity_id, source, external_transaction_id, amount, currency_code, "
+                "base_amount, base_currency_code, fx_rate, "
                 "direction, transaction_type, occurred_at, description, counterparty_name, "
                 "status, excluded_reason, journalised_at, metadata",
                 count="exact",

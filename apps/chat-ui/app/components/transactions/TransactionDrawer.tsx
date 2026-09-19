@@ -517,7 +517,9 @@ export function TransactionDrawer({
 
           {!isLoading && txn && (
             <>
-              {/* ── Amount Hero ── */}
+              {/* ── Amount Hero ── GBP base amount is primary (GBP is the
+                  trading currency); original-currency amount, if
+                  different, shows underneath. */}
               <div className="text-center py-5">
                 <div
                   className={cn(
@@ -526,8 +528,14 @@ export function TransactionDrawer({
                   )}
                 >
                   {txn.direction === 'in' ? '+' : '−'}
-                  {formatMoney(txn.amount, txn.currency_code)}
+                  {formatMoney(txn.base_amount ?? txn.amount, txn.base_currency_code ?? 'GBP')}
                 </div>
+                {txn.base_currency_code && txn.currency_code !== txn.base_currency_code && (
+                  <div className="text-sm font-mono text-muted-foreground mt-0.5">
+                    {formatMoney(txn.amount, txn.currency_code)}
+                    {txn.fx_rate && ` · rate ${txn.fx_rate.toFixed(4)}`}
+                  </div>
+                )}
                 <div className="flex items-center justify-center gap-2 mt-2 flex-wrap">
                   <DirectionBadge direction={txn.direction} />
                   <SourceBadge source={txn.source} />

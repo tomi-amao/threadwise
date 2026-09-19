@@ -33,6 +33,12 @@ export interface FinancialTransaction {
   external_transaction_id: string;
   amount: number;
   currency_code: string;
+  // GBP equivalent, computed at normalization time from the FX rate in
+  // effect when the transaction occurred. Populated for every transaction,
+  // including ones already in GBP (where it equals `amount`).
+  base_amount: number | null;
+  base_currency_code: string | null;
+  fx_rate: number | null;
   direction: TransactionDirection;
   transaction_type: TransactionType;
   occurred_at: string;
