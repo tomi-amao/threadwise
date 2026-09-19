@@ -210,6 +210,115 @@ async def seed_chart_of_accounts(request: SeedChartRequest):
 # =============================================================================
 
 
+async def _fetch_clearing_top_entries(client, limit: int = 100) -> List[Dict[str, Any]]:
+    """Individual posted journal lines against Merchant Clearing (1012),
+    largest net amount first, enriched with an order reference where one can
+    be derived — directly for order_refund-sourced lines (source_id already
+    *is* the order id), and via payments.order_id for payment-sourced
+    (accrual) lines. settlement/refund_settlement lines are sourced from a
+    single financial_transaction that can represent many orders at once
+    (a payout batch, or — for refund_settlement — the cash leg of one
+    already-order-linked refund), so they're left keyed on the transaction
+    rather than forced into a misleading one-order attribution.
+    """
+    acct_result = await asyncio.to_thread(
+        lambda: client.table("chart_of_accounts")
+        .select("id")
+        .eq("account_number", "1012")
+        .limit(1)
+        .execute()
+    )
+    acct_rows = acct_result.data or []
+    if not acct_rows:
+        return []
+    clearing_account_id = acct_rows[0]["id"]
+
+    entries_result = await asyncio.to_thread(
+        lambda: client.table("journal_line_items")
+        .select(
+            "debit, credit, description, "
+            "journals!journal_id(id, journal_type, source_type, source_id, "
+            "journal_date, status)"
+        )
+        .eq("account_id", clearing_account_id)
+        .execute()
+    )
+
+    entries: List[Dict[str, Any]] = []
+    for item in entries_result.data or []:
+        j = item.pop("journals", None) or {}
+        if j.get("status") != "posted":
+            continue
+        debit = float(item.get("debit") or 0)
+        credit = float(item.get("credit") or 0)
+        entries.append({
+            "journal_id": j.get("id"),
+            "journal_type": j.get("journal_type"),
+            "source_type": j.get("source_type"),
+            "source_id": j.get("source_id"),
+            "journal_date": j.get("journal_date"),
+            "description": item.get("description"),
+            "debit": debit,
+            "credit": credit,
+            "net": debit - credit,
+        })
+
+    # Cut down to the top N *before* enriching — an active clearing account
+    # can easily have 1000+ contributing entries (one per accrual, ever), and
+    # enriching every one of them would mean an .in_() filter with 1000+ UUIDs
+    # in it, comfortably past PostgREST's URL length limit. Only the entries
+    # actually being returned need the extra lookups.
+    entries.sort(key=lambda e: abs(e["net"]), reverse=True)
+    entries = entries[:limit]
+
+    # Enrich with an order reference: order_refund rows point at an order
+    # directly; payment rows (accrual) need one hop through payments.order_id.
+    payment_ids = {
+        e["source_id"] for e in entries
+        if e["source_type"] == "payment" and e["source_id"]
+    }
+    payment_to_order: Dict[str, str] = {}
+    if payment_ids:
+        pay_result = await asyncio.to_thread(
+            lambda: client.table("payments")
+            .select("id, order_id")
+            .in_("id", list(payment_ids))
+            .execute()
+        )
+        payment_to_order = {
+            row["id"]: row["order_id"]
+            for row in (pay_result.data or [])
+            if row.get("order_id")
+        }
+
+    order_ids = set(payment_to_order.values()) | {
+        e["source_id"] for e in entries
+        if e["source_type"] == "order_refund" and e["source_id"]
+    }
+    order_numbers: Dict[str, str] = {}
+    if order_ids:
+        order_result = await asyncio.to_thread(
+            lambda: client.table("orders")
+            .select("id, order_number")
+            .in_("id", list(order_ids))
+            .execute()
+        )
+        order_numbers = {
+            row["id"]: row.get("order_number") for row in (order_result.data or [])
+        }
+
+    for e in entries:
+        order_id = None
+        if e["source_type"] == "payment":
+            order_id = payment_to_order.get(e["source_id"])
+        elif e["source_type"] == "order_refund":
+            order_id = e["source_id"]
+        e["order_id"] = order_id
+        e["order_number"] = order_numbers.get(order_id) if order_id else None
+
+    return entries
+
+
 @router.get("/health-checks")
 async def get_accounting_health_checks(include_detail: bool = False):
     """Assertions about ledger and inventory integrity.
@@ -221,10 +330,21 @@ async def get_accounting_health_checks(include_detail: bool = False):
 
     Checks cover: inventory GL vs subledger, journal balancing, sales that left
     stock with no cost recorded, negative stock, untranslated foreign-currency
-    lines, and movements dated by fallback rather than from a source document.
+    lines, movements dated by fallback rather than from a source document, and
+    Merchant Clearing's posted balance (should be small and non-negative).
 
-    Pass ``include_detail=true`` to also get the offending rows for the two
-    checks that have them (uncosted sales and negative stock).
+    ``clearing_by_type`` is always included — Merchant Clearing's posted
+    balance broken down by the journal_type contributing to it (accrual,
+    settlement, refund, refund_settlement, ...), so if the
+    ``merchant_clearing_reasonable`` check ever fails, which type is driving
+    it is a direct read rather than a guess.
+
+    Pass ``include_detail=true`` to also get: the offending rows for the two
+    inventory checks that have them (uncosted sales and negative stock), and
+    ``clearing_top_entries`` — the individual posted journal lines against
+    Merchant Clearing with the largest net amount, each tagged with its
+    source (payment/order_refund/financial_transaction) and, where
+    derivable, the order it traces back to.
     """
     try:
         client = journal_service.client
@@ -239,6 +359,10 @@ async def get_accounting_health_checks(include_detail: bool = False):
             key=lambda r: (severity_rank.get(r.get("severity"), 3), r.get("check_name"))
         )
 
+        clearing_by_type = await asyncio.to_thread(
+            lambda: client.table("clearing_account_breakdown").select("*").execute()
+        )
+
         result: Dict[str, Any] = {
             "status": (
                 "fail" if any(r.get("severity") == "fail" for r in rows)
@@ -246,6 +370,7 @@ async def get_accounting_health_checks(include_detail: bool = False):
                 else "ok"
             ),
             "checks": rows,
+            "clearing_by_type": extract_rows(clearing_by_type),
         }
 
         if include_detail:
@@ -258,6 +383,7 @@ async def get_accounting_health_checks(include_detail: bool = False):
             )
             result["uncosted_sales"] = extract_rows(uncosted)
             result["negative_stock"] = extract_rows(negative)
+            result["clearing_top_entries"] = await _fetch_clearing_top_entries(client)
 
         return result
     except Exception as e:
