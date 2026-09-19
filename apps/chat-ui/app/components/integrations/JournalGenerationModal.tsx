@@ -12,10 +12,18 @@
  * Users can select a scope (payments, transactions, or all) before running
  * the pipeline. A Review tab surfaces draft journals that need human
  * attention.
+ *
+ * The pipeline itself runs as a background Inngest job
+ * (generate_all_journals_job) rather than inline in the trigger request —
+ * this component subscribes to its live progress over Inngest Realtime
+ * (channel `journals:{entityId}`) using the same useRealtime/subscription-
+ * token pattern as SyncProgressToast, instead of waiting for one big
+ * response and rendering it after the fact.
  */
 
-import React, { useState, useCallback, useRef } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
+import { useRealtime } from 'inngest/react';
 import {
   X,
   BookOpen,
@@ -36,16 +44,69 @@ import {
 } from 'phosphor-react';
 import { Button } from '~/components/ui/button';
 import { cn } from '~/lib/utils';
+import { getApiBaseUrl } from '~/lib/api/base-url';
 import {
   generateAllJournals,
   fetchReviewSummary,
-  type GenerateAllResult,
-  type PipelineStepResult,
-  type PipelineError,
   type ReviewSummary,
   type Journal,
   type JournalScope,
 } from '~/lib/api/accounting';
+
+// =============================================================================
+// REALTIME PAYLOAD TYPES (mirror channels.py's JournalStepProgressData /
+// JournalPipelineStatusData)
+// =============================================================================
+
+interface JournalStepProgressData {
+  step: string;
+  title: string;
+  status: 'starting' | 'completed' | 'error';
+  created: number;
+  skipped: number;
+  errors: Array<{ payment_id?: string; transaction_id?: string; error: string }>;
+  total_items: number | null;
+  step_error: string | null;
+  by_type: Record<
+    string,
+    {
+      total: number;
+      created: number;
+      skipped: number;
+      errors: Array<{ transaction_id: string; error: string }>;
+    }
+  > | null;
+  passthrough: {
+    classified: number;
+    skipped: number;
+    already_classified?: number;
+    total_pairs?: number;
+    total_pairs_examined?: number;
+  } | null;
+  timestamp: string;
+}
+
+interface JournalPipelineStatusData {
+  status: 'running' | 'completed' | 'completed_with_errors' | 'error';
+  scope: string;
+  steps_completed: number;
+  steps_total: number;
+  total_created: number;
+  total_skipped: number;
+  total_errors: number;
+  error: string | null;
+  timestamp: string;
+}
+
+// Status priority for preventing regressions from Inngest step replays
+// (see SyncProgressToast's identical guard for why this is necessary).
+const STATUS_PRIORITY: Record<string, number> = {
+  starting: 0,
+  running: 1,
+  completed: 2,
+  completed_with_errors: 2,
+  error: 2,
+};
 
 // =============================================================================
 // TYPES
@@ -107,67 +168,51 @@ const PIPELINE_STEPS: Array<{
 ];
 
 // =============================================================================
-// HELPER: Format step result into readable summary
+// HELPER: Format step progress into readable summary
 // =============================================================================
 
-function getStepSummary(step: PipelineStepResult): string[] {
+function getStepSummary(step: JournalStepProgressData): string[] {
   const lines: string[] = [];
+  const created = step.created ?? 0;
+  const skipped = step.skipped ?? 0;
+  const errorCount = step.errors?.length ?? 0;
 
-  switch (step.step) {
-    case 'journal_payments':
-    case 'journal_settlements':
-    case 'journal_expenses': {
-      const created = step.created ?? 0;
-      const skipped = step.skipped ?? 0;
-      const errorCount = step.errors?.length ?? 0;
-      if (created > 0) lines.push(`${created} journal${created !== 1 ? 's' : ''} created`);
-      if (skipped > 0) lines.push(`${skipped} skipped`);
-      if (errorCount > 0) lines.push(`${errorCount} error${errorCount !== 1 ? 's' : ''}`);
-      if (created === 0 && skipped === 0 && errorCount === 0) {
-        lines.push('No eligible records');
-      }
-      break;
-    }
+  if (created > 0) lines.push(`${created} journal${created !== 1 ? 's' : ''} created`);
+  if (skipped > 0) lines.push(`${skipped} skipped`);
+  if (errorCount > 0) lines.push(`${errorCount} error${errorCount !== 1 ? 's' : ''}`);
 
-    case 'journal_inbound': {
-      const created = step.created ?? 0;
-      const skipped = step.skipped ?? 0;
-      const errorCount = step.errors?.length ?? 0;
-      if (created > 0) lines.push(`${created} journal${created !== 1 ? 's' : ''} created`);
-      if (skipped > 0) lines.push(`${skipped} skipped`);
-      if (errorCount > 0) lines.push(`${errorCount} error${errorCount !== 1 ? 's' : ''}`);
-      // breakdown by type
-      if (step.by_type) {
-        const typeLabels: Record<string, string> = {
-          funding: 'funding',
-          sales_receipt: 'sales',
-          refund: 'refunds',
-          fx_conversion: 'FX',
-          merchant: 'merchant',
-        };
-        const typeParts = Object.entries(step.by_type)
-          .filter(([, v]) => v.created > 0)
-          .map(([k, v]) => `${v.created} ${typeLabels[k] ?? k}`);
-        if (typeParts.length > 0) lines.push(typeParts.join(', '));
-      }
-      const pt = step.passthrough;
-      if (pt) {
-        if (pt.classified > 0) {
-          lines.push(`${pt.classified} passthrough${pt.classified !== 1 ? 's' : ''} classified`);
-        } else if ((pt.total_pairs_examined ?? 0) > 0) {
-          lines.push(
-            `${pt.total_pairs_examined} pair${pt.total_pairs_examined !== 1 ? 's' : ''} examined, 0 new`
-          );
-        }
-        if ((pt.already_classified ?? 0) > 0) {
-          lines.push(`${pt.already_classified} already done`);
-        }
-      }
-      if (created === 0 && skipped === 0 && errorCount === 0) {
-        lines.push('No eligible inbound transactions');
-      }
-      break;
+  if (step.step === 'journal_inbound') {
+    if (step.by_type) {
+      const typeLabels: Record<string, string> = {
+        funding: 'funding',
+        sales_receipt: 'sales',
+        refund: 'refunds',
+        fx_conversion: 'FX',
+        merchant: 'merchant',
+      };
+      const typeParts = Object.entries(step.by_type)
+        .filter(([, v]) => v.created > 0)
+        .map(([k, v]) => `${v.created} ${typeLabels[k] ?? k}`);
+      if (typeParts.length > 0) lines.push(typeParts.join(', '));
     }
+    const pt = step.passthrough;
+    if (pt) {
+      if (pt.classified > 0) {
+        lines.push(`${pt.classified} passthrough${pt.classified !== 1 ? 's' : ''} classified`);
+      } else if ((pt.total_pairs_examined ?? 0) > 0) {
+        lines.push(
+          `${pt.total_pairs_examined} pair${pt.total_pairs_examined !== 1 ? 's' : ''} examined, 0 new`
+        );
+      }
+      if ((pt.already_classified ?? 0) > 0) {
+        lines.push(`${pt.already_classified} already done`);
+      }
+    }
+    if (created === 0 && skipped === 0 && errorCount === 0) {
+      lines.push('No eligible inbound transactions');
+    }
+  } else if (created === 0 && skipped === 0 && errorCount === 0) {
+    lines.push('No eligible records');
   }
 
   return lines;
@@ -271,7 +316,7 @@ function DraftJournalRow({ journal }: { journal: Journal }) {
 // REVIEW TAB
 // =============================================================================
 
-function ReviewTab({ entityId, onRefresh }: { entityId: string; onRefresh?: () => void }) {
+function ReviewTab({ entityId }: { entityId: string }) {
   const [loading, setLoading] = useState(false);
   const [review, setReview] = useState<ReviewSummary | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -291,7 +336,7 @@ function ReviewTab({ entityId, onRefresh }: { entityId: string; onRefresh?: () =
   }, [entityId]);
 
   // Auto-load on mount
-  React.useEffect(() => {
+  useEffect(() => {
     load();
   }, [load]);
 
@@ -407,13 +452,121 @@ function ReviewTab({ entityId, onRefresh }: { entityId: string; onRefresh?: () =
 // =============================================================================
 
 export function JournalGenerationModal({ isOpen, onClose, entityId }: JournalGenerationModalProps) {
-  const [pipelineState, setPipelineState] = useState<PipelineState>('idle');
-  const [result, setResult] = useState<GenerateAllResult | null>(null);
-  const [globalError, setGlobalError] = useState<string | null>(null);
+  const baseUrl = getApiBaseUrl();
+  const [hasTriggered, setHasTriggered] = useState(false);
+  const [triggerError, setTriggerError] = useState<string | null>(null);
+  const [overallStatus, setOverallStatus] = useState<JournalPipelineStatusData | null>(null);
+  const [stepProgress, setStepProgress] = useState<Map<string, JournalStepProgressData>>(new Map());
   const [expandedErrors, setExpandedErrors] = useState<Set<string>>(new Set());
   const [activeTab, setActiveTab] = useState<ActiveTab>('pipeline');
   const [scope, setScope] = useState<JournalScope>('all');
-  const abortRef = useRef(false);
+  const hasToastedCompletion = useRef(false);
+
+  // Fetch subscription token — same pattern as SyncProgressToast, scoped to
+  // the entity's journals channel instead of a source's sync channel.
+  const refreshToken = async () => {
+    const response = await fetch(`${baseUrl}/realtime/subscription-token`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        source_id: entityId,
+        channel_type: 'journals',
+        topics: ['progress', 'status'],
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error(`Failed to get subscription token: ${response.statusText}`);
+    }
+    const data = await response.json();
+    return {
+      channel: data.channel,
+      topics: data.topics,
+      key: data.token,
+      apiBaseUrl: data.api_base_url,
+    };
+  };
+
+  const {
+    error: realtimeError,
+    messages: { delta: freshData },
+  } = useRealtime({
+    token: refreshToken,
+    bufferInterval: 100,
+  });
+
+  // Process fresh realtime data
+  useEffect(() => {
+    if (!freshData || freshData.length === 0) return;
+
+    freshData.forEach((message: any) => {
+      if (message.topic === 'status') {
+        setOverallStatus(prev => {
+          const incoming = message.data as JournalPipelineStatusData;
+          if (!prev) return incoming;
+
+          // Guard against Inngest step replays re-publishing an earlier
+          // status with a fresher timestamp (see SyncProgressToast).
+          const incomingPriority = STATUS_PRIORITY[incoming.status] ?? 0;
+          const prevPriority = STATUS_PRIORITY[prev.status] ?? 0;
+          if (incomingPriority < prevPriority) return prev;
+          if (
+            incomingPriority === prevPriority &&
+            incoming.steps_completed < prev.steps_completed
+          ) {
+            return prev;
+          }
+          return incoming;
+        });
+      } else if (message.topic === 'progress') {
+        const progressData = message.data as JournalStepProgressData;
+        setStepProgress(prev => {
+          const existing = prev.get(progressData.step);
+          if (existing) {
+            const existingPriority = STATUS_PRIORITY[existing.status] ?? 0;
+            const incomingPriority = STATUS_PRIORITY[progressData.status] ?? 0;
+            if (incomingPriority < existingPriority) return prev;
+          }
+          const next = new Map(prev);
+          next.set(progressData.step, progressData);
+          return next;
+        });
+      }
+    });
+  }, [freshData]);
+
+  const pipelineState: PipelineState = !hasTriggered
+    ? 'idle'
+    : overallStatus?.status === 'completed'
+      ? 'completed'
+      : overallStatus?.status === 'completed_with_errors' || overallStatus?.status === 'error'
+        ? 'error'
+        : 'running';
+
+  const isRunning = pipelineState === 'running';
+  const isDone = pipelineState === 'completed' || pipelineState === 'error';
+
+  // Toast once, when the run finishes
+  useEffect(() => {
+    if (!isDone || hasToastedCompletion.current || !overallStatus) return;
+    hasToastedCompletion.current = true;
+
+    const totalCreated = overallStatus.total_created;
+    if (totalCreated > 0) {
+      toast.success(
+        `Generated ${totalCreated} journal${totalCreated !== 1 ? 's' : ''}` +
+          (overallStatus.total_errors > 0
+            ? ` with ${overallStatus.total_errors} error${overallStatus.total_errors !== 1 ? 's' : ''}`
+            : '')
+      );
+    } else if (overallStatus.total_errors > 0) {
+      toast.error(
+        `Pipeline completed with ${overallStatus.total_errors} error${overallStatus.total_errors !== 1 ? 's' : ''}`
+      );
+    } else {
+      toast.info('No new journals to generate — everything is up to date');
+    }
+  }, [isDone, overallStatus]);
 
   const toggleErrorExpand = useCallback((stepKey: string) => {
     setExpandedErrors(prev => {
@@ -428,73 +581,42 @@ export function JournalGenerationModal({ isOpen, onClose, entityId }: JournalGen
   }, []);
 
   const handleGenerate = useCallback(async () => {
-    setPipelineState('running');
-    setResult(null);
-    setGlobalError(null);
-    abortRef.current = false;
+    setTriggerError(null);
+    setOverallStatus(null);
+    setStepProgress(new Map());
+    hasToastedCompletion.current = false;
 
     try {
-      const res = await generateAllJournals(entityId, scope);
-      setResult(res);
-      setPipelineState(res.status === 'completed' ? 'completed' : 'error');
-
-      const totalCreated = res.summary.total_journals_created;
-      if (totalCreated > 0) {
-        toast.success(
-          `Generated ${totalCreated} journal${totalCreated !== 1 ? 's' : ''}` +
-            (res.summary.total_errors > 0
-              ? ` with ${res.summary.total_errors} error${res.summary.total_errors !== 1 ? 's' : ''}`
-              : '')
-        );
-      } else if (res.summary.total_errors > 0) {
-        toast.error(
-          `Pipeline completed with ${res.summary.total_errors} error${res.summary.total_errors !== 1 ? 's' : ''}`
-        );
-      } else {
-        toast.info('No new journals to generate — everything is up to date');
-      }
+      await generateAllJournals(entityId, scope);
+      setHasTriggered(true);
+      toast.info('Journal generation started…');
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unknown error';
-      setGlobalError(message);
-      setPipelineState('error');
-      toast.error(`Journal generation failed: ${message}`);
+      setTriggerError(message);
+      toast.error(`Failed to start journal generation: ${message}`);
     }
-  }, [entityId]);
+  }, [entityId, scope]);
 
   const handleReset = useCallback(() => {
-    setPipelineState('idle');
-    setResult(null);
-    setGlobalError(null);
+    setHasTriggered(false);
+    setTriggerError(null);
+    setOverallStatus(null);
+    setStepProgress(new Map());
     setExpandedErrors(new Set());
     setActiveTab('pipeline');
     setScope('all');
+    hasToastedCompletion.current = false;
   }, []);
 
-  // Determine step status from result data
   const getStepStatus = (stepKey: string): 'pending' | 'running' | 'completed' | 'error' => {
-    if (pipelineState === 'idle') return 'pending';
-    if (pipelineState === 'running' && !result) return 'running';
-    if (!result) return 'pending';
-
-    const stepResult = result.steps.find(s => s.step === stepKey);
-    if (!stepResult) return 'pending';
-    if (stepResult.status === 'completed') return 'completed';
-    if (stepResult.status === 'error') return 'error';
-    return 'running';
-  };
-
-  const getStepResult = (stepKey: string): PipelineStepResult | undefined => {
-    return result?.steps.find(s => s.step === stepKey);
-  };
-
-  const getStepErrors = (stepKey: string): PipelineError[] => {
-    return (result?.errors ?? []).filter(e => e.step === stepKey);
+    if (!hasTriggered) return 'pending';
+    const progress = stepProgress.get(stepKey);
+    if (!progress) return 'pending';
+    if (progress.status === 'starting') return 'running';
+    return progress.status;
   };
 
   if (!isOpen) return null;
-
-  const isRunning = pipelineState === 'running';
-  const isDone = pipelineState === 'completed' || pipelineState === 'error';
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
@@ -573,7 +695,8 @@ export function JournalGenerationModal({ isOpen, onClose, entityId }: JournalGen
                         <p>
                           This will generate all pending payment and transaction journals (accruals,
                           settlements, inbound transfers, expenses) in a single pass. Existing
-                          journals are never duplicated.
+                          journals are never duplicated. Runs in the background — you can watch
+                          progress here or close this and check back later.
                         </p>
                       </div>
                     </div>
@@ -615,46 +738,46 @@ export function JournalGenerationModal({ isOpen, onClose, entityId }: JournalGen
               )}
 
               {/* Summary banner (after completion) */}
-              {isDone && result && (
+              {isDone && overallStatus && (
                 <div
                   className={cn(
                     'rounded-xl border px-4 py-3 mb-2',
-                    result.summary.total_errors > 0
+                    overallStatus.total_errors > 0
                       ? 'border-amber-500/30 bg-amber-500/5'
                       : 'border-emerald-500/30 bg-emerald-500/5'
                   )}
                 >
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-3">
-                      {result.summary.total_errors > 0 ? (
+                      {overallStatus.total_errors > 0 ? (
                         <WarningCircle size={20} weight="fill" className="text-amber-400" />
                       ) : (
                         <CheckCircle size={20} weight="fill" className="text-emerald-400" />
                       )}
                       <div className="text-sm">
                         <span className="font-semibold text-zinc-100">
-                          {result.summary.total_journals_created}
+                          {overallStatus.total_created}
                         </span>{' '}
                         <span className="text-zinc-300">
-                          journal{result.summary.total_journals_created !== 1 ? 's' : ''} created
+                          journal{overallStatus.total_created !== 1 ? 's' : ''} created
                         </span>
-                        {result.summary.total_skipped > 0 && (
+                        {overallStatus.total_skipped > 0 && (
                           <>
                             {' · '}
                             <span className="font-semibold text-zinc-100">
-                              {result.summary.total_skipped}
+                              {overallStatus.total_skipped}
                             </span>{' '}
                             <span className="text-zinc-400">skipped</span>
                           </>
                         )}
-                        {result.summary.total_errors > 0 && (
+                        {overallStatus.total_errors > 0 && (
                           <>
                             {' · '}
                             <span className="font-semibold text-red-400">
-                              {result.summary.total_errors}
+                              {overallStatus.total_errors}
                             </span>{' '}
                             <span className="text-zinc-400">
-                              error{result.summary.total_errors !== 1 ? 's' : ''}
+                              error{overallStatus.total_errors !== 1 ? 's' : ''}
                             </span>
                           </>
                         )}
@@ -673,14 +796,18 @@ export function JournalGenerationModal({ isOpen, onClose, entityId }: JournalGen
                 </div>
               )}
 
-              {/* Global error */}
-              {globalError && (
+              {/* Trigger / connection errors */}
+              {(triggerError || realtimeError) && (
                 <div className="rounded-xl border border-red-500/30 bg-red-500/5 px-4 py-3 mb-2">
                   <div className="flex items-start gap-2">
                     <XCircle size={18} weight="fill" className="text-red-400 mt-0.5 shrink-0" />
                     <div>
-                      <p className="text-sm font-medium text-red-400">Pipeline failed</p>
-                      <p className="text-sm text-zinc-400 mt-1">{globalError}</p>
+                      <p className="text-sm font-medium text-red-400">
+                        {triggerError ? 'Could not start pipeline' : 'Realtime connection error'}
+                      </p>
+                      <p className="text-sm text-zinc-400 mt-1">
+                        {triggerError || realtimeError?.message}
+                      </p>
                     </div>
                   </div>
                 </div>
@@ -690,11 +817,10 @@ export function JournalGenerationModal({ isOpen, onClose, entityId }: JournalGen
               <div className="space-y-1">
                 {PIPELINE_STEPS.map((step, index) => {
                   const status = getStepStatus(step.key);
-                  const stepResult = getStepResult(step.key);
-                  const stepErrors = getStepErrors(step.key);
+                  const progress = stepProgress.get(step.key);
+                  const stepErrors = progress?.errors ?? [];
                   const isErrorExpanded = expandedErrors.has(step.key);
                   const Icon = step.icon;
-                  const isActive = pipelineState === 'running' && !result;
 
                   return (
                     <div key={step.key}>
@@ -713,7 +839,7 @@ export function JournalGenerationModal({ isOpen, onClose, entityId }: JournalGen
                         <div className="flex items-center gap-3">
                           {/* Status indicator */}
                           <div className="shrink-0">
-                            <StepStatusIcon status={status} isActive={isActive} />
+                            <StepStatusIcon status={status} isActive={isRunning} />
                           </div>
 
                           {/* Step icon */}
@@ -721,7 +847,7 @@ export function JournalGenerationModal({ isOpen, onClose, entityId }: JournalGen
                             className={cn(
                               'flex h-9 w-9 shrink-0 items-center justify-center rounded-lg',
                               step.bgColor,
-                              status === 'pending' && pipelineState !== 'idle' && 'opacity-40'
+                              status === 'pending' && hasTriggered && 'opacity-40'
                             )}
                           >
                             <Icon size={18} weight="duotone" className={step.iconColor} />
@@ -733,7 +859,7 @@ export function JournalGenerationModal({ isOpen, onClose, entityId }: JournalGen
                               <h3
                                 className={cn(
                                   'text-sm font-medium',
-                                  status === 'pending' && pipelineState !== 'idle'
+                                  status === 'pending' && hasTriggered
                                     ? 'text-zinc-500'
                                     : 'text-zinc-200'
                                 )}
@@ -746,19 +872,22 @@ export function JournalGenerationModal({ isOpen, onClose, entityId }: JournalGen
                                 </span>
                               )}
                             </div>
-                            {(pipelineState === 'idle' || status === 'pending') && (
+                            {(!hasTriggered || status === 'pending') && (
                               <p className="text-xs text-zinc-500 mt-0.5">{step.description}</p>
                             )}
                             {/* Step results */}
-                            {stepResult && status !== 'pending' && (
+                            {progress && status !== 'pending' && (
                               <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 mt-0.5">
-                                {getStepSummary(stepResult).map((line, i) => (
+                                {getStepSummary(progress).map((line, i) => (
                                   <span key={i} className="text-xs text-zinc-400">
                                     {i > 0 && <span className="text-zinc-600 mr-2">·</span>}
                                     {line}
                                   </span>
                                 ))}
                               </div>
+                            )}
+                            {progress?.step_error && (
+                              <p className="text-xs text-red-400 mt-1">{progress.step_error}</p>
                             )}
                           </div>
 
@@ -781,19 +910,22 @@ export function JournalGenerationModal({ isOpen, onClose, entityId }: JournalGen
                               {stepErrors.length} error{stepErrors.length !== 1 ? 's' : ''}:
                             </p>
                             <div className="space-y-1.5 max-h-40 overflow-y-auto">
-                              {stepErrors.map((err, i) => (
-                                <div
-                                  key={i}
-                                  className="rounded-lg bg-zinc-900/50 px-3 py-2 text-xs"
-                                >
-                                  <p className="text-red-400">{err.error}</p>
-                                  {err.source_id && (
-                                    <p className="text-zinc-600 mt-0.5 font-mono">
-                                      ID: {err.source_id.slice(0, 8)}...
-                                    </p>
-                                  )}
-                                </div>
-                              ))}
+                              {stepErrors.map((err, i) => {
+                                const sourceId = err.payment_id || err.transaction_id;
+                                return (
+                                  <div
+                                    key={i}
+                                    className="rounded-lg bg-zinc-900/50 px-3 py-2 text-xs"
+                                  >
+                                    <p className="text-red-400">{err.error}</p>
+                                    {sourceId && (
+                                      <p className="text-zinc-600 mt-0.5 font-mono">
+                                        ID: {sourceId.slice(0, 8)}...
+                                      </p>
+                                    )}
+                                  </div>
+                                );
+                              })}
                             </div>
                           </div>
                         )}
@@ -825,15 +957,9 @@ export function JournalGenerationModal({ isOpen, onClose, entityId }: JournalGen
         {/* Footer */}
         <div className="sticky bottom-0 border-t border-zinc-700/50 bg-zinc-900/95 backdrop-blur-sm px-6 py-4 flex items-center justify-between">
           <div className="text-xs text-zinc-500">
-            {isDone && result && activeTab === 'pipeline' && (
+            {isRunning && overallStatus && (
               <>
-                Completed in{' '}
-                {Math.round(
-                  (new Date(result.completed_at).getTime() -
-                    new Date(result.started_at).getTime()) /
-                    1000
-                )}
-                s
+                Step {overallStatus.steps_completed}/{overallStatus.steps_total}
               </>
             )}
           </div>

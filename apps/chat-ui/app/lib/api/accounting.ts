@@ -49,64 +49,13 @@ export interface Journal {
 }
 
 // ============================================================================
-// Generate-All Pipeline Types
+// Generate-All Pipeline: types for the *realtime* progress payloads
+// (JournalStepProgressData / JournalPipelineStatusData) live in
+// JournalGenerationModal.tsx itself, mirroring SyncProgressToast's
+// convention — the pipeline no longer returns its result synchronously
+// (see generateAllJournals below), it streams progress over
+// `journals:{entityId}` instead.
 // ============================================================================
-
-export interface PipelineStepResult {
-  step: string;
-  title: string;
-  status: 'running' | 'completed' | 'error';
-  error?: string;
-  // Journal creation (payments / settlements / inbound / expenses)
-  payments_processed?: number;
-  settlements_processed?: number;
-  transactions_processed?: number;
-  created?: number;
-  skipped?: number;
-  errors?: Array<{
-    payment_id?: string;
-    transaction_id?: string;
-    error: string;
-  }>;
-  // journal_inbound step extras
-  passthrough?: {
-    classified: number;
-    skipped: number;
-    already_classified?: number;
-    total_pairs?: number;
-    total_pairs_examined?: number;
-  };
-  by_type?: Record<
-    string,
-    {
-      total: number;
-      created: number;
-      skipped: number;
-      errors: Array<{ transaction_id: string; error: string }>;
-    }
-  >;
-}
-
-export interface PipelineError {
-  step: string;
-  source_id?: string;
-  error: string;
-}
-
-export interface GenerateAllResult {
-  entity_id: string;
-  status: 'completed' | 'completed_with_errors';
-  steps: PipelineStepResult[];
-  summary: {
-    total_journals_created: number;
-    total_skipped: number;
-    total_errors: number;
-    failed_steps: string[];
-  };
-  errors: PipelineError[];
-  started_at: string;
-  completed_at: string;
-}
 
 // ============================================================================
 // Journal Creation
@@ -184,10 +133,23 @@ export async function fetchReviewSummary(entityId: string): Promise<ReviewSummar
 
 export type JournalScope = 'payments' | 'transactions' | 'all';
 
+export interface TriggerGenerateAllResponse {
+  entity_id: string;
+  scope: string;
+  status: 'triggered';
+  message: string;
+}
+
+/**
+ * Trigger the journal-generation pipeline. Returns as soon as the backend
+ * has queued the background job — it does not wait for the pipeline to
+ * finish. Subscribe to the `journals:{entityId}` realtime channel (see
+ * JournalGenerationModal) for live progress instead of polling.
+ */
 export async function generateAllJournals(
   entityId: string,
   scope?: JournalScope
-): Promise<GenerateAllResult> {
+): Promise<TriggerGenerateAllResponse> {
   const baseUrl = getApiBaseUrl();
   const response = await fetch(`${baseUrl}/accounting/journals/generate-all`, {
     method: 'POST',
