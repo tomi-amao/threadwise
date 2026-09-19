@@ -584,12 +584,21 @@ function IntegrationCard({
                 const isEndpointSyncing = syncingEndpoint === endpoint;
                 const icon = endpointIcons[endpoint];
                 const stat = integration.stats?.[endpoint];
+                const syncState = integration.endpoint_sync_state?.[endpoint];
+                const lastSyncedLabel = syncState
+                  ? `Last synced: ${formatRelativeTime(syncState.last_synced_at)}`
+                  : 'Never synced incrementally (next sync fetches full history)';
+                const title =
+                  syncState?.last_run_status === 'error'
+                    ? `${lastSyncedLabel}\nLast attempt failed: ${syncState.last_run_error || 'unknown error'}`
+                    : lastSyncedLabel;
 
                 return (
                   <button
                     key={endpoint}
                     onClick={() => onSyncEndpoint(endpoint)}
                     disabled={isSyncActive || isEndpointSyncing}
+                    title={title}
                     className={cn(
                       'group/chip flex items-center gap-2 px-3 py-2 rounded-xl',
                       'bg-muted/50 border border-border/50',
@@ -599,11 +608,14 @@ function IntegrationCard({
                       isEndpointSyncing && 'ring-2 ring-blue-500/30 bg-blue-500/10'
                     )}
                   >
-                    <span className="text-muted-foreground group-hover/chip:text-foreground transition-colors">
+                    <span className="text-muted-foreground group-hover/chip:text-foreground transition-colors relative">
                       {isEndpointSyncing ? (
                         <ArrowsClockwise size={14} className="animate-spin text-blue-400" />
                       ) : (
                         icon
+                      )}
+                      {!isEndpointSyncing && syncState?.last_run_status === 'error' && (
+                        <span className="absolute -top-1 -right-1 h-1.5 w-1.5 rounded-full bg-red-500" />
                       )}
                     </span>
                     <span className="text-sm font-medium text-foreground capitalize">

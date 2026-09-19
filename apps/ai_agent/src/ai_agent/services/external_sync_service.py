@@ -345,6 +345,29 @@ class ExternalSyncService:
             result.data[0]["last_synced_at"].replace("Z", "+00:00")
         )
 
+    async def get_all_sync_watermarks(self, source_id: str) -> Dict[str, Dict[str, Any]]:
+        """Get every endpoint's sync watermark for a source, for UI display.
+
+        Returns a dict keyed by endpoint name, each value shaped like
+        {"last_synced_at": str | None, "last_run_status": str | None,
+        "last_run_error": str | None}. Endpoints that have never synced
+        simply aren't in the returned dict.
+        """
+        result = await asyncio.to_thread(
+            lambda: self.client.table("external_source_sync_state")
+            .select("endpoint, last_synced_at, last_run_status, last_run_error")
+            .eq("source_id", source_id)
+            .execute()
+        )
+        return {
+            row["endpoint"]: {
+                "last_synced_at": row.get("last_synced_at"),
+                "last_run_status": row.get("last_run_status"),
+                "last_run_error": row.get("last_run_error"),
+            }
+            for row in (result.data or [])
+        }
+
     async def set_sync_watermark(
         self,
         source_id: str,

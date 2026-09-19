@@ -26,6 +26,16 @@ export interface IntegrationSummary {
   api_key_error: string | null;
   failed_events_count: number;
   uncategorized_transactions_count: number;
+  // Per-endpoint incremental sync watermark, keyed by endpoint name.
+  // Absent/undefined for an endpoint means it has never completed a sync.
+  endpoint_sync_state: Record<
+    string,
+    {
+      last_synced_at: string | null;
+      last_run_status: 'completed' | 'error' | null;
+      last_run_error: string | null;
+    }
+  > | null;
 }
 
 // Sync trigger response

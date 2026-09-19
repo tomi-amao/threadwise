@@ -5,7 +5,7 @@ Provides endpoints for managing external sources and triggering syncs.
 
 import asyncio
 import logging
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, Field
@@ -126,6 +126,7 @@ class IntegrationSummary(BaseModel):
     api_key_error: Optional[str] = None
     failed_events_count: int = 0
     uncategorized_transactions_count: int = 0
+    endpoint_sync_state: Optional[Dict[str, Dict[str, Any]]] = None
 
 
 class ValidateApiKeyResponse(BaseModel):
@@ -1301,7 +1302,20 @@ async def get_integrations_summary(entity_id: Optional[str] = None):
                 stats = await sync_service.get_sync_stats(source["id"])
             except Exception:
                 stats = None
-            
+
+            # Per-endpoint incremental sync watermarks, for "last synced"
+            # display and surfacing a per-endpoint sync error independent
+            # of the source-level sync_status/sync_error.
+            try:
+                endpoint_sync_state = await sync_service.get_all_sync_watermarks(
+                    source["id"]
+                )
+            except Exception as e:
+                logger.warning(
+                    f"Failed to get endpoint sync state for {source['id']}: {e}"
+                )
+                endpoint_sync_state = None
+
             # Get failed events count
             failed_count = 0
             try:
@@ -1356,6 +1370,7 @@ async def get_integrations_summary(entity_id: Optional[str] = None):
                 api_key_error=source.get("api_key_error"),
                 failed_events_count=failed_count,
                 uncategorized_transactions_count=uncategorized_count,
+                endpoint_sync_state=endpoint_sync_state,
             ))
         
         return summaries
