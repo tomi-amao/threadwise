@@ -2672,7 +2672,17 @@ class JournalService:
         line_items: List[Dict[str, Any]],
         metadata: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        """Create a journal with line items."""
+        """Create a journal with line items, atomically.
+
+        Delegates the actual writes to the upsert_journal_with_lines Postgres
+        function (one plpgsql call = one transaction), rather than issuing
+        the journal upsert, line-item delete, and line-item insert as three
+        separate PostgREST calls: a crash or dropped connection between the
+        delete and the insert used to be able to leave a journal permanently
+        marked "posted" with zero line items. The function itself also
+        enforces the empty-line-items guard (belt and braces with the check
+        below, which fails fast before even attempting the RPC call).
+        """
         if not line_items:
             # A journal with zero lines is meaningless (nothing debited or
             # credited) but would otherwise sail through: callers build
@@ -2688,61 +2698,29 @@ class JournalService:
                 "this usually means every candidate amount was zero"
             )
 
-        journal_data = {
-            "entity_id": str(entity_id),
-            "journal_date": journal_date,
-            "journal_type": journal_type,
-            "description": description,
-            "source_type": source_type,
-            "source_id": str(source_id) if source_id else None,
-            "status": status,
-            "posted_at": datetime.now(timezone.utc).isoformat() if status == "posted" else None,
-            "metadata": metadata or {},
-        }
-
-        result = await asyncio.to_thread(
-            lambda: self.client.table("journals")
-            .upsert(
-                journal_data,
-                on_conflict="entity_id,source_type,source_id,journal_type",
+        try:
+            result = await asyncio.to_thread(
+                lambda: self.client.rpc(
+                    "upsert_journal_with_lines",
+                    {
+                        "p_entity_id": str(entity_id),
+                        "p_journal_date": journal_date,
+                        "p_journal_type": journal_type,
+                        "p_description": description,
+                        "p_source_type": source_type,
+                        "p_source_id": str(source_id) if source_id else None,
+                        "p_status": status,
+                        "p_metadata": metadata or {},
+                        "p_line_items": line_items,
+                    },
+                ).execute()
             )
-            .execute()
-        )
+        except Exception as e:
+            raise JournalError(f"Failed to create journal: {e}") from e
 
-        if not result.data:
+        journal_id = result.data
+        if not journal_id:
             raise JournalError("Failed to create journal")
-
-        journal_id = _extract_id(result)
-
-        # Delete existing line items (for idempotency)
-        await asyncio.to_thread(
-            lambda: self.client.table("journal_line_items")
-            .delete()
-            .eq("journal_id", str(journal_id))
-            .execute()
-        )
-
-        # Insert line items (include effective_date from journal for time-bound queries).
-        # line_items is guaranteed non-empty by the guard above.
-        items_data = [
-            {**li, "journal_id": str(journal_id), "effective_date": journal_date}
-            for li in line_items
-        ]
-        await asyncio.to_thread(
-            lambda: self.client.table("journal_line_items")
-            .insert(items_data)
-            .execute()
-        )
-
-        # Stamp journalised_at on the source financial transaction so we can
-        # reliably identify which transactions have been accounted for.
-        if source_type == "financial_transaction" and source_id:
-            await asyncio.to_thread(
-                lambda: self.client.table("financial_transactions")
-                .update({"journalised_at": datetime.now(timezone.utc).isoformat()})
-                .eq("id", str(source_id))
-                .execute()
-            )
 
         # Return full journal with line items
         return await self._fetch_journal(journal_id) or {"id": str(journal_id)}
