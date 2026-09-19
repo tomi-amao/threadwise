@@ -6,7 +6,7 @@ Handles bulk loading of raw API data without transformation.
 import asyncio
 import logging
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Union, cast
+from typing import Any, Dict, List, Optional, Tuple, Union, cast
 
 from ..core.supabase_client import get_supabase_client
 
@@ -473,21 +473,45 @@ class ExternalSyncService:
 
         now = datetime.now(timezone.utc).isoformat()
 
-        # Inventory levels are a live snapshot, not an immutable record — re-fetching
-        # one always represents "this is the current stock right now" and must be
-        # re-applied. Without this, upserting an already-`completed` raw event only
-        # refreshes its payload/fetched_at (see the on_conflict clause below), so a
-        # soft-mode normalization pass — which skips anything already `completed` —
-        # would silently keep serving the stale quantity from the first time this
-        # (inventory_item_id, location_id) was ever synced, no matter how many times
-        # it's re-synced afterwards. Forcing it back to `pending` on every fetch
-        # ensures each sync's fresh quantity actually reaches `inventory_items`.
-        data = [
-            {
+        # Re-upserting an already-`completed` raw event only refreshes its
+        # payload/fetched_at (see the on_conflict clause below) — it does not
+        # touch processing_status. A soft-mode normalization pass skips
+        # anything already `completed`, so without forcing a reset back to
+        # `pending`, a record whose payload genuinely changed at the source
+        # (an order's status, a product's price, ...) would silently keep
+        # serving whatever was normalized the first time it was ever synced,
+        # no matter how many times it's re-synced afterwards.
+        #
+        # Inventory levels are the one case that always resets regardless of
+        # whether the payload looks different: a level is a live point-in-time
+        # snapshot, not an immutable record, so "this is the current stock
+        # right now" must be re-applied on every fetch even when the number
+        # happens to be unchanged from last time.
+        #
+        # Everything else only resets when the payload actually changed from
+        # what's currently stored — comparing on every fetch and resetting
+        # unconditionally would mean incremental sync's overlap window (see
+        # resolve_sync_since) re-queues every record it re-touches for
+        # reprocessing even when nothing about it changed.
+        existing_by_key = await self._get_existing_payloads(provider, events)
+
+        data = []
+        for event in events:
+            entity_type = event["entity_type"]
+            external_id = event["external_id"]
+            existing = existing_by_key.get((entity_type, external_id))
+
+            force_pending = entity_type == "inventory_item" or (
+                existing is not None
+                and existing["processing_status"] == "completed"
+                and existing["payload"] != event["payload"]
+            )
+
+            data.append({
                 "source_id": source_id,
                 "provider": provider,
-                "entity_type": event["entity_type"],
-                "external_id": event["external_id"],
+                "entity_type": entity_type,
+                "external_id": external_id,
                 "payload": event["payload"],
                 "occurred_at": (
                     event["occurred_at"].isoformat()
@@ -501,12 +525,10 @@ class ExternalSyncService:
                         "processing_error_details": None,
                         "processed_at": None,
                     }
-                    if event["entity_type"] == "inventory_item"
+                    if force_pending
                     else {}
                 ),
-            }
-            for event in events
-        ]
+            })
 
         result = await asyncio.to_thread(
             lambda: self.client.table("external_raw_events")
@@ -515,6 +537,43 @@ class ExternalSyncService:
         )
 
         return len(result.data) if result.data else 0
+
+    async def _get_existing_payloads(
+        self, provider: str, events: List[Dict[str, Any]]
+    ) -> Dict[Tuple[str, str], Dict[str, Any]]:
+        """Look up the currently-stored payload/status for a batch of events.
+
+        Returns a dict keyed by (entity_type, external_id) so
+        store_raw_events_batch can tell whether an incoming payload actually
+        differs from what's already there. Events for entity types not yet
+        in the table (a source's first-ever sync) simply aren't in the
+        result — callers treat a missing key as "no existing row".
+        """
+        by_entity_type: Dict[str, List[str]] = {}
+        for event in events:
+            by_entity_type.setdefault(event["entity_type"], []).append(
+                event["external_id"]
+            )
+
+        existing: Dict[Tuple[str, str], Dict[str, Any]] = {}
+        for entity_type, external_ids in by_entity_type.items():
+            result = await asyncio.to_thread(
+                lambda et=entity_type, ids=external_ids: self.client.table(
+                    "external_raw_events"
+                )
+                .select("external_id, payload, processing_status")
+                .eq("provider", provider)
+                .eq("entity_type", et)
+                .in_("external_id", ids)
+                .execute()
+            )
+            for row in result.data or []:
+                existing[(entity_type, row["external_id"])] = {
+                    "payload": row["payload"],
+                    "processing_status": row["processing_status"],
+                }
+
+        return existing
     
     async def get_raw_events(
         self,
