@@ -4,8 +4,7 @@ Defines typed channels for streaming progress updates to the frontend.
 Supports both sync operations and normalization pipelines.
 """
 
-from typing import TypedDict
-
+from typing import Any, TypedDict
 
 # =============================================================================
 # SYNC CHANNELS
@@ -14,7 +13,7 @@ from typing import TypedDict
 
 class SyncProgressData(TypedDict):
     """Progress update data for sync operations."""
-    
+
     endpoint: str
     status: str  # 'starting', 'syncing', 'completed', 'error'
     items_stored: int
@@ -26,7 +25,7 @@ class SyncProgressData(TypedDict):
 
 class SyncStatusData(TypedDict):
     """Status update for overall sync operation."""
-    
+
     status: str  # 'syncing', 'completed', 'error'
     endpoints_completed: int
     endpoints_total: int
@@ -37,10 +36,10 @@ class SyncStatusData(TypedDict):
 
 def get_sync_channel(source_id: str) -> str:
     """Get the channel name for a sync operation.
-    
+
     Args:
         source_id: The external source ID being synced
-        
+
     Returns:
         Channel name in format 'sync:{source_id}'
     """
@@ -58,7 +57,7 @@ SYNC_TOPICS = ["progress", "status"]
 
 class NormalizationProgressData(TypedDict):
     """Progress update data for normalization of a single entity type."""
-    
+
     entity_type: str  # 'profile', 'product', 'inventory_item', 'order'
     status: str  # 'starting', 'processing', 'completed', 'error'
     events_processed: int
@@ -71,7 +70,7 @@ class NormalizationProgressData(TypedDict):
 
 class NormalizationStatusData(TypedDict):
     """Status update for overall normalization operation."""
-    
+
     status: str  # 'starting', 'processing', 'completed', 'error'
     mode: str  # 'hard', 'soft'
     entity_types_completed: int
@@ -85,10 +84,10 @@ class NormalizationStatusData(TypedDict):
 
 def get_normalization_channel(source_id: str) -> str:
     """Get the channel name for a normalization operation.
-    
+
     Args:
         source_id: The external source ID being normalized
-        
+
     Returns:
         Channel name in format 'normalize:{source_id}'
     """
@@ -119,9 +118,18 @@ class JournalStepProgressData(TypedDict):
     status: str  # 'starting', 'completed', 'error'
     created: int
     skipped: int
-    errors: int
+    # Item-level errors (e.g. one payment's accrual journal failed to
+    # create) — each dict looks like {"payment_id" | "transaction_id": str,
+    # "error": str}. Distinct from step_error below, which is the whole
+    # step failing outright (e.g. the unjournaled-items query itself erroring).
+    errors: list[dict[str, Any]]
     total_items: int | None
-    error: str | None
+    step_error: str | None
+    # journal_inbound only: per-category breakdown (funding/sales_receipt/
+    # refund/fx_conversion/merchant) and PayPal passthrough classification —
+    # None for every other step.
+    by_type: dict[str, Any] | None
+    passthrough: dict[str, Any] | None
     timestamp: str
 
 
