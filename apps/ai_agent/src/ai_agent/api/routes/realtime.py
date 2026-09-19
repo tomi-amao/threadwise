@@ -15,8 +15,10 @@ from ...integrations.inngest.config import get_subscription_token
 from ...integrations.inngest.channels import (
     get_sync_channel,
     get_normalization_channel,
+    get_journal_channel,
     SYNC_TOPICS,
     NORMALIZATION_TOPICS,
+    JOURNAL_TOPICS,
 )
 from ...services.external_sync_service import sync_service
 
@@ -34,6 +36,7 @@ class ChannelType(str, Enum):
     """Supported realtime channel types."""
     SYNC = "sync"
     NORMALIZATION = "normalization"
+    JOURNALS = "journals"
 
 
 CHANNEL_CONFIG = {
@@ -45,6 +48,10 @@ CHANNEL_CONFIG = {
         "get_channel": get_normalization_channel,
         "topics": NORMALIZATION_TOPICS,
     },
+    ChannelType.JOURNALS: {
+        "get_channel": get_journal_channel,
+        "topics": JOURNAL_TOPICS,
+    },
 }
 
 
@@ -55,11 +62,17 @@ CHANNEL_CONFIG = {
 
 class SubscriptionTokenRequest(BaseModel):
     """Request to generate a subscription token."""
-    
-    source_id: str = Field(..., description="External source ID to subscribe to")
+
+    source_id: str = Field(
+        ...,
+        description=(
+            "The id the channel is scoped to — an external source id for "
+            "'sync'/'normalization', or an entity id for 'journals'"
+        ),
+    )
     channel_type: ChannelType = Field(
         default=ChannelType.SYNC,
-        description="Type of channel: 'sync' or 'normalization'"
+        description="Type of channel: 'sync', 'normalization', or 'journals'"
     )
     topics: List[str] = Field(
         default=None,
@@ -97,12 +110,13 @@ class SubscriptionTokenResponse(BaseModel):
     description="""
     Generates a secure token for subscribing to realtime updates from Inngest functions.
     
-    Supports both sync and normalization channels:
+    Supports sync, normalization, and journals channels:
     - **sync**: Progress updates during data sync operations
     - **normalization**: Progress updates during data normalization/persistence
-    
-    The token is scoped to a specific source and set of topics, ensuring users can only
-    subscribe to data they're authorized to access. Tokens expire after 60 seconds for security.
+    - **journals**: Progress updates during background journal generation
+
+    The token is scoped to a specific source/entity and set of topics, ensuring users can
+    only subscribe to data they're authorized to access. Tokens expire after 60 seconds.
     """,
 )
 async def create_subscription_token(
@@ -110,14 +124,23 @@ async def create_subscription_token(
 ) -> SubscriptionTokenResponse:
     """Generate a subscription token for realtime updates."""
     try:
-        # Verify the source exists
-        source = await sync_service.get_external_source(request.source_id)
-        if not source:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"External source not found: {request.source_id}"
-            )
-        
+        # Verify the subject exists. Journals are scoped to an entity, not an
+        # external source, so they're verified against a different table.
+        if request.channel_type == ChannelType.JOURNALS:
+            entity = await sync_service.get_entity(request.source_id)
+            if not entity:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"Entity not found: {request.source_id}"
+                )
+        else:
+            source = await sync_service.get_external_source(request.source_id)
+            if not source:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"External source not found: {request.source_id}"
+                )
+
         # TODO: Add proper authorization checks here
         
         # Resolve channel config

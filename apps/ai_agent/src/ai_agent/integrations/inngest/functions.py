@@ -229,6 +229,7 @@ from .paypal_sync_functions import PAYPAL_SYNC_FUNCTIONS
 # Import normalization functions
 from ...normalization.inngest_functions import NORMALIZATION_FUNCTIONS
 from .shopify_sync_functions import SHOPIFY_SYNC_FUNCTIONS
+from .journal_generation_functions import JOURNAL_GENERATION_FUNCTIONS
 
 # Export all functions for registration
 FUNCTIONS = [
@@ -240,4 +241,5 @@ FUNCTIONS = [
     *PAYPAL_SYNC_FUNCTIONS,  # Include PayPal sync functions
     *SHOPIFY_SYNC_FUNCTIONS,  # Include Shopify sync functions
     *NORMALIZATION_FUNCTIONS,  # Include normalization functions
+    *JOURNAL_GENERATION_FUNCTIONS,  # Include journal generation functions
 ]

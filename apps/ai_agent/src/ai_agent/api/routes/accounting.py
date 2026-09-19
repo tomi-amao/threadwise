@@ -508,7 +508,7 @@ async def create_expense_journals(request: ExpenseJournalRequest):
 
 @router.post("/journals/generate-all")
 async def generate_all_journals(request: GenerateAllJournalsRequest):
-    """Run the journal generation pipeline.
+    """Trigger the background journal generation pipeline.
 
     Creates journals based on the ``scope`` parameter:
 
@@ -516,18 +516,35 @@ async def generate_all_journals(request: GenerateAllJournalsRequest):
     - ``transactions`` — settlement, inbound and expense journals from financial transactions
     - omit or ``all`` — run every scope
 
-    Each step is independent-on-failure: if one step errors, the pipeline
-    continues with the remaining steps. Individual records that fail within a
-    step (e.g. a locked-period backfill attempt) are reported per-record and
-    do not abort the rest of that step.
+    Returns immediately once the Inngest event is sent — this does not wait
+    for the pipeline to finish. Each of the four steps is independent-on-
+    failure (one step erroring doesn't stop the rest) and publishes its own
+    progress over the `journals:{entity_id}` realtime channel (see
+    /realtime/subscription-token with channel_type="journals"); subscribe to
+    that to show live progress instead of polling.
     """
+    from ...integrations.inngest import get_client
+    import inngest as inngest_sdk
+
     try:
-        result = await journal_service.generate_all_journals(
-            UUID(request.entity_id), scope=request.scope
+        inngest_client = get_client()
+        await inngest_client.send(
+            inngest_sdk.Event(
+                name="accounting/journals.generate.requested",
+                data={
+                    "entity_id": request.entity_id,
+                    "scope": request.scope,
+                },
+            )
         )
-        return result
+        return {
+            "entity_id": request.entity_id,
+            "scope": request.scope or "all",
+            "status": "triggered",
+            "message": "Journal generation started in the background",
+        }
     except Exception as e:
-        logger.error(f"Error generating journals: {e}", exc_info=True)
+        logger.error(f"Error triggering journal generation: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 

@@ -2153,7 +2153,18 @@ class JournalService:
         entity_id: UUID,
         scope: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Run the journal generation pipeline.
+        """Run the journal generation pipeline synchronously, end to end.
+
+        Not the primary path the UI triggers — that's
+        integrations/inngest/journal_generation_functions.py's
+        generate_all_journals_job, which runs this same sequence of
+        auto_journal_* calls as a background Inngest function with
+        step-level retries and realtime per-step progress, rather than
+        blocking a single HTTP request for however long the whole pipeline
+        takes (mirrors normalization/service.py's relationship to
+        normalization/inngest_functions.py — see that module's docstring).
+        This method remains useful directly (tests, a one-off script, or as
+        a fallback when Inngest itself isn't running).
 
         Args:
             entity_id: Entity UUID

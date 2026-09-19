@@ -97,3 +97,59 @@ def get_normalization_channel(source_id: str) -> str:
 
 # Define topics for normalization channels
 NORMALIZATION_TOPICS = ["progress", "status"]
+
+
+# =============================================================================
+# JOURNAL GENERATION CHANNELS
+# =============================================================================
+
+
+class JournalStepProgressData(TypedDict):
+    """Progress update for one step of the journal-generation pipeline.
+
+    One step (e.g. "journal_payments") covers a whole batch of items
+    (e.g. all unjournaled payments) — this is step-level granularity, not
+    per-item, unlike SyncProgressData's per-page updates within an endpoint.
+    step is one of: journal_payments, journal_settlements, journal_inbound,
+    journal_expenses.
+    """
+
+    step: str
+    title: str
+    status: str  # 'starting', 'completed', 'error'
+    created: int
+    skipped: int
+    errors: int
+    total_items: int | None
+    error: str | None
+    timestamp: str
+
+
+class JournalPipelineStatusData(TypedDict):
+    """Status update for the overall journal-generation pipeline."""
+
+    status: str  # 'running', 'completed', 'completed_with_errors', 'error'
+    scope: str  # 'all', 'payments', 'transactions'
+    steps_completed: int
+    steps_total: int
+    total_created: int
+    total_skipped: int
+    total_errors: int
+    error: str | None
+    timestamp: str
+
+
+def get_journal_channel(entity_id: str) -> str:
+    """Get the channel name for a journal-generation run.
+
+    Args:
+        entity_id: The entity whose journals are being generated
+
+    Returns:
+        Channel name in format 'journals:{entity_id}'
+    """
+    return f"journals:{entity_id}"
+
+
+# Define topics for journal-generation channels
+JOURNAL_TOPICS = ["progress", "status"]

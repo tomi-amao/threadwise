@@ -23,6 +23,7 @@ from .sync_functions import (
 from .revolut_sync_functions import REVOLUT_SYNC_FUNCTIONS
 from .paypal_sync_functions import PAYPAL_SYNC_FUNCTIONS
 from .shopify_sync_functions import SHOPIFY_SYNC_FUNCTIONS
+from .journal_generation_functions import generate_all_journals_job, JOURNAL_GENERATION_FUNCTIONS
 
 # Import normalization functions and triggers
 from ...normalization.inngest_functions import (
@@ -69,6 +70,8 @@ __all__ = [
     "REVOLUT_SYNC_FUNCTIONS",
     "PAYPAL_SYNC_FUNCTIONS",
     "SHOPIFY_SYNC_FUNCTIONS",
+    "generate_all_journals_job",
+    "JOURNAL_GENERATION_FUNCTIONS",
     # Normalization functions
     "normalize_raw_event",
     "normalize_batch",
