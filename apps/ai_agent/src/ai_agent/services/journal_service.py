@@ -1961,25 +1961,48 @@ class JournalService:
         if txn_type in ("fx_conversion", "reserve_hold", "reserve_release"):
             raise JournalError(f"Transaction type '{txn_type}' is not an expensable transaction")
 
-        # Smart account resolution — never default to 6999
         meta = txn.get("metadata") or {}
         description = txn.get("description") or ""
         counterparty = txn.get("counterparty_name") or ""
-        raw_amount = abs(float(txn.get("amount", 0)))
-        acct_code = accts.resolve_expense_account(
-            metadata=meta,
-            description=description,
-            counterparty=counterparty,
-            transaction_type=txn_type,
-            amount=raw_amount,
-        )
+
+        # A customer refund that traces back to a known order is the cash-leg
+        # of something already fully recognised on the revenue side — the
+        # order's own refund reversal (create_refund_reversal_journal) already
+        # posted DR Sales Returns / CR Merchant Clearing for it. Posting this
+        # transaction as a normal expense too (DR Sales Returns again, per
+        # resolve_expense_account's transaction_type="refund" case below)
+        # would double the revenue-side hit for one real-world refund. Route
+        # it as the mirror image of a settlement instead: it's clearing the
+        # clearing account back out to reflect cash actually leaving.
+        # Standalone refunds (no linked order — e.g. a direct PayPal sale
+        # that was never a Shopify order, so no refund reversal exists for
+        # it) fall through to the unchanged, existing behavior below, which
+        # remains the *only* place their revenue-side reversal gets recorded.
+        linked_order_id: Optional[UUID] = None
+        if txn_type == "refund" and direction == "out":
+            linked_order_id = await self._find_order_for_refund_transaction(
+                entity_id, txn
+            )
+
+        journal_type = "refund_settlement" if linked_order_id else "expense"
 
         # Check idempotency
         existing = await self._find_journal(
-            entity_id, "financial_transaction", financial_transaction_id, "expense"
+            entity_id, "financial_transaction", financial_transaction_id, journal_type
         )
         if existing and not force:
             return existing
+
+        if not linked_order_id:
+            # Smart account resolution — never default to 6999
+            raw_amount = abs(float(txn.get("amount", 0)))
+            acct_code = accts.resolve_expense_account(
+                metadata=meta,
+                description=description,
+                counterparty=counterparty,
+                transaction_type=txn_type,
+                amount=raw_amount,
+            )
 
         raw_currency = (txn.get("currency_code") or txn.get("currency", "GBP") or "GBP").upper()
         base_currency = (txn.get("base_currency_code") or "GBP").upper()
@@ -2006,24 +2029,45 @@ class JournalService:
         # Determine cash account based on source + currency (always GBP for auto-FX)
         source = txn.get("source", "revolut")
         cash_account_code = accts.resolve_cash_account(source, currency)
-
-        # Mark as draft when the account fell back to the miscellaneous catch-all
-        journal_status = "posted"
-        if acct_code == accts.UNCATEGORISED_FALLBACK:
-            journal_status = "draft"
-            logger.warning(
-                "Could not categorise transaction %s (%s / %s). "
-                "Falling back to %s and marking as draft.",
-                financial_transaction_id, description, counterparty, acct_code,
-            )
-
-        # Resolve account IDs
-        expense_id = await self._get_account_id(entity_id, acct_code)
         cash_id = await self._get_account_id(entity_id, cash_account_code)
 
+        if not counterparty:
+            counterparty = description or "Unknown"
+
+        # Compute GBP equivalent for non-GBP transactions (for balance sheet reporting)
+        gbp_equiv = _compute_gbp_equivalent(txn, amount)
+        gbp_equiv_field = {"gbp_equivalent": gbp_equiv} if gbp_equiv is not None else {}
+
+        if linked_order_id:
+            # Debit clearing, not an expense account — this transaction is the
+            # cash leaving for a refund whose revenue-side reversal already
+            # posted against Merchant Clearing via create_refund_reversal_journal.
+            debit_code = accts.MERCHANT_CLEARING
+            debit_id = await self._get_account_id(entity_id, debit_code)
+            journal_status = "posted"
+            journal_description = f"Refund settlement — order {linked_order_id}: {counterparty}"
+            debit_line_description = f"Refund payout for order {linked_order_id}"
+        else:
+            debit_code = acct_code
+            debit_id = await self._get_account_id(entity_id, acct_code)
+
+            # Mark as draft when the account fell back to the miscellaneous catch-all
+            journal_status = "posted"
+            if acct_code == accts.UNCATEGORISED_FALLBACK:
+                journal_status = "draft"
+                logger.warning(
+                    "Could not categorise transaction %s (%s / %s). "
+                    "Falling back to %s and marking as draft.",
+                    financial_transaction_id, description, counterparty, acct_code,
+                )
+
+            category = accts.ACCOUNT_LABEL.get(acct_code, meta.get("expense_category") or "expense")
+            journal_description = f"Expense: {category} - {counterparty}"
+            debit_line_description = f"{category}: {counterparty}"
+
         missing = []
-        if not expense_id:
-            missing.append(acct_code)
+        if not debit_id:
+            missing.append(debit_code)
         if not cash_id:
             missing.append(cash_account_code)
         if missing:
@@ -2032,21 +2076,13 @@ class JournalService:
                 "Check that these account numbers exist and are not header accounts."
             )
 
-        category = accts.ACCOUNT_LABEL.get(acct_code, meta.get("expense_category") or "expense")
-        if not counterparty:
-            counterparty = description or "Unknown"
-
-        # Compute GBP equivalent for non-GBP transactions (for balance sheet reporting)
-        gbp_equiv = _compute_gbp_equivalent(txn, amount)
-        gbp_equiv_field = {"gbp_equivalent": gbp_equiv} if gbp_equiv is not None else {}
-
         line_items = [
             {
-                "account_id": str(expense_id),
+                "account_id": str(debit_id),
                 "debit": float(amount),
                 "credit": 0,
                 "currency": currency,
-                "description": f"{category}: {counterparty}",
+                "description": debit_line_description,
                 **gbp_equiv_field,
             },
             {
@@ -2061,9 +2097,9 @@ class JournalService:
 
         journal = await self._create_journal(
             entity_id=entity_id,
-            journal_type="expense",
+            journal_type=journal_type,
             journal_date=txn.get("occurred_at", datetime.now(timezone.utc).isoformat()),
-            description=f"Expense: {category} - {counterparty}",
+            description=journal_description,
             source_type="financial_transaction",
             source_id=financial_transaction_id,
             status=journal_status,
@@ -2833,6 +2869,46 @@ class JournalService:
         rows = result.data or []
         return UUID(rows[0]["id"]) if rows else None
 
+    async def _find_order_for_refund_transaction(
+        self, entity_id: UUID, txn: Dict[str, Any]
+    ) -> Optional[UUID]:
+        """Try to correlate an outbound customer-refund transaction to the
+        order it refunds, via metadata.invoice_id matching orders.order_number
+        — the same cross-reference field _find_transaction_for_invoice uses,
+        in the other direction (order -> transaction there, transaction ->
+        order here). Shopify carries the order number through as PayPal's
+        invoice reference when routing PayPal Express payments, so a refund
+        of that payment should carry the same reference back.
+
+        Returns None (not just on no match, but on any lookup problem) rather
+        than raising — the caller's fallback for "no linked order found" is
+        itself a fully correct, already-shipped behavior (treat it as a
+        standalone refund with its own revenue-side reversal), so failing
+        open here can never make anything worse than it already is today.
+        """
+        invoice_id = str((txn.get("metadata") or {}).get("invoice_id") or "").strip()
+        if not invoice_id:
+            return None
+
+        try:
+            result = await asyncio.to_thread(
+                lambda: self.client.table("orders")
+                .select("id")
+                .eq("entity_id", str(entity_id))
+                .eq("order_number", invoice_id)
+                .limit(1)
+                .execute()
+            )
+        except Exception as e:
+            logger.warning(
+                "Failed to look up order for refund transaction (invoice_id=%s): %s",
+                invoice_id, e,
+            )
+            return None
+
+        rows = result.data or []
+        return UUID(rows[0]["id"]) if rows else None
+
     async def _fetch_journal(self, journal_id: UUID) -> Optional[Dict[str, Any]]:
         result = await asyncio.to_thread(
             lambda: self.client.table("journals")
@@ -3364,7 +3440,7 @@ class JournalService:
                 .select("source_id") \
                 .eq("entity_id", str(entity_id)) \
                 .eq("source_type", "financial_transaction") \
-                .eq("journal_type", "expense") \
+                .in_("journal_type", ["expense", "refund_settlement"]) \
                 .neq("status", "reversed") \
                 .execute()
 

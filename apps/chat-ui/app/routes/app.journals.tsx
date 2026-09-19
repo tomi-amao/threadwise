@@ -218,6 +218,8 @@ const TYPE_LABELS: Record<string, string> = {
   purchase: 'Purchase',
   expense: 'Expense',
   payment: 'Payment',
+  refund: 'Refund',
+  refund_settlement: 'Refund Settlement',
 };
 
 // ─── Account Select ───────────────────────────────────────────────────────────
