@@ -2662,6 +2662,21 @@ class JournalService:
         metadata: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Create a journal with line items."""
+        if not line_items:
+            # A journal with zero lines is meaningless (nothing debited or
+            # credited) but would otherwise sail through: callers build
+            # line_items conditionally on amount > 0, so an all-zero source
+            # (e.g. a fully-discounted order) can reach here with an empty
+            # list, and the balance check every caller does upstream
+            # (total_debit == total_credit) passes trivially at 0 == 0. Catch
+            # it here rather than silently creating a permanent, invisible
+            # "posted" journal that contributes nothing to any balance.
+            raise JournalError(
+                f"Refusing to create a {journal_type} journal with no line "
+                f"items (source_type={source_type}, source_id={source_id}) — "
+                "this usually means every candidate amount was zero"
+            )
+
         journal_data = {
             "entity_id": str(entity_id),
             "journal_date": journal_date,
@@ -2696,17 +2711,17 @@ class JournalService:
             .execute()
         )
 
-        # Insert line items (include effective_date from journal for time-bound queries)
-        if line_items:
-            items_data = [
-                {**li, "journal_id": str(journal_id), "effective_date": journal_date}
-                for li in line_items
-            ]
-            await asyncio.to_thread(
-                lambda: self.client.table("journal_line_items")
-                .insert(items_data)
-                .execute()
-            )
+        # Insert line items (include effective_date from journal for time-bound queries).
+        # line_items is guaranteed non-empty by the guard above.
+        items_data = [
+            {**li, "journal_id": str(journal_id), "effective_date": journal_date}
+            for li in line_items
+        ]
+        await asyncio.to_thread(
+            lambda: self.client.table("journal_line_items")
+            .insert(items_data)
+            .execute()
+        )
 
         # Stamp journalised_at on the source financial transaction so we can
         # reliably identify which transactions have been accounted for.
