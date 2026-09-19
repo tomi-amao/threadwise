@@ -241,7 +241,7 @@ function StepStatusIcon({
         <div
           className={cn(
             'h-[18px] w-[18px] rounded-full border-2',
-            isActive ? 'border-blue-400' : 'border-zinc-600'
+            isActive ? 'border-blue-400' : 'border-border'
           )}
         />
       );
@@ -264,10 +264,10 @@ function DraftJournalRow({ journal }: { journal: Journal }) {
       >
         <div className="flex items-center gap-2 min-w-0">
           <ClipboardText size={16} className="text-amber-400 shrink-0" />
-          <span className="text-sm text-zinc-200 truncate">
+          <span className="text-sm text-foreground truncate">
             {journal.description ?? `${journal.journal_type} journal`}
           </span>
-          <span className="text-xs text-zinc-500 shrink-0">
+          <span className="text-xs text-muted-foreground shrink-0">
             {new Date(journal.journal_date).toLocaleDateString()}
           </span>
         </div>
@@ -276,34 +276,34 @@ function DraftJournalRow({ journal }: { journal: Journal }) {
             draft
           </span>
           {expanded ? (
-            <CaretDown size={14} className="text-zinc-500" />
+            <CaretDown size={14} className="text-muted-foreground" />
           ) : (
-            <CaretRight size={14} className="text-zinc-500" />
+            <CaretRight size={14} className="text-muted-foreground" />
           )}
         </div>
       </button>
 
       {expanded && lineItems.length > 0 && (
         <div className="px-3 pb-3 space-y-1 border-t border-amber-500/10 pt-2">
-          <p className="text-xs text-zinc-500 mb-1.5">Journal line items:</p>
+          <p className="text-xs text-muted-foreground mb-1.5">Journal line items:</p>
           {lineItems.map((li, i) => (
             <div key={i} className="flex items-center justify-between text-xs font-mono gap-2">
-              <span className="text-zinc-400 truncate flex-1">{li.description || '—'}</span>
+              <span className="text-muted-foreground truncate flex-1">{li.description || '—'}</span>
               <div className="flex gap-3 shrink-0">
                 {li.debit > 0 && (
-                  <span className="text-zinc-300">
+                  <span className="text-muted-foreground">
                     DR <span className="text-emerald-400">{li.debit.toFixed(2)}</span>
                   </span>
                 )}
                 {li.credit > 0 && (
-                  <span className="text-zinc-300">
+                  <span className="text-muted-foreground">
                     CR <span className="text-blue-400">{li.credit.toFixed(2)}</span>
                   </span>
                 )}
               </div>
             </div>
           ))}
-          <p className="text-xs text-amber-400/70 mt-2 pt-2 border-t border-zinc-700/30">
+          <p className="text-xs text-amber-400/70 mt-2 pt-2 border-t border-border/60">
             Review and post manually once the correct account is confirmed.
           </p>
         </div>
@@ -343,7 +343,7 @@ function ReviewTab({ entityId }: { entityId: string }) {
   if (loading && !review) {
     return (
       <div className="flex items-center justify-center py-12">
-        <ArrowsClockwise size={24} className="text-zinc-500 animate-spin" />
+        <ArrowsClockwise size={24} className="text-muted-foreground animate-spin" />
       </div>
     );
   }
@@ -352,7 +352,10 @@ function ReviewTab({ entityId }: { entityId: string }) {
     return (
       <div className="rounded-xl border border-red-500/20 bg-red-500/5 px-4 py-3">
         <p className="text-sm text-red-400">{error}</p>
-        <button onClick={load} className="mt-2 text-xs text-zinc-400 hover:text-zinc-200 underline">
+        <button
+          onClick={load}
+          className="mt-2 text-xs text-muted-foreground hover:text-foreground underline"
+        >
           Retry
         </button>
       </div>
@@ -371,7 +374,7 @@ function ReviewTab({ entityId }: { entityId: string }) {
         <div
           className={cn(
             'flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium',
-            totalDraft > 0 ? 'bg-amber-500/15 text-amber-400' : 'bg-zinc-800 text-zinc-500'
+            totalDraft > 0 ? 'bg-amber-500/15 text-amber-400' : 'bg-muted text-muted-foreground'
           )}
         >
           <ClipboardText size={13} />
@@ -380,7 +383,7 @@ function ReviewTab({ entityId }: { entityId: string }) {
         <button
           onClick={load}
           disabled={loading}
-          className="ml-auto text-xs text-zinc-500 hover:text-zinc-300 flex items-center gap-1 transition-colors"
+          className="ml-auto text-xs text-muted-foreground hover:text-muted-foreground flex items-center gap-1 transition-colors"
         >
           <ArrowsClockwise size={12} className={loading ? 'animate-spin' : ''} />
           Refresh
@@ -391,7 +394,7 @@ function ReviewTab({ entityId }: { entityId: string }) {
         <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 px-4 py-4 text-center">
           <CheckCircle size={24} weight="fill" className="text-emerald-400 mx-auto mb-2" />
           <p className="text-sm font-medium text-emerald-300">Everything looks good</p>
-          <p className="text-xs text-zinc-400 mt-1">No draft journals require attention.</p>
+          <p className="text-xs text-muted-foreground mt-1">No draft journals require attention.</p>
         </div>
       )}
 
@@ -404,21 +407,21 @@ function ReviewTab({ entityId }: { entityId: string }) {
           >
             <div className="flex items-center gap-2">
               <ClipboardText size={16} className="text-amber-400" />
-              <span className="text-sm font-medium text-zinc-200">Draft Journals</span>
+              <span className="text-sm font-medium text-foreground">Draft Journals</span>
               <span className="text-xs px-1.5 py-0.5 rounded-full bg-amber-500/20 text-amber-400">
                 {totalDraft}
               </span>
             </div>
             {draftExpanded ? (
-              <CaretDown size={14} className="text-zinc-500" />
+              <CaretDown size={14} className="text-muted-foreground" />
             ) : (
-              <CaretRight size={14} className="text-zinc-500" />
+              <CaretRight size={14} className="text-muted-foreground" />
             )}
           </button>
 
           {draftExpanded && (
             <>
-              <p className="text-xs text-zinc-500 mb-2 ml-6">
+              <p className="text-xs text-muted-foreground mb-2 ml-6">
                 These journals were created as drafts because the expense account could not be
                 automatically determined. Review and post each one with the correct GL account.
               </p>
@@ -427,7 +430,7 @@ function ReviewTab({ entityId }: { entityId: string }) {
                   {Object.entries(review.draft_journals_by_type).map(([type, count]) => (
                     <span
                       key={type}
-                      className="text-xs bg-zinc-800 text-zinc-400 px-2 py-0.5 rounded-full"
+                      className="text-xs bg-muted text-muted-foreground px-2 py-0.5 rounded-full"
                     >
                       {type}: {count}
                     </span>
@@ -622,29 +625,31 @@ export function JournalGenerationModal({ isOpen, onClose, entityId }: JournalGen
     <div className="fixed inset-0 z-50 flex items-center justify-center">
       {/* Backdrop */}
       <div
-        className="absolute inset-0 bg-black/50 backdrop-blur-sm"
+        className="absolute inset-0 bg-black/60 backdrop-blur-sm"
         onClick={isRunning ? undefined : onClose}
       />
 
       {/* Modal */}
-      <div className="relative z-10 w-full max-w-2xl mx-4 max-h-[90vh] overflow-y-auto rounded-2xl border border-zinc-700/50 bg-zinc-900 shadow-2xl">
+      <div className="relative z-10 w-full max-w-2xl mx-4 max-h-[90vh] overflow-y-auto rounded-2xl border border-border bg-card shadow-2xl">
         {/* Header */}
-        <div className="sticky top-0 z-10 flex items-center justify-between border-b border-zinc-700/50 bg-zinc-900/95 backdrop-blur-sm px-6 py-4">
+        <div className="sticky top-0 z-10 flex items-center justify-between border-b border-border bg-card/95 backdrop-blur-sm px-6 py-4">
           <div className="flex items-center gap-3">
             <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-violet-500/10">
               <BookOpen size={22} weight="duotone" className="text-violet-400" />
             </div>
             <div>
-              <h2 className="text-lg font-semibold text-zinc-100">Generate Journals</h2>
-              <p className="text-sm text-zinc-400">Payments &amp; transactions journal pipeline</p>
+              <h2 className="text-lg font-semibold text-foreground">Generate Journals</h2>
+              <p className="text-sm text-muted-foreground">
+                Payments &amp; transactions journal pipeline
+              </p>
             </div>
           </div>
           <button
             onClick={isRunning ? undefined : onClose}
             disabled={isRunning}
             className={cn(
-              'rounded-lg p-2 text-zinc-400 transition-colors',
-              isRunning ? 'cursor-not-allowed opacity-40' : 'hover:bg-zinc-800 hover:text-zinc-200'
+              'rounded-lg p-2 text-muted-foreground transition-colors',
+              isRunning ? 'cursor-not-allowed opacity-40' : 'hover:bg-accent hover:text-foreground'
             )}
           >
             <X size={20} weight="bold" />
@@ -652,14 +657,14 @@ export function JournalGenerationModal({ isOpen, onClose, entityId }: JournalGen
         </div>
 
         {/* Tabs — always visible */}
-        <div className="flex border-b border-zinc-700/50 px-6">
+        <div className="flex border-b border-border px-6">
           <button
             onClick={() => setActiveTab('pipeline')}
             className={cn(
               'flex items-center gap-1.5 px-1 py-3 text-sm font-medium border-b-2 -mb-px transition-colors',
               activeTab === 'pipeline'
                 ? 'border-violet-500 text-violet-400'
-                : 'border-transparent text-zinc-500 hover:text-zinc-300'
+                : 'border-transparent text-muted-foreground hover:text-muted-foreground'
             )}
           >
             <Lightning size={15} weight={activeTab === 'pipeline' ? 'fill' : 'regular'} />
@@ -671,7 +676,7 @@ export function JournalGenerationModal({ isOpen, onClose, entityId }: JournalGen
               'flex items-center gap-1.5 px-1 py-3 ml-4 text-sm font-medium border-b-2 -mb-px transition-colors',
               activeTab === 'review'
                 ? 'border-amber-500 text-amber-400'
-                : 'border-transparent text-zinc-500 hover:text-zinc-300'
+                : 'border-transparent text-muted-foreground hover:text-muted-foreground'
             )}
           >
             <Eye size={15} weight={activeTab === 'review' ? 'fill' : 'regular'} />
@@ -688,10 +693,10 @@ export function JournalGenerationModal({ isOpen, onClose, entityId }: JournalGen
               {/* Info banner (idle state) */}
               {pipelineState === 'idle' && (
                 <>
-                  <div className="rounded-xl border border-zinc-700/30 bg-zinc-800/30 px-4 py-3 mb-2">
+                  <div className="rounded-xl border border-border/60 bg-muted/30 px-4 py-3 mb-2">
                     <div className="flex items-start gap-3">
-                      <Info size={18} className="text-zinc-400 mt-0.5 shrink-0" />
-                      <div className="text-sm text-zinc-400">
+                      <Info size={18} className="text-muted-foreground mt-0.5 shrink-0" />
+                      <div className="text-sm text-muted-foreground">
                         <p>
                           This will generate all pending payment and transaction journals (accruals,
                           settlements, inbound transfers, expenses) in a single pass. Existing
@@ -703,8 +708,8 @@ export function JournalGenerationModal({ isOpen, onClose, entityId }: JournalGen
                   </div>
 
                   {/* Scope selector */}
-                  <div className="rounded-xl border border-zinc-700/30 bg-zinc-800/30 px-4 py-3 mb-2">
-                    <p className="text-xs font-medium text-zinc-300 mb-2">Journal scope</p>
+                  <div className="rounded-xl border border-border/60 bg-muted/30 px-4 py-3 mb-2">
+                    <p className="text-xs font-medium text-muted-foreground mb-2">Journal scope</p>
                     <div className="flex flex-wrap gap-2">
                       {(
                         [
@@ -720,14 +725,14 @@ export function JournalGenerationModal({ isOpen, onClose, entityId }: JournalGen
                             'px-3 py-1.5 rounded-lg text-xs font-medium transition-colors border',
                             scope === opt.value
                               ? 'border-violet-500/50 bg-violet-500/15 text-violet-300'
-                              : 'border-zinc-700/30 bg-zinc-800/50 text-zinc-400 hover:text-zinc-200 hover:border-zinc-600'
+                              : 'border-border/60 bg-muted/50 text-muted-foreground hover:text-foreground hover:border-border'
                           )}
                         >
                           {opt.label}
                         </button>
                       ))}
                     </div>
-                    <p className="text-xs text-zinc-500 mt-1.5">
+                    <p className="text-xs text-muted-foreground mt-1.5">
                       {scope === 'all' && 'Run all journal-generating steps.'}
                       {scope === 'payments' && 'Accrue captured payments as revenue.'}
                       {scope === 'transactions' &&
@@ -755,19 +760,19 @@ export function JournalGenerationModal({ isOpen, onClose, entityId }: JournalGen
                         <CheckCircle size={20} weight="fill" className="text-emerald-400" />
                       )}
                       <div className="text-sm">
-                        <span className="font-semibold text-zinc-100">
+                        <span className="font-semibold text-foreground">
                           {overallStatus.total_created}
                         </span>{' '}
-                        <span className="text-zinc-300">
+                        <span className="text-muted-foreground">
                           journal{overallStatus.total_created !== 1 ? 's' : ''} created
                         </span>
                         {overallStatus.total_skipped > 0 && (
                           <>
                             {' · '}
-                            <span className="font-semibold text-zinc-100">
+                            <span className="font-semibold text-foreground">
                               {overallStatus.total_skipped}
                             </span>{' '}
-                            <span className="text-zinc-400">skipped</span>
+                            <span className="text-muted-foreground">skipped</span>
                           </>
                         )}
                         {overallStatus.total_errors > 0 && (
@@ -776,7 +781,7 @@ export function JournalGenerationModal({ isOpen, onClose, entityId }: JournalGen
                             <span className="font-semibold text-red-400">
                               {overallStatus.total_errors}
                             </span>{' '}
-                            <span className="text-zinc-400">
+                            <span className="text-muted-foreground">
                               error{overallStatus.total_errors !== 1 ? 's' : ''}
                             </span>
                           </>
@@ -805,7 +810,7 @@ export function JournalGenerationModal({ isOpen, onClose, entityId }: JournalGen
                       <p className="text-sm font-medium text-red-400">
                         {triggerError ? 'Could not start pipeline' : 'Realtime connection error'}
                       </p>
-                      <p className="text-sm text-zinc-400 mt-1">
+                      <p className="text-sm text-muted-foreground mt-1">
                         {triggerError || realtimeError?.message}
                       </p>
                     </div>
@@ -830,10 +835,10 @@ export function JournalGenerationModal({ isOpen, onClose, entityId }: JournalGen
                           status === 'error'
                             ? 'border-red-500/20 bg-red-500/5'
                             : status === 'completed'
-                              ? 'border-zinc-700/30 bg-zinc-800/30'
+                              ? 'border-border/60 bg-muted/30'
                               : status === 'running'
                                 ? 'border-blue-500/30 bg-blue-500/5'
-                                : 'border-zinc-700/20 bg-zinc-800/20'
+                                : 'border-border/40 bg-muted/20'
                         )}
                       >
                         <div className="flex items-center gap-3">
@@ -860,8 +865,8 @@ export function JournalGenerationModal({ isOpen, onClose, entityId }: JournalGen
                                 className={cn(
                                   'text-sm font-medium',
                                   status === 'pending' && hasTriggered
-                                    ? 'text-zinc-500'
-                                    : 'text-zinc-200'
+                                    ? 'text-muted-foreground'
+                                    : 'text-foreground'
                                 )}
                               >
                                 {step.title}
@@ -873,14 +878,18 @@ export function JournalGenerationModal({ isOpen, onClose, entityId }: JournalGen
                               )}
                             </div>
                             {(!hasTriggered || status === 'pending') && (
-                              <p className="text-xs text-zinc-500 mt-0.5">{step.description}</p>
+                              <p className="text-xs text-muted-foreground mt-0.5">
+                                {step.description}
+                              </p>
                             )}
                             {/* Step results */}
                             {progress && status !== 'pending' && (
                               <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 mt-0.5">
                                 {getStepSummary(progress).map((line, i) => (
-                                  <span key={i} className="text-xs text-zinc-400">
-                                    {i > 0 && <span className="text-zinc-600 mr-2">·</span>}
+                                  <span key={i} className="text-xs text-muted-foreground">
+                                    {i > 0 && (
+                                      <span className="text-muted-foreground/60 mr-2">·</span>
+                                    )}
                                     {line}
                                   </span>
                                 ))}
@@ -895,7 +904,7 @@ export function JournalGenerationModal({ isOpen, onClose, entityId }: JournalGen
                           {stepErrors.length > 0 && (
                             <button
                               onClick={() => toggleErrorExpand(step.key)}
-                              className="shrink-0 rounded-lg p-1.5 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300 transition-colors"
+                              className="shrink-0 rounded-lg p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground transition-colors"
                               title={isErrorExpanded ? 'Hide errors' : 'Show errors'}
                             >
                               {isErrorExpanded ? <CaretDown size={14} /> : <CaretRight size={14} />}
@@ -905,8 +914,8 @@ export function JournalGenerationModal({ isOpen, onClose, entityId }: JournalGen
 
                         {/* Expandable error details */}
                         {isErrorExpanded && stepErrors.length > 0 && (
-                          <div className="mt-3 pt-3 border-t border-zinc-700/30 space-y-2">
-                            <p className="text-xs font-medium text-zinc-400">
+                          <div className="mt-3 pt-3 border-t border-border/60 space-y-2">
+                            <p className="text-xs font-medium text-muted-foreground">
                               {stepErrors.length} error{stepErrors.length !== 1 ? 's' : ''}:
                             </p>
                             <div className="space-y-1.5 max-h-40 overflow-y-auto">
@@ -915,11 +924,11 @@ export function JournalGenerationModal({ isOpen, onClose, entityId }: JournalGen
                                 return (
                                   <div
                                     key={i}
-                                    className="rounded-lg bg-zinc-900/50 px-3 py-2 text-xs"
+                                    className="rounded-lg bg-background/50 px-3 py-2 text-xs"
                                   >
                                     <p className="text-red-400">{err.error}</p>
                                     {sourceId && (
-                                      <p className="text-zinc-600 mt-0.5 font-mono">
+                                      <p className="text-muted-foreground/60 mt-0.5 font-mono">
                                         ID: {sourceId.slice(0, 8)}...
                                       </p>
                                     )}
@@ -938,10 +947,10 @@ export function JournalGenerationModal({ isOpen, onClose, entityId }: JournalGen
                             className={cn(
                               'w-px h-2',
                               status === 'completed'
-                                ? 'bg-zinc-600'
+                                ? 'bg-border'
                                 : status === 'running'
                                   ? 'bg-blue-500/50'
-                                  : 'bg-zinc-700/30'
+                                  : 'bg-muted/30'
                             )}
                           />
                         </div>
@@ -955,8 +964,8 @@ export function JournalGenerationModal({ isOpen, onClose, entityId }: JournalGen
         </div>
 
         {/* Footer */}
-        <div className="sticky bottom-0 border-t border-zinc-700/50 bg-zinc-900/95 backdrop-blur-sm px-6 py-4 flex items-center justify-between">
-          <div className="text-xs text-zinc-500">
+        <div className="sticky bottom-0 border-t border-border bg-card/95 backdrop-blur-sm px-6 py-4 flex items-center justify-between">
+          <div className="text-xs text-muted-foreground">
             {isRunning && overallStatus && (
               <>
                 Step {overallStatus.steps_completed}/{overallStatus.steps_total}
@@ -969,7 +978,7 @@ export function JournalGenerationModal({ isOpen, onClose, entityId }: JournalGen
                 onClick={handleReset}
                 variant="outline"
                 size="sm"
-                className="gap-1.5 border-zinc-600 text-zinc-300 hover:bg-zinc-800"
+                className="gap-1.5 border-border text-muted-foreground hover:bg-accent"
               >
                 <ArrowsClockwise size={14} />
                 Run Again
@@ -978,11 +987,11 @@ export function JournalGenerationModal({ isOpen, onClose, entityId }: JournalGen
             {pipelineState === 'idle' || isDone ? (
               <Button
                 onClick={isDone ? onClose : handleGenerate}
+                variant={isDone ? 'secondary' : 'default'}
                 className={cn(
                   'gap-2 text-sm font-medium',
-                  isDone
-                    ? 'bg-zinc-700 hover:bg-zinc-600 text-zinc-200'
-                    : 'bg-violet-600 hover:bg-violet-500 text-white shadow-lg shadow-violet-500/20'
+                  !isDone &&
+                    'bg-violet-600 hover:bg-violet-500 text-white shadow-lg shadow-violet-500/20'
                 )}
               >
                 {isDone ? (
