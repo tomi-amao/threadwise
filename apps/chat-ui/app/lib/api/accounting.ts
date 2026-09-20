@@ -131,6 +131,41 @@ export async function fetchReviewSummary(entityId: string): Promise<ReviewSummar
   return response.json();
 }
 
+export interface DraftAccountSuggestion {
+  account_id: string | null;
+  confidence: number;
+  reasoning: string;
+}
+
+/**
+ * Advisory-only: ask an LLM to guess the right account for draft journals,
+ * to pre-fill the Review tab's picker with a suggestion the user still has
+ * to confirm before posting. Never posts anything itself. Omitting
+ * `journalIds` suggests for every current draft.
+ */
+export async function suggestDraftAccounts(
+  entityId: string,
+  journalIds?: string[]
+): Promise<Record<string, DraftAccountSuggestion>> {
+  const baseUrl = getApiBaseUrl();
+  const response = await fetch(`${baseUrl}/accounting/journals/suggest-accounts`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      entity_id: entityId,
+      ...(journalIds && { journal_ids: journalIds }),
+    }),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Failed to suggest draft accounts: ${errorText}`);
+  }
+
+  const data = await response.json();
+  return data.suggestions ?? {};
+}
+
 export type JournalScope = 'payments' | 'transactions' | 'all';
 
 export interface TriggerGenerateAllResponse {
@@ -138,6 +173,32 @@ export interface TriggerGenerateAllResponse {
   scope: string;
   status: 'triggered';
   message: string;
+}
+
+/**
+ * Fix a draft journal's miscategorised line and post it — the Review tab's
+ * action. Every draft journal this pipeline produces has one line on the
+ * uncategorised fallback account (8090); this repoints it at `accountId`
+ * and flips the journal to 'posted' in one atomic step.
+ */
+export async function postDraftJournal(
+  entityId: string,
+  journalId: string,
+  accountId: string
+): Promise<Journal> {
+  const baseUrl = getApiBaseUrl();
+  const response = await fetch(`${baseUrl}/accounting/journals/${journalId}/post-draft`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ entity_id: entityId, account_id: accountId }),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Failed to post draft journal: ${errorText}`);
+  }
+
+  return response.json();
 }
 
 /**

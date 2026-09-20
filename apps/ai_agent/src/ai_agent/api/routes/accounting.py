@@ -49,6 +49,14 @@ class ReverseJournalRequest(BaseModel):
     entity_id: str
 
 
+class PostDraftJournalRequest(BaseModel):
+    entity_id: str
+    account_id: str = Field(
+        ...,
+        description="Chart of accounts UUID for the draft journal's miscategorised line",
+    )
+
+
 class DetectDuplicatesRequest(BaseModel):
     entity_id: str
     auto_journal: bool = Field(
@@ -536,6 +544,33 @@ async def get_review_summary(entity_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+class SuggestDraftAccountsRequest(BaseModel):
+    entity_id: str
+    journal_ids: Optional[List[str]] = Field(
+        None,
+        description="Draft journal ids to suggest for. Omit for all current drafts.",
+    )
+
+
+@router.post("/journals/suggest-accounts")
+async def suggest_draft_accounts(request: SuggestDraftAccountsRequest):
+    """Advisory-only: ask an LLM to guess the right account for draft
+    journals, for the Review tab to pre-fill as a suggestion the user still
+    confirms via the normal post-draft action. Never posts anything itself.
+    """
+    try:
+        journal_ids = (
+            [UUID(j) for j in request.journal_ids] if request.journal_ids else None
+        )
+        suggestions = await journal_service.suggest_draft_journal_accounts(
+            UUID(request.entity_id), journal_ids
+        )
+        return {"suggestions": suggestions}
+    except Exception as e:
+        logger.error(f"Error suggesting draft accounts: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.post("/journals/{journal_id}/reverse")
 async def reverse_journal(journal_id: str, request: ReverseJournalRequest):
     """Reverse a posted journal.
@@ -561,6 +596,30 @@ async def reverse_journal(journal_id: str, request: ReverseJournalRequest):
         if "Accounting period is locked" in str(e):
             raise HTTPException(status_code=409, detail=str(e))
         logger.error(f"Error reversing journal: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/journals/{journal_id}/post-draft")
+async def post_draft_journal(journal_id: str, request: PostDraftJournalRequest):
+    """Fix a draft journal's account and post it — the Review tab's action.
+
+    Draft journals are always the fallback shape (one line on the
+    uncategorised account, one on cash); this repoints the uncategorised
+    line at ``account_id`` and marks the journal posted. It does not
+    reverse anything first — a draft was never counted in any balance, so
+    there's nothing to undo.
+    """
+    try:
+        result = await journal_service.update_draft_journal_account(
+            UUID(request.entity_id), UUID(journal_id), UUID(request.account_id)
+        )
+        return result
+    except JournalError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        if "Accounting period is locked" in str(e):
+            raise HTTPException(status_code=409, detail=str(e))
+        logger.error(f"Error posting draft journal: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

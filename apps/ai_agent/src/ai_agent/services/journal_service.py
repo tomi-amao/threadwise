@@ -23,6 +23,10 @@ from decimal import Decimal
 from typing import Any, Dict, List, Optional, Tuple
 from uuid import UUID
 
+from langchain.chat_models import init_chat_model
+from pydantic import BaseModel, Field
+
+from ..core.config import settings
 from ..core.supabase_client import get_supabase_client
 from ..normalization.utils import extract_id as _extract_id, extract_row, extract_rows
 from . import account_mapping as accts
@@ -30,6 +34,32 @@ from . import account_mapping as accts
 logger = logging.getLogger(__name__)
 
 BALANCE_TOLERANCE = Decimal("0.01")
+
+
+# =============================================================================
+# AI STRUCTURED OUTPUT — draft journal account suggestions (Review tab)
+# =============================================================================
+
+
+class DraftAccountSuggestion(BaseModel):
+    journal_id: str = Field(
+        ..., description="The draft journal's id, copied exactly from the input"
+    )
+    account_number: Optional[str] = Field(
+        None,
+        description=(
+            "Best-guess chart_of_accounts account_number for this journal's "
+            "uncategorised line, or null if nothing fits with reasonable confidence"
+        ),
+    )
+    confidence: float = Field(
+        ..., ge=0, le=1, description="0-1 confidence in this suggestion"
+    )
+    reasoning: str = Field(..., description="One short sentence explaining the guess")
+
+
+class DraftAccountSuggestions(BaseModel):
+    suggestions: List[DraftAccountSuggestion]
 
 
 def _compute_gbp_equivalent(txn: dict, native_amount: Decimal) -> Optional[float]:
@@ -2434,6 +2464,76 @@ class JournalService:
         }
 
     # =========================================================================
+    # DRAFT JOURNAL REVIEW (Review tab — fix the account, then post)
+    # =========================================================================
+
+    async def update_draft_journal_account(
+        self,
+        entity_id: UUID,
+        journal_id: UUID,
+        account_id: UUID,
+    ) -> Dict[str, Any]:
+        """Fix a draft journal's miscategorised line, then post it.
+
+        Every draft journal this pipeline produces has the same shape: one
+        line hitting the uncategorised fallback account (8090, because
+        resolve_expense_account couldn't confidently pick a real one), one
+        line hitting cash. This repoints the 8090 line at the account a
+        human picked and flips status to 'posted'.
+
+        Unlike reclassifying a *posted* journal (reverse_journal + a fresh
+        create_*_journal), this doesn't reverse anything: a draft journal
+        was never counted in any balance to begin with — every report
+        filters to status='posted' — so there's nothing to undo, only
+        something to fix and then post for the first time.
+
+        Note this only fixes *this* journal. It doesn't teach
+        resolve_expense_account anything, so if the same transaction were
+        ever re-journaled from scratch (e.g. a Hard Load reprocess) it would
+        fall back to 8090/draft again — account_mapping.py's keyword rules
+        and NORMALISER_CODE_MAP/CATEGORY_ACCOUNT_MAP are the only things
+        that make a categorisation stick for future transactions, and both
+        are edited in code, not from here.
+
+        Raises:
+            JournalError: If the journal doesn't exist, belongs to a
+                different entity, isn't a draft, has no line on the
+                uncategorised fallback account to fix, or its date falls in
+                a locked accounting period.
+        """
+        # Delegates to the post_draft_journal Postgres function so the line
+        # repoint and the status flip happen in one transaction — as two
+        # separate PostgREST calls, a failure between them (e.g. the period
+        # lock trigger firing on the status update) would leave the line
+        # already repointed but the journal stuck on 'draft' forever: a
+        # retry would find no line left on the fallback account and refuse
+        # with "nothing to fix", a dead end.
+        try:
+            result = await asyncio.to_thread(
+                lambda: self.client.rpc(
+                    "post_draft_journal",
+                    {
+                        "p_entity_id": str(entity_id),
+                        "p_journal_id": str(journal_id),
+                        "p_account_id": str(account_id),
+                    },
+                ).execute()
+            )
+        except Exception as e:
+            if "Accounting period is locked" in str(e):
+                raise
+            raise JournalError(f"Failed to post draft journal: {e}") from e
+
+        if not result.data:
+            raise JournalError(f"Failed to post draft journal {journal_id}")
+
+        logger.info(
+            "Posted draft journal %s onto account %s", journal_id, account_id,
+        )
+
+        return await self._fetch_journal(journal_id)
+
+    # =========================================================================
     # JOURNAL QUERIES
     # =========================================================================
 
@@ -2490,6 +2590,12 @@ class JournalService:
         drafts_result = await asyncio.to_thread(_fetch_drafts)
         draft_journals = extract_rows(drafts_result)
 
+        # PostgREST embeds nested rows under the relation name
+        # (`journal_line_items`); the frontend's Journal type — and every
+        # other journal-fetching route — expects `line_items`.
+        for j in draft_journals:
+            j["line_items"] = j.pop("journal_line_items", [])
+
         # Separate draft journals by type for actionability
         draft_by_type: Dict[str, List[Dict[str, Any]]] = {}
         for j in draft_journals:
@@ -2507,6 +2613,128 @@ class JournalService:
                 k: len(v) for k, v in draft_by_type.items()
             },
         }
+
+    async def suggest_draft_journal_accounts(
+        self,
+        entity_id: UUID,
+        journal_ids: Optional[List[UUID]] = None,
+    ) -> Dict[str, Dict[str, Any]]:
+        """Ask an LLM to guess the right account for each draft journal, for
+        the Review tab to pre-fill as a suggestion the user still confirms
+        before posting.
+
+        This is a different problem from resolve_expense_account's keyword
+        rules in account_mapping.py: those rules already ran against every
+        one of these transactions and failed to match confidently — that's
+        *why* they're drafts. Re-running the same regex list here would just
+        fail again. An LLM reading the same description a human would is
+        what can plausibly do better on cases like a plain merchant name
+        ("Apple", "GALLIS LONDON LIMITED") with no obvious keyword.
+
+        Purely advisory — never posts anything. If the LLM call fails for
+        any reason, an empty dict is returned rather than raising, since a
+        missing suggestion just leaves the Review tab's picker unprefilled.
+        """
+        review = await self.get_review_summary(entity_id)
+        journals = review["draft_journals"]
+        if journal_ids is not None:
+            wanted = {str(j) for j in journal_ids}
+            journals = [j for j in journals if j["id"] in wanted]
+        if not journals:
+            return {}
+
+        accounts = await self.get_chart_of_accounts()
+
+        # A one-off purchase of equipment or software (e.g. a laptop) should
+        # be capitalised rather than expensed, so fixed/intangible asset
+        # accounts are valid suggestions too — but only the ones you'd
+        # actually post a new purchase to. Their header parents ("Fixed
+        # Assets", "Intangible Assets") aren't postable themselves, and
+        # contra-asset accounts under them (e.g. Accumulated Depreciation)
+        # have a credit normal_balance rather than debit like a real asset,
+        # which is what distinguishes them from something you'd debit for
+        # a new purchase.
+        asset_parent_ids = {
+            a["id"]
+            for a in accounts
+            if a.get("is_header")
+            and a.get("name") in ("Fixed Assets", "Intangible Assets")
+        }
+        candidates = [
+            a
+            for a in accounts
+            if not a.get("is_header")
+            and a.get("account_number") != accts.UNCATEGORISED_FALLBACK
+            and (
+                a.get("account_type") in ("expense", "cogs")
+                or (
+                    a.get("account_type") == "asset"
+                    and a.get("parent_account_id") in asset_parent_ids
+                    and (a.get("normal_balance") or "").strip() == "debit"
+                )
+            )
+        ]
+        if not candidates:
+            return {}
+
+        coa_lines = "\n".join(
+            f"  {a['account_number']} — {a['name']} ({a['account_type']})"
+            for a in candidates[:80]
+        )
+
+        journal_lines = []
+        for j in journals:
+            amount = next(
+                (li["debit"] for li in j.get("line_items", []) if li.get("debit")), None
+            )
+            amount_str = f" (£{amount:.2f})" if amount else ""
+            desc = j.get("description") or ""
+            journal_lines.append(f'  {j["id"]}: "{desc}"{amount_str}')
+
+        prompt = (
+            "You are an expert bookkeeper. Each line below is a draft journal "
+            "whose account could not be determined automatically — the "
+            "description usually names a merchant or payee. Suggest the most "
+            "appropriate account for each from the chart of accounts.\n\n"
+            "Most of these are day-to-day expenses. But a one-off purchase of "
+            "physical equipment or a software licence (e.g. a laptop, a large "
+            "single hardware order) should usually be capitalised to a fixed "
+            "or intangible asset account instead of expensed — weigh the "
+            "amount and description together: a single large charge from an "
+            "electronics or computer retailer is more likely a capital "
+            "purchase than a recurring subscription or a small supply run.\n\n"
+            f"CHART OF ACCOUNTS:\n{coa_lines}\n\n"
+            f"DRAFT JOURNALS (id: description):\n{chr(10).join(journal_lines)}\n\n"
+            "For each journal, return its id exactly as given, your best-guess "
+            "account_number (or null if nothing fits with reasonable confidence), "
+            "a confidence score 0-1, and one short sentence of reasoning — say "
+            "whether you're treating it as an expense or a capital asset. "
+            "Return exactly one suggestion per journal id listed above."
+        )
+
+        model = init_chat_model(settings.default_chat_model)
+        structured_model = model.with_structured_output(DraftAccountSuggestions)
+
+        try:
+            result = await asyncio.to_thread(
+                lambda: structured_model.invoke([{"role": "user", "content": prompt}])
+            )
+        except Exception as e:
+            logger.warning("Draft account suggestion failed: %s", e)
+            return {}
+
+        accounts_by_number = {a["account_number"]: a for a in candidates}
+        suggestions: Dict[str, Dict[str, Any]] = {}
+        for s in result.suggestions:
+            account = (
+                accounts_by_number.get(s.account_number) if s.account_number else None
+            )
+            suggestions[s.journal_id] = {
+                "account_id": account["id"] if account else None,
+                "confidence": s.confidence,
+                "reasoning": s.reasoning,
+            }
+        return suggestions
 
     # =========================================================================
     # BATCH JOURNAL CREATION
@@ -2916,7 +3144,13 @@ class JournalService:
             .eq("id", str(journal_id))
             .execute()
         )
-        return extract_row(result)
+        journal = extract_row(result)
+        if journal is not None:
+            # PostgREST embeds nested rows under the relation name
+            # (`journal_line_items`); every caller — and the frontend's
+            # Journal type — expects `line_items`.
+            journal["line_items"] = journal.pop("journal_line_items", [])
+        return journal
 
     async def _fetch_journal_line_items(self, journal_id: UUID) -> List[Dict[str, Any]]:
         result = await asyncio.to_thread(

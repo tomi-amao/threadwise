@@ -21,7 +21,7 @@
  * response and rendering it after the fact.
  */
 
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { useRealtime } from 'inngest/react';
 import {
@@ -41,16 +41,23 @@ import {
   Info,
   ClipboardText,
   Eye,
+  Sparkle,
 } from 'phosphor-react';
 import { Button } from '~/components/ui/button';
+import { SearchableSelect, type SelectOption } from '~/components/ui/searchable-select';
 import { cn } from '~/lib/utils';
 import { getApiBaseUrl } from '~/lib/api/base-url';
 import {
   generateAllJournals,
   fetchReviewSummary,
+  fetchChartOfAccounts,
+  postDraftJournal,
+  suggestDraftAccounts,
   type ReviewSummary,
   type Journal,
   type JournalScope,
+  type ChartOfAccountEntry,
+  type DraftAccountSuggestion,
 } from '~/lib/api/accounting';
 
 // =============================================================================
@@ -252,9 +259,76 @@ function StepStatusIcon({
 // REVIEW: Draft Journal Row
 // =============================================================================
 
-function DraftJournalRow({ journal }: { journal: Journal }) {
+function formatAccountType(raw: string): string {
+  return raw.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+}
+
+function DraftJournalRow({
+  journal,
+  entityId,
+  accounts,
+  suggestion,
+  suggestionLoading,
+  onPosted,
+}: {
+  journal: Journal;
+  entityId: string;
+  accounts: ChartOfAccountEntry[];
+  suggestion?: DraftAccountSuggestion;
+  suggestionLoading?: boolean;
+  onPosted: (journalId: string) => void;
+}) {
   const [expanded, setExpanded] = useState(false);
+  const [selectedAccountId, setSelectedAccountId] = useState('');
+  const [posting, setPosting] = useState(false);
   const lineItems = journal.line_items ?? [];
+
+  // Pre-fill from the AI suggestion, but only into an untouched picker —
+  // never overwrite an account the user already picked themselves. Since
+  // this component doesn't offer an "unset" option, an empty selection
+  // reliably means "nothing chosen yet" for the lifetime of this row.
+  useEffect(() => {
+    if (suggestion?.account_id && !selectedAccountId) {
+      setSelectedAccountId(suggestion.account_id);
+    }
+  }, [suggestion, selectedAccountId]);
+
+  // Every draft journal has exactly one line still pointed at the
+  // uncategorised fallback account (8090) — that's the one a human needs to
+  // repoint before the journal can be posted.
+  const misclassifiedLine = lineItems.find(li => {
+    const acct = accounts.find(a => a.id === li.account_id);
+    return acct?.account_number === '8090';
+  });
+
+  const accountOptions = useMemo<SelectOption[]>(() => {
+    return accounts
+      .filter(a => !a.is_header && a.account_number !== '8090')
+      .map(a => ({
+        value: a.id,
+        label: a.name,
+        meta: a.account_number,
+        group: formatAccountType(a.account_type),
+      }));
+  }, [accounts]);
+
+  const suggestedAccount = suggestion?.account_id
+    ? accounts.find(a => a.id === suggestion.account_id)
+    : undefined;
+
+  const handlePost = async () => {
+    if (!selectedAccountId) return;
+    setPosting(true);
+    try {
+      await postDraftJournal(entityId, journal.id, selectedAccountId);
+      toast.success('Journal posted');
+      onPosted(journal.id);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Failed to post journal');
+    } finally {
+      setPosting(false);
+    }
+  };
 
   return (
     <div className="rounded-lg border border-amber-500/20 bg-amber-500/5">
@@ -303,9 +377,71 @@ function DraftJournalRow({ journal }: { journal: Journal }) {
               </div>
             </div>
           ))}
-          <p className="text-xs text-amber-400/70 mt-2 pt-2 border-t border-border/60">
-            Review and post manually once the correct account is confirmed.
-          </p>
+          {misclassifiedLine ? (
+            <div className="mt-3 pt-3 border-t border-border/60 space-y-2">
+              <label className="text-xs text-muted-foreground block">
+                Correct GL account for the uncategorised line:
+              </label>
+              {suggestedAccount ? (
+                <div className="flex items-start gap-1.5 text-xs bg-violet-500/10 border border-violet-500/20 rounded-lg px-2.5 py-2">
+                  <Sparkle size={13} weight="fill" className="text-violet-400 shrink-0 mt-0.5" />
+                  <span className="text-violet-200">
+                    <span className="font-medium">Suggested: </span>
+                    <span className="font-mono">{suggestedAccount.account_number}</span>
+                    {' — '}
+                    {suggestedAccount.name} · {Math.round((suggestion?.confidence ?? 0) * 100)}%
+                    confident
+                    <span className="block text-violet-300/70 mt-0.5">{suggestion?.reasoning}</span>
+                  </span>
+                </div>
+              ) : (
+                suggestionLoading && (
+                  <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                    <Sparkle size={12} className="animate-pulse" />
+                    Suggesting an account…
+                  </div>
+                )
+              )}
+              <SearchableSelect
+                options={accountOptions}
+                value={selectedAccountId}
+                onChange={setSelectedAccountId}
+                placeholder="— Select account —"
+                disabled={posting}
+                className="w-full px-2 py-1.5 text-xs"
+                renderValue={opt =>
+                  opt ? (
+                    <span className="truncate">
+                      <span className="font-mono text-muted-foreground">{opt.meta}</span>
+                      {' — '}
+                      {opt.label}
+                    </span>
+                  ) : (
+                    <span className="text-muted-foreground">— Select account —</span>
+                  )
+                }
+              />
+              <Button
+                size="sm"
+                onClick={handlePost}
+                disabled={!selectedAccountId || posting}
+                className="w-full gap-1.5"
+              >
+                {posting ? (
+                  <>
+                    <ArrowsClockwise size={12} className="animate-spin" />
+                    Posting…
+                  </>
+                ) : (
+                  'Post journal'
+                )}
+              </Button>
+            </div>
+          ) : (
+            <p className="text-xs text-amber-400/70 mt-2 pt-2 border-t border-border/60">
+              No uncategorised line found on this journal — nothing to fix here.
+            </p>
+          )}
         </div>
       )}
     </div>
@@ -319,15 +455,39 @@ function DraftJournalRow({ journal }: { journal: Journal }) {
 function ReviewTab({ entityId }: { entityId: string }) {
   const [loading, setLoading] = useState(false);
   const [review, setReview] = useState<ReviewSummary | null>(null);
+  const [accounts, setAccounts] = useState<ChartOfAccountEntry[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [draftExpanded, setDraftExpanded] = useState(true);
+  const [suggestions, setSuggestions] = useState<Record<string, DraftAccountSuggestion>>({});
+  const [suggestionsLoading, setSuggestionsLoading] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const data = await fetchReviewSummary(entityId);
-      setReview(data);
+      const [reviewData, accountsData] = await Promise.all([
+        fetchReviewSummary(entityId),
+        fetchChartOfAccounts(entityId),
+      ]);
+      setReview(reviewData);
+      setAccounts(accountsData);
+
+      // Advisory-only and slower than the rest of this load (an LLM call) —
+      // fire it without awaiting so draft rows render immediately with
+      // empty pickers, then fill in as suggestions arrive.
+      setSuggestions({});
+      if (reviewData.draft_journals.length > 0) {
+        setSuggestionsLoading(true);
+        suggestDraftAccounts(
+          entityId,
+          reviewData.draft_journals.map(j => j.id)
+        )
+          .then(setSuggestions)
+          .catch(() => {
+            // Leave pickers unprefilled on failure — nothing to recover.
+          })
+          .finally(() => setSuggestionsLoading(false));
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Unknown error');
     } finally {
@@ -339,6 +499,33 @@ function ReviewTab({ entityId }: { entityId: string }) {
   useEffect(() => {
     load();
   }, [load]);
+
+  const handlePosted = useCallback((journalId: string) => {
+    setReview(prev => {
+      if (!prev) return prev;
+      const postedJournal = prev.draft_journals.find(j => j.id === journalId);
+      const draft_journals = prev.draft_journals.filter(j => j.id !== journalId);
+      const draft_journals_by_type = { ...prev.draft_journals_by_type };
+      if (postedJournal) {
+        const t = postedJournal.journal_type;
+        if (draft_journals_by_type[t] > 1) {
+          draft_journals_by_type[t] -= 1;
+        } else {
+          delete draft_journals_by_type[t];
+        }
+      }
+      return {
+        ...prev,
+        draft_journals,
+        draft_journals_by_type,
+        summary: {
+          ...prev.summary,
+          draft_journals_total: prev.summary.draft_journals_total - 1,
+          needs_review: draft_journals.length > 0,
+        },
+      };
+    });
+  }, []);
 
   if (loading && !review) {
     return (
@@ -439,7 +626,15 @@ function ReviewTab({ entityId }: { entityId: string }) {
               )}
               <div className="space-y-1.5 max-h-64 overflow-y-auto">
                 {review.draft_journals.map(j => (
-                  <DraftJournalRow key={j.id} journal={j} />
+                  <DraftJournalRow
+                    key={j.id}
+                    journal={j}
+                    entityId={entityId}
+                    accounts={accounts}
+                    suggestion={suggestions[j.id]}
+                    suggestionLoading={suggestionsLoading && !suggestions[j.id]}
+                    onPosted={handlePosted}
+                  />
                 ))}
               </div>
             </>
