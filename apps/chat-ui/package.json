@@ -9,6 +9,7 @@
     "typecheck": "react-router typegen && tsc"
   },
   "dependencies": {
+    "@floating-ui/react-dom": "^2.1.6",
     "@langchain/core": "^1.2.11",
     "@langchain/langgraph-sdk": "^1.11.0",
     "@nivo/bar": "^0.99.0",

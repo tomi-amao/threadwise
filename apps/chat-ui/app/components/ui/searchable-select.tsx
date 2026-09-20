@@ -16,6 +16,7 @@
 
 import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import { createPortal } from 'react-dom';
+import { computePosition, autoUpdate, offset, flip, shift, size } from '@floating-ui/react-dom';
 import { DismissableLayerBranch } from '@radix-ui/react-dismissable-layer';
 import { FocusScope } from '@radix-ui/react-focus-scope';
 import { CaretDown, Check, MagnifyingGlass, X } from 'phosphor-react';
@@ -52,6 +53,9 @@ export interface SearchableSelectProps {
   stopPropagation?: boolean;
 }
 
+/** Gap kept between the dropdown and the edge of whatever is clipping it. */
+const VIEWPORT_PADDING = 8;
+
 // ─── Component ────────────────────────────────────────────────────────────────
 
 export function SearchableSelect({
@@ -69,14 +73,96 @@ export function SearchableSelect({
 }: SearchableSelectProps) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
-  const [dropdownStyle, setDropdownStyle] = useState<React.CSSProperties>({});
   const [activeIdx, setActiveIdx] = useState<number>(-1);
 
-  const triggerRef = useRef<HTMLButtonElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
-  const dropdownRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const floatingRef = useRef<HTMLDivElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLUListElement>(null);
+
+  // Position is applied by mutating the floating element's style directly,
+  // not through React state. Going through useFloating's React-managed
+  // floatingStyles means every scroll tick is: scroll event → computePosition
+  // (async) → setState → re-render → paint — which trails the natively
+  // scrolled content by a frame and reads as jitter/lag. Writing the style
+  // straight onto the node from the same callback autoUpdate already calls
+  // skips that render round-trip, so the panel tracks the trigger as closely
+  // as the browser's own scroll-then-paint timing allows.
+  const setFloatingRef = useCallback((node: HTMLDivElement | null) => {
+    floatingRef.current = node;
+    if (node) {
+      // Fresh mount each time the dropdown opens — start hidden at a neutral
+      // position until the first computePosition() resolves below, then
+      // updatePosition() owns top/left/visibility for the rest of this
+      // open session.
+      node.style.position = 'fixed';
+      node.style.top = '0px';
+      node.style.left = '0px';
+      node.style.visibility = 'hidden';
+    }
+  }, []);
+
+  const updatePosition = useCallback(() => {
+    const reference = triggerRef.current;
+    const floating = floatingRef.current;
+    if (!reference || !floating) return;
+
+    computePosition(reference, floating, {
+      placement: 'bottom-start',
+      // computePosition defaults to 'absolute' (document-relative)
+      // coordinates; we apply the result via position:fixed
+      // (viewport-relative). They only happen to agree when the page's own
+      // scroll is exactly zero — make it explicit instead of relying on that.
+      strategy: 'fixed',
+      middleware: [
+        offset(4),
+        flip({ padding: VIEWPORT_PADDING }),
+        shift({ padding: VIEWPORT_PADDING }),
+        size({
+          padding: VIEWPORT_PADDING,
+          apply({ rects, availableWidth, availableHeight, elements }) {
+            const minW = Math.max(rects.reference.width, 240);
+            Object.assign(elements.floating.style, {
+              minWidth: `${Math.round(minW)}px`,
+              maxWidth: `${Math.round(Math.min(minW, 400, availableWidth))}px`,
+              // Never floor this to a minimum height: a floor larger than
+              // the real gap is precisely what makes the panel punch
+              // through the edge of its scroll container. Shrink to
+              // whatever is actually there and let the list scroll inside.
+              maxHeight: `${Math.max(0, Math.floor(availableHeight))}px`,
+            });
+          },
+        }),
+      ],
+    }).then(({ x, y }) => {
+      // The dropdown may have closed (and its portal node unmounted) while
+      // this promise was in flight.
+      if (!floatingRef.current) return;
+      Object.assign(floatingRef.current.style, {
+        left: `${Math.round(x)}px`,
+        top: `${Math.round(y)}px`,
+        visibility: 'visible',
+      });
+    });
+  }, []);
+
+  // autoUpdate covers scroll/resize on every ancestor between the trigger
+  // and the viewport (including nested scroll regions, e.g. this list's own
+  // container inside a scrollable modal) for as long as the dropdown is
+  // open, calling updatePosition on each. elementResize is off: size()
+  // above writes width/height onto this same floating element on every
+  // call, which would otherwise retrigger the ResizeObserver that watches
+  // it, which calls update again — an infinite loop that made the panel
+  // oscillate. The list's own size still changes when filtering narrows it,
+  // so that case is repositioned explicitly below instead.
+  useEffect(() => {
+    if (!open) return;
+    const reference = triggerRef.current;
+    const floating = floatingRef.current;
+    if (!reference || !floating) return;
+    return autoUpdate(reference, floating, updatePosition, { elementResize: false });
+  }, [open, updatePosition]);
 
   const showSearch = searchable !== undefined ? searchable : options.length > 6;
 
@@ -100,41 +186,16 @@ export function SearchableSelect({
 
   const selectedOption = allOptions.find(o => o.value === value) ?? null;
 
-  // ── Dropdown positioning ───────────────────────────────────────────────────
-  const updatePosition = useCallback(() => {
-    if (!triggerRef.current) return;
-    const rect = triggerRef.current.getBoundingClientRect();
-    const spaceBelow = window.innerHeight - rect.bottom;
-    const spaceAbove = rect.top;
-    const openUpward = spaceBelow < 280 && spaceAbove > spaceBelow;
-    const minW = Math.max(rect.width, 240);
-
-    setDropdownStyle({
-      position: 'fixed',
-      left: rect.left,
-      width: rect.width,
-      minWidth: minW,
-      maxWidth: Math.min(minW, 400),
-      ...(openUpward
-        ? { bottom: window.innerHeight - rect.top + 4, top: 'auto' }
-        : { top: rect.bottom + 4, bottom: 'auto' }),
-      zIndex: 9999,
-      // Radix Dialog sets pointer-events:none on body when open; restore it for this portal.
-      pointerEvents: 'auto',
-    });
-  }, []);
-
   // ── Open / close ───────────────────────────────────────────────────────────
   const openDropdown = useCallback(
     (e: React.MouseEvent) => {
       if (stopPropagation) e.stopPropagation();
       if (disabled) return;
-      updatePosition();
       setOpen(true);
       setQuery('');
       setActiveIdx(-1);
     },
-    [disabled, stopPropagation, updatePosition]
+    [disabled, stopPropagation]
   );
 
   const closeDropdown = useCallback(() => {
@@ -151,13 +212,19 @@ export function SearchableSelect({
     [onChange, closeDropdown]
   );
 
+  // Filtering changes the list's height, and autoUpdate's elementResize is
+  // deliberately off (see above), so reposition explicitly here.
+  useEffect(() => {
+    if (open) updatePosition();
+  }, [open, filtered.length, updatePosition]);
+
   // Block wheel/touchmove from reaching react-remove-scroll's document-level
   // handler (which calls preventDefault on elements outside the dialog DOM).
   useEffect(() => {
     if (!open) return;
     let cleanup: (() => void) | undefined;
     const frame = requestAnimationFrame(() => {
-      const el = dropdownRef.current;
+      const el = floatingRef.current;
       if (!el) return;
       const stop = (e: Event) => e.stopPropagation();
       el.addEventListener('wheel', stop, { passive: true });
@@ -187,7 +254,7 @@ export function SearchableSelect({
       const target = e.target as Node;
       // Allow clicks inside the trigger or the portal dropdown
       if (triggerRef.current?.contains(target)) return;
-      if (dropdownRef.current?.contains(target)) return;
+      if (floatingRef.current?.contains(target)) return;
       closeDropdown();
     };
     // Use capture so we see it before Radix's dismissable layer
@@ -260,11 +327,19 @@ export function SearchableSelect({
     ? createPortal(
         <FocusScope trapped={false}>
           <DismissableLayerBranch>
-            <div ref={dropdownRef} style={dropdownStyle}>
-              <div className="rounded-lg border border-border bg-popover shadow-xl overflow-hidden flex flex-col">
+            <div
+              ref={setFloatingRef}
+              className="flex flex-col overflow-hidden"
+              style={{
+                zIndex: 9999,
+                // Radix Dialog sets pointer-events:none on body when open; restore it for this portal.
+                pointerEvents: 'auto',
+              }}
+            >
+              <div className="rounded-lg border border-border bg-popover shadow-xl overflow-hidden flex flex-col min-h-0">
                 {/* Search input */}
                 {showSearch && (
-                  <div className="flex items-center gap-2 border-b border-border px-3 py-2">
+                  <div className="flex items-center gap-2 border-b border-border px-3 py-2 shrink-0">
                     <MagnifyingGlass size={14} className="text-muted-foreground shrink-0" />
                     <input
                       ref={searchRef}
@@ -289,7 +364,11 @@ export function SearchableSelect({
                 )}
 
                 {/* Options list */}
-                <ul ref={listRef} className="overflow-y-auto max-h-56 py-1" role="listbox">
+                <ul
+                  ref={listRef}
+                  className="overflow-y-auto overscroll-contain flex-1 min-h-0 max-h-56 py-1"
+                  role="listbox"
+                >
                   {groupedFiltered.length === 0 && (
                     <li className="px-3 py-5 text-center text-xs text-muted-foreground">
                       No results found
