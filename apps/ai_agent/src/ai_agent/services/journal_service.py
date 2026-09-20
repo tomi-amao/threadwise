@@ -803,9 +803,27 @@ class JournalService:
         if existing and not force:
             return existing
 
-        amount = Decimal(str(abs(txn.get("amount", 0))))
-        currency = txn.get("currency_code") or "GBP"
+        raw_currency = (txn.get("currency_code") or "GBP").upper()
+        base_currency = (txn.get("base_currency_code") or "GBP").upper()
+        fx_rate_val = txn.get("fx_rate")
         source = txn.get("source", "revolut")
+
+        # Auto-FX refund (e.g. a card refund billed in EUR that actually
+        # landed back in the GBP account) — use the GBP base_amount so the
+        # cash entry credits 1014 Revolut GBP rather than misrouting to 1015
+        # EUR or 1016 USD, which has no matching real-currency balance for
+        # it. Same pattern as create_expense_journal/create_funding_journal.
+        if raw_currency != "GBP" and base_currency == "GBP" and fx_rate_val is not None:
+            raw_base = txn.get("base_amount")
+            if raw_base is not None:
+                amount = Decimal(str(abs(float(raw_base))))
+                currency = "GBP"
+            else:
+                amount = Decimal(str(abs(txn.get("amount", 0))))
+                currency = raw_currency
+        else:
+            amount = Decimal(str(abs(txn.get("amount", 0))))
+            currency = raw_currency
 
         if amount <= 0:
             raise JournalError(f"Transaction amount must be positive, got {amount}")
