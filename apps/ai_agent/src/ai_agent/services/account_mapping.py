@@ -173,7 +173,16 @@ CATEGORY_ACCOUNT_MAP: Dict[str, Optional[str]] = {
     "meals": TRAVEL_ENTERTAINMENT,              # 7100
     "entertainment": TRAVEL_ENTERTAINMENT,      # 7100
     "bank_charges": BANK_CHARGES,               # 8020
-    "accounts_payable": ACCOUNTS_PAYABLE,       # 2010
+    # "accounts_payable" is deliberately NOT mapped here. It's a raw bank-feed
+    # category tag meaning roughly "paid to a vendor/bill", not a signal that
+    # *we* ever recorded a matching liability — this pipeline journals bank
+    # transactions directly (DEBIT resolved account / CREDIT cash) with no
+    # invoice/liability lifecycle behind it, so mapping this tag straight to
+    # the Accounts Payable control account left it with a debit no invoice
+    # ever credited, while the real cost silently never hit any expense or
+    # COGS account. Falling through to keyword/vendor matching (None, same as
+    # "miscellaneous") is what the other transactions carrying this same tag
+    # already correctly do.
     "miscellaneous": None,                      # Explicitly None — skip to keyword match
 }
 
@@ -192,7 +201,10 @@ UNCATEGORISED_FALLBACK = MISCELLANEOUS_EXPENSE
 
 _KEYWORD_RULES: List[Tuple[re.Pattern, str]] = [
     # ── Vendor-specific rules (highest priority) ────────────────────────────
-    (re.compile(r"\b(46678xbqa|wellsuc7tb4|wellsucceed\s*embroidery)\b", re.I), COGS_DEFAULT),  # Inventory purchase
+    (
+        re.compile(r"\b(46678xbqa|wellsuc7tb4|wellsucceed\s*embroidery)\b", re.I),
+        INVENTORY_FINISHED_GOODS,
+    ),
     (re.compile(r"\b4filment\b", re.I), OUTBOUND_SHIPPING),  # Warehouse distributor shipping
 
     # ── Import fees / duties (UPS etc.) ─────────────────────────────────────
@@ -279,6 +291,7 @@ _KEYWORD_RULES: List[Tuple[re.Pattern, str]] = [
 # *resolved* account, not the normaliser's original (possibly wrong) category.
 
 ACCOUNT_LABEL: Dict[str, str] = {
+    INVENTORY_FINISHED_GOODS: "finished goods inventory",
     COGS_DEFAULT: "materials",
     COGS_FABRIC: "fabrics & materials",
     COGS_CMT: "manufacturing",
