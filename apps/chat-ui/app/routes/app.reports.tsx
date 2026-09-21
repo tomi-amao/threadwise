@@ -27,8 +27,6 @@ import {
   Scales,
   CurrencyCircleDollar,
   TrendUp,
-  Calendar,
-  CaretDown,
   CircleNotch,
   ShoppingCart,
   Receipt,
@@ -45,6 +43,7 @@ import {
   X,
 } from 'phosphor-react';
 import { Button } from '~/components/ui/button';
+import { DateRangePicker } from '~/components/ui/date-range-picker';
 import { cn } from '~/lib/utils';
 import { InfoTooltip } from '~/components/ui/InfoTooltip';
 import { formatGbp, formatGbp0 } from '~/lib/format-currency';
@@ -145,55 +144,6 @@ type ReportActionResponse = {
   excluded?: boolean;
 };
 
-// ─── Date Range Presets ───────────────────────────────────────────────
-
-interface PresetRange {
-  label: string;
-  from: string;
-  to: string;
-}
-
-function getPresets(): PresetRange[] {
-  const now = new Date();
-  const y = now.getFullYear();
-  const m = now.getMonth();
-
-  const fmt = (d: Date) => d.toISOString().split('T')[0];
-
-  return [
-    {
-      label: 'This Month',
-      from: fmt(new Date(y, m, 1)),
-      to: fmt(new Date(y, m + 1, 0)),
-    },
-    {
-      label: 'Last Month',
-      from: fmt(new Date(y, m - 1, 1)),
-      to: fmt(new Date(y, m, 0)),
-    },
-    {
-      label: 'Last 3 Months',
-      from: fmt(new Date(y, m - 2, 1)),
-      to: fmt(new Date(y, m + 1, 0)),
-    },
-    {
-      label: 'Last 6 Months',
-      from: fmt(new Date(y, m - 5, 1)),
-      to: fmt(new Date(y, m + 1, 0)),
-    },
-    {
-      label: 'This Year',
-      from: fmt(new Date(y, 0, 1)),
-      to: fmt(new Date(y, 11, 31)),
-    },
-    {
-      label: 'Last Year',
-      from: fmt(new Date(y - 1, 0, 1)),
-      to: fmt(new Date(y - 1, 11, 31)),
-    },
-  ];
-}
-
 // ─── Loader ───────────────────────────────────────────────────────────
 
 export async function loader({ request }: LoaderFunctionArgs) {
@@ -201,8 +151,24 @@ export async function loader({ request }: LoaderFunctionArgs) {
   const from = url.searchParams.get('from') || null;
   const to = url.searchParams.get('to') || null;
 
-  const data = await getReportsData(from, to);
-  return { data };
+  const supabase = getServerSupabaseClient();
+  const [data, entityResult] = await Promise.all([
+    getReportsData(from, to),
+    supabase.from('entities').select('year_end_day, year_end_month').limit(1).single(),
+  ]);
+
+  // Used only to compute the "Financial year" date-range presets. Falls back
+  // to a calendar year (31 December) when no accounting reference date is
+  // configured, so the presets still make sense for an entity without one.
+  // Cast: the generated Supabase types predate these columns (see
+  // tax.server.ts's identical cast), so the row is otherwise an error union.
+  const entityRow = entityResult.data as unknown as Record<string, unknown> | null;
+  const fiscalYearEnd = {
+    day: (entityRow?.year_end_day as number | undefined) ?? 31,
+    month: (entityRow?.year_end_month as number | undefined) ?? 12,
+  };
+
+  return { data, fiscalYearEnd };
 }
 
 function json(data: unknown, init?: ResponseInit) {
@@ -311,93 +277,6 @@ export async function action({ request }: ActionFunctionArgs) {
 // ─── Sub-Components ───────────────────────────────────────────────────
 
 type Tab = 'revenue' | 'pnl' | 'balance' | 'cashflow';
-
-function DateRangeSelector({ currentFrom, currentTo }: { currentFrom: string; currentTo: string }) {
-  const navigate = useNavigate();
-  const [showCustom, setShowCustom] = useState(false);
-  const [customFrom, setCustomFrom] = useState(currentFrom);
-  const [customTo, setCustomTo] = useState(currentTo);
-  const presets = getPresets();
-
-  const isAllTime = !currentFrom && !currentTo;
-  const currentLabel = isAllTime
-    ? 'All Time'
-    : presets.find(p => p.from === currentFrom && p.to === currentTo)?.label || 'Custom';
-
-  const applyRange = (from: string, to: string) => {
-    const params = new URLSearchParams();
-    if (from) params.set('from', from);
-    if (to) params.set('to', to);
-    navigate(`/reports?${params.toString()}`);
-    setShowCustom(false);
-  };
-
-  return (
-    <div className="flex flex-wrap items-center gap-2">
-      <div className="flex items-center gap-1.5 overflow-x-auto">
-        <button
-          onClick={() => navigate('/reports')}
-          className={`px-3 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap transition-colors ${
-            isAllTime
-              ? 'bg-primary text-primary-foreground'
-              : 'bg-muted text-muted-foreground hover:text-foreground'
-          }`}
-        >
-          All Time
-        </button>
-        {presets.map(p => (
-          <button
-            key={p.label}
-            onClick={() => applyRange(p.from, p.to)}
-            className={`px-3 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap transition-colors ${
-              currentFrom === p.from && currentTo === p.to
-                ? 'bg-primary text-primary-foreground'
-                : 'bg-muted text-muted-foreground hover:text-foreground'
-            }`}
-          >
-            {p.label}
-          </button>
-        ))}
-        <button
-          onClick={() => setShowCustom(!showCustom)}
-          className={`px-3 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap transition-colors ${
-            currentLabel === 'Custom'
-              ? 'bg-primary text-primary-foreground'
-              : 'bg-muted text-muted-foreground hover:text-foreground'
-          }`}
-        >
-          Custom
-        </button>
-      </div>
-
-      {showCustom && (
-        <div className="flex items-center gap-2 bg-card border border-border rounded-lg p-2">
-          <input
-            type="date"
-            value={customFrom}
-            onChange={e => setCustomFrom(e.target.value)}
-            className="bg-muted border border-border rounded-md px-2 py-1 text-xs text-foreground"
-          />
-          <span className="text-xs text-muted-foreground">to</span>
-          <input
-            type="date"
-            value={customTo}
-            onChange={e => setCustomTo(e.target.value)}
-            className="bg-muted border border-border rounded-md px-2 py-1 text-xs text-foreground"
-          />
-          <Button
-            size="sm"
-            variant="default"
-            className="h-7 text-xs px-3"
-            onClick={() => applyRange(customFrom, customTo)}
-          >
-            Apply
-          </Button>
-        </div>
-      )}
-    </div>
-  );
-}
 
 function CogsDetailsDrawer({
   data,
@@ -2436,8 +2315,9 @@ function CashFlowTab({ data }: { data: ReportsData }) {
 // ─── Main Page Component ──────────────────────────────────────────────
 
 export default function ReportsPage() {
-  const { data } = useLoaderData<typeof loader>();
+  const { data, fiscalYearEnd } = useLoaderData<typeof loader>();
   const revalidator = useRevalidator();
+  const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const [activeTab, setActiveTab] = useState<Tab>('revenue');
   const [drilldownTarget, setDrilldownTarget] = useState<ReportRowDrilldownTarget | null>(null);
@@ -2448,6 +2328,16 @@ export default function ReportsPage() {
 
   const currentFrom = searchParams.get('from') || '';
   const currentTo = searchParams.get('to') || '';
+
+  const applyDateRange = useCallback(
+    (from: string, to: string) => {
+      const params = new URLSearchParams();
+      if (from) params.set('from', from);
+      if (to) params.set('to', to);
+      navigate(params.toString() ? `/reports?${params.toString()}` : '/reports');
+    },
+    [navigate]
+  );
 
   const handleRefresh = useCallback(() => {
     revalidator.revalidate();
@@ -2514,7 +2404,12 @@ export default function ReportsPage() {
 
       <main className="px-4 md:px-6 lg:px-8 py-6 space-y-6">
         {/* Date Range Selector */}
-        <DateRangeSelector currentFrom={currentFrom} currentTo={currentTo} />
+        <DateRangePicker
+          from={currentFrom}
+          to={currentTo}
+          onApply={applyDateRange}
+          fiscalYearEnd={fiscalYearEnd}
+        />
 
         {/* Summary KPIs */}
         <div className="grid grid-cols-2 sm:grid-cols-4 xl:grid-cols-8 gap-3">
