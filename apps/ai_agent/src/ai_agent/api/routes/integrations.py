@@ -492,6 +492,8 @@ async def validate_api_key(source_id: str):
         elif provider == "shopify":
             shop_domain = source.get("external_account_id", "")
             is_valid, error_message = await _validate_shopify_api_key(api_key, shop_domain)
+        elif provider == "zoho_calendar":
+            is_valid, error_message = await _validate_zoho_calendar_api_key(api_key)
         else:
             error_message = f"Unknown provider: {provider}"
         
@@ -667,6 +669,39 @@ async def _validate_shopify_api_key(
         return False, 'Credentials must be valid JSON: {"client_id":"...","client_secret":"..."}'
     except httpx.TimeoutException:
         return False, "Request timed out - check your network connection"
+    except Exception as e:
+        return False, f"Connection error: {str(e)}"
+
+
+async def _validate_zoho_calendar_api_key(api_key: str) -> tuple[bool, Optional[str]]:
+    """Validate a Zoho Calendar connection by refreshing its access token.
+
+    api_key is expected to be a JSON string:
+    {"refresh_token": "...", "api_domain": "..."} — same storage shape as
+    every other provider's compound credentials, just sourced from a
+    3-legged OAuth flow (integrations/zoho_calendar/oauth.py) rather than a
+    client-credentials grant, so there's no client_id/client_secret pair to
+    check here — only whether the refresh token Zoho already issued us is
+    still good.
+    """
+    import json
+
+    from ...integrations.zoho_calendar.oauth import ZohoOAuthError, refresh_access_token
+
+    try:
+        creds = json.loads(api_key)
+    except json.JSONDecodeError:
+        return False, "Zoho Calendar credentials are corrupted (not valid JSON)"
+
+    refresh_token = creds.get("refresh_token")
+    if not refresh_token:
+        return False, "Zoho Calendar credentials are missing a refresh_token"
+
+    try:
+        await refresh_access_token(refresh_token)
+        return True, None
+    except ZohoOAuthError as e:
+        return False, f"Zoho Calendar token refresh failed: {e}"
     except Exception as e:
         return False, f"Connection error: {str(e)}"
 

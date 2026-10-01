@@ -15,7 +15,8 @@ This service does three distinct jobs:
    (SQL), generic questions, and extracts structured data from uploaded documents.
 2. **ETL / normalization pipeline** — pulls transactions from external providers
    (Shopify, Revolut, PayPal, Squarespace) via Inngest, normalizes them into a
-   canonical schema, and persists them to Supabase/Postgres.
+   canonical schema, and persists them to Supabase/Postgres. Zoho Calendar is
+   the one provider that also goes the other way — see "OAuth providers" below.
 3. **Accounting engine** — turns normalized payments/transactions/invoices into
    double-entry journals against a chart of accounts.
 
@@ -145,7 +146,68 @@ is Inngest-orchestrated, under `integrations/inngest/`:
   the same `normalize(entity_type, external_id, payload, raw_event_id) -> NormalizationResult`
   contract and are registered in `NORMALIZER_REGISTRY` (`normalization/service.py`).
   Canonical output tables include `customers`, `orders`, `products`,
-  `inventory_items`, `payments`, `bank_accounts`, `financial_transactions`.
+  `inventory_items`, `payments`, `bank_accounts`, `financial_transactions`,
+  `calendar_events`.
+
+### OAuth providers (Zoho Calendar)
+
+Every provider above authenticates via a credentials-only grant — Shopify/
+PayPal exchange an app-supplied `client_id`/`client_secret` for a token with
+no user consent screen. Zoho Calendar is the only exception, since there's
+no credentials-only path to a specific person's own calendar; it needs real
+3-legged OAuth2, which is new infrastructure, not an extension of the
+existing pattern:
+
+- `api/routes/oauth.py` — `/oauth/zoho_calendar/start` (redirects to Zoho's
+  consent screen) and `/oauth/zoho_calendar/callback` (exchanges the code,
+  creates the "ThreadWise Deadlines" calendar, persists the `external_sources`
+  row). Any future OAuth provider's routes belong here too, not a new file.
+- `integrations/zoho_calendar/oauth.py` — the OAuth2 mechanics: authorize-URL
+  building, code↔token exchange, and a signed `state` param
+  (`base64(entity_id|nonce|exp)` + `.` + `hmac_sha256(zoho_client_secret, payload)`,
+  10-minute TTL). The signing matters because the integrations router has no
+  request auth and `entity_id` is otherwise attacker-controlled during the
+  callback — an unsigned `state` would let anyone attach their own Zoho
+  calendar to someone else's `entity_id`.
+- **`zoho_client_id`/`zoho_client_secret` are app-wide config (`core/config.py`/
+  `.env`), not a per-connection secret** — the first exception to the pattern
+  `docs/secure-api-key-workflow.md` documents, where every other provider's
+  credentials are something each user supplies and that gets Vault-encrypted
+  per `external_sources` row. Here, ThreadWise itself is the registered OAuth
+  client (one Zoho API Console app), and many different entities each
+  authorize it independently — the client_id/secret identify the
+  *application* to Zoho, not any one user's calendar, the same relationship
+  as any "Sign in with Google" button on a multi-tenant SaaS. Each entity's
+  own secret — the refresh token Zoho issues after their own consent — still
+  goes through the exact same per-source Vault storage as every other
+  provider's `api_key` field, just as a `{"refresh_token": ..., "api_domain":
+  ...}` JSON blob instead of a `client_id`/`client_secret` pair.
+- Zoho-specific quirks handled explicitly rather than assumed, each the kind
+  of thing that fails silently if you don't know to check for it: the token
+  endpoint returns HTTP 200 with an `{"error": ...}` body on failure (so
+  `raise_for_status()` won't catch it — see `_raise_with_body` in
+  `integrations/zoho_calendar/__init__.py`); `access_type=offline` +
+  `prompt=consent` must both be in the authorize URL or a reconnect silently
+  returns no refresh token; refresh tokens are capped at 20 per client per
+  user with silent eviction of the oldest, so `delete_external_source`
+  revokes on disconnect; write endpoints (create/update calendar or event)
+  take a single query param whose value is a JSON string (e.g.
+  `calendarData`, `eventdata`), never a JSON request body; and the
+  events-list response's `start`/`end` live only in a nested `dateandtime`
+  object whose own format differs by event type, despite Zoho's docs
+  describing (non-existent, in practice) top-level `start`/`end` fields.
+- Two-directional, unlike every other provider: `integrations/zoho_calendar/`
+  both pulls the user's own calendar events (`zoho_calendar_sync_functions.py`'s
+  `calendar_events` endpoint, into `calendar_events`/`CanonicalCalendarEvent`
+  via `normalization/zoho_calendar_normalizer.py`) and pushes ThreadWise's
+  own data out (`tax_deadlines`/`collection_launches` endpoints, via
+  `services/calendar_push_service.py`, `tax_deadline_service.py`,
+  `collection_launch_service.py`) into a dedicated "ThreadWise Deadlines"
+  calendar created at connect time — excluded from the pull (by
+  `external_account_id`) so pushed events are never re-imported as new
+  ones. `persistence.py`'s `reconcile_calendar_events` marks a
+  `calendar_events` row `cancelled` when a pull run's own window no longer
+  returns it, since upsert-only storage otherwise never notices a deletion.
 
 ### Accounting engine (`services/journal_service.py`, `services/account_mapping.py`)
 
@@ -182,4 +244,10 @@ Config is centralized in `core/config.py` (`pydantic_settings.BaseSettings`,
 loaded from `.env`, unknown keys ignored). Notable settings: `database_url`
 (direct Postgres), `supabase_url`/`supabase_key` (PostgREST), `supabase_access_token`
 (PAT for MCP auth), `local_llm_base_url`, `inngest_event_key`/`inngest_signing_key`,
-`pinecone_api_key` (vector store for embeddings/RAG).
+`pinecone_api_key` (vector store for embeddings/RAG), `zoho_client_id`/
+`zoho_client_secret`/`zoho_redirect_uri`/`zoho_accounts_domain` (see "OAuth
+providers" above — app-wide, not per-connection), `frontend_url` (where the
+Zoho OAuth callback redirects the browser back to after connecting — this
+backend has no other reason to know the frontend's origin, and a bare path
+would resolve against the wrong host since the callback itself runs here,
+not on the frontend).

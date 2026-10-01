@@ -25,6 +25,7 @@ from uuid import UUID
 from ..core.supabase_client import get_supabase_client
 from .models import (
     CanonicalBankAccount,
+    CanonicalCalendarEvent,
     CanonicalCustomer,
     CanonicalFinancialTransaction,
     CanonicalInventoryItem,
@@ -162,6 +163,8 @@ class PersistenceService:
                         canonical_id = await self.persist_bank_account(item)
                     elif isinstance(item, CanonicalFinancialTransaction):
                         canonical_id = await self.persist_financial_transaction(item)
+                    elif isinstance(item, CanonicalCalendarEvent):
+                        canonical_id = await self.persist_calendar_event(item)
                     elif isinstance(item, ExpenseEnrichment):
                         canonical_id = await self.enrich_financial_transaction(
                             source=item.source,
@@ -195,6 +198,8 @@ class PersistenceService:
                 canonical_id = await self.persist_bank_account(canonical)
             elif isinstance(canonical, CanonicalFinancialTransaction):
                 canonical_id = await self.persist_financial_transaction(canonical)
+            elif isinstance(canonical, CanonicalCalendarEvent):
+                canonical_id = await self.persist_calendar_event(canonical)
             elif isinstance(canonical, ExpenseEnrichment):
                 canonical_id = await self.enrich_financial_transaction(
                     source=canonical.source,
@@ -1697,6 +1702,126 @@ class PersistenceService:
         if result.data:
             return _extract_id(result)
         return None
+
+    # =========================================================================
+    # CALENDAR EVENT PERSISTENCE
+    # =========================================================================
+
+    async def _get_zoho_calendar_source_id(self, entity_id: UUID) -> Optional[UUID]:
+        """Resolve this entity's zoho_calendar external_sources id.
+
+        Mirrors _get_bank_account_id's resolve-at-persist-time pattern —
+        the normalizer only ever has entity_id available (see
+        _normalize_event in inngest_functions.py), never source_id.
+        Assumes one active zoho_calendar connection per entity, which is
+        the only shape the OAuth callback can currently create.
+        """
+        result = await asyncio.to_thread(
+            lambda: self.client.table("external_sources")
+            .select("id")
+            .eq("entity_id", str(entity_id))
+            .eq("provider", "zoho_calendar")
+            .limit(1)
+            .execute()
+        )
+        if result.data:
+            return _extract_id(result)
+        return None
+
+    async def persist_calendar_event(self, event: CanonicalCalendarEvent) -> UUID:
+        """Persist a canonical calendar event.
+
+        Uses upsert on natural key (source_id, external_id) — matching
+        calendar_events' unique constraint from the Phase 1 schema
+        migration.
+        """
+        source_id = event.source_id or await self._get_zoho_calendar_source_id(
+            event.entity_id
+        )
+        if source_id is None:
+            raise PersistenceError(
+                "No zoho_calendar external_sources row found for entity "
+                f"{event.entity_id} — cannot persist calendar event without "
+                "a source_id",
+                entity_type="calendar_event",
+                external_id=event.external_id,
+                raw_event_id=event.raw_event_id,
+            )
+
+        data = {
+            "entity_id": str(event.entity_id),
+            "source_id": str(source_id),
+            "external_id": event.external_id,
+            "calendar_uid": event.calendar_uid,
+            "title": event.title,
+            "description": event.description,
+            "location": event.location,
+            "start_at": event.start_at.isoformat() if event.start_at else None,
+            "end_at": event.end_at.isoformat() if event.end_at else None,
+            "all_day": event.all_day,
+            "organizer": event.organizer,
+            "attendees": event.attendees,
+            "status": event.status,
+            "raw_metadata": event.raw_metadata,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+        result = await asyncio.to_thread(
+            lambda: self.client.table("calendar_events")
+            .upsert(data, on_conflict="source_id,external_id")
+            .execute()
+        )
+
+        if not result.data:
+            raise PersistenceError(
+                "Failed to upsert calendar event",
+                entity_type="calendar_event",
+                external_id=event.external_id,
+                raw_event_id=event.raw_event_id,
+            )
+
+        return _extract_id(result)
+
+    async def reconcile_calendar_events(
+        self,
+        source_id: UUID,
+        window_start: datetime,
+        window_end: datetime,
+        seen_external_ids: List[str],
+    ) -> int:
+        """Mark calendar_events rows cancelled if Zoho no longer returns
+        them within a run's own pull window.
+
+        Upsert-only ETL never notices a deletion on its own — Zoho's
+        events-list response simply omits a deleted event, it doesn't come
+        back with a "deleted" flag, so comparing "what this run's pull
+        actually saw" (seen_external_ids) against "what's already stored
+        in that same window" is the only way to detect it. Scoped to
+        [window_start, window_end) so this never touches events outside
+        the window a run actually covered. If a cancelled event's start
+        date is later re-seen by a future run, normalize_calendar_event
+        always writes status="confirmed", so it un-cancels itself via the
+        same upsert — no special-case needed for that direction.
+        """
+        query = (
+            self.client.table("calendar_events")
+            .update({"status": "cancelled"})
+            .eq("source_id", str(source_id))
+            .gte("start_at", window_start.isoformat())
+            .lt("start_at", window_end.isoformat())
+            .neq("status", "cancelled")
+        )
+        # An empty seen_external_ids means "nothing in this window was
+        # seen" — every in-window row should be cancelled, which is what
+        # omitting the NOT IN filter already achieves (a NOT IN against an
+        # empty list is vacuously true for every row, but some postgrest
+        # versions handle an empty IN-list parameter oddly, so this avoids
+        # relying on that rather than risking a malformed filter).
+        if seen_external_ids:
+            query = query.not_.in_("external_id", seen_external_ids)
+
+        result = await asyncio.to_thread(lambda: query.execute())
+        return len(result.data or [])
 
     # =========================================================================
     # PROCESSING STATE MANAGEMENT

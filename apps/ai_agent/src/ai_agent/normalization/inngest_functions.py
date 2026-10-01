@@ -36,6 +36,7 @@ from .squarespace_normalizer import SquarespaceNormalizer
 from .revolut_normalizer import RevolutNormalizer
 from .paypal_normalizer import PayPalNormalizer
 from .shopify_normalizer import ShopifyNormalizer
+from .zoho_calendar_normalizer import ZohoCalendarNormalizer
 from .utils import extract_id, extract_row, extract_rows
 
 logger = logging.getLogger(__name__)
@@ -60,19 +61,20 @@ PROVIDER_NORMALIZERS = {
     "revolut": RevolutNormalizer,
     "paypal": PayPalNormalizer,
     "shopify": ShopifyNormalizer,
+    "zoho_calendar": ZohoCalendarNormalizer,
 }
 
 # Entity type processing order (respects foreign key dependencies)
 ENTITY_TYPE_ORDER = [
     "profile", "product", "customer", "inventory_item", "order", "transaction",
     "bank_account", "financial_transaction", "expense", "payment_transaction",
-    "order_transaction",
+    "order_transaction", "calendar_event",
 ]
 
 # Dependency tiers: types within the same tier share no FK dependencies and
 # can be processed in parallel.  Tiers must still be executed in order.
 ENTITY_TYPE_TIERS: List[List[str]] = [
-    ["profile", "product", "customer", "bank_account"],  # Tier 0 — no dependencies
+    ["profile", "product", "customer", "bank_account", "calendar_event"],  # Tier 0
     ["inventory_item", "order"],                          # Tier 1 — depends on profile/product
     ["transaction", "financial_transaction", "payment_transaction", "order_transaction"],  # Tier 2 — depends on order/bank_account
     ["expense"],                                          # Tier 3 — depends on financial_transaction
@@ -832,6 +834,45 @@ async def normalize_after_shopify_sync(ctx: inngest.Context) -> Dict[str, Any]:
 
 
 @inngest_client.create_function(
+    fn_id="normalize_after_zoho_calendar_sync",
+    trigger=inngest.TriggerEvent(event="zoho_calendar/sync.completed"),
+    retries=2,
+)
+async def normalize_after_zoho_calendar_sync(ctx: inngest.Context) -> Dict[str, Any]:
+    """Trigger normalization after a Zoho Calendar sync completes."""
+    try:
+        event_data = ctx.event.data
+        source_id = event_data.get("source_id")
+        total_items = event_data.get("total_items", 0)
+
+        ctx.logger.info(
+            f"Triggering normalization after Zoho Calendar sync for source "
+            f"{source_id} ({total_items} items)"
+        )
+
+        result = await ctx.step.invoke(
+            "normalize-source-after-zoho-calendar-sync",
+            function=normalize_source,
+            data={
+                "source_id": source_id,
+                "mode": "soft",
+                "batch_size": 100,
+            }
+        )
+
+        return {
+            "status": "completed",
+            "source_id": source_id,
+            "normalization_result": result,
+            "processed_at": datetime.now().isoformat()
+        }
+
+    except Exception as e:
+        ctx.logger.error(f"Error in post-Zoho-Calendar-sync normalization: {str(e)}")
+        raise
+
+
+@inngest_client.create_function(
     fn_id="reprocess_failed_events",
     trigger=inngest.TriggerCron(cron="0 */6 * * *"),  # Every 6 hours
 )
@@ -1422,6 +1463,7 @@ NORMALIZATION_FUNCTIONS = [
     normalize_after_revolut_sync,
     normalize_after_paypal_sync,
     normalize_after_shopify_sync,
+    normalize_after_zoho_calendar_sync,
     reprocess_failed_events,
     reprocess_stuck_processing_events,
     reprocess_failed_manual,

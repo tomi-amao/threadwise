@@ -651,4 +651,50 @@ class ExpenseEnrichment(BaseModel):
 
     # Metadata
     raw_event_id: UUID = Field(description="Raw event that triggered this enrichment")
+
+
+# =============================================================================
+# CALENDAR DOMAIN
+# =============================================================================
+
+
+class CanonicalCalendarEvent(CanonicalBase):
+    """Canonical calendar event model.
+
+    Represents an event pulled from an external calendar (currently Zoho
+    Calendar only). Unlike the commerce/financial models above, this has
+    no counterpart on the push side — pushed events (tax deadlines,
+    collection launches) are written directly to the provider via
+    calendar_push_service, not round-tripped through normalization.
+    """
+
+    entity_id: UUID = Field(description="Parent entity ID for multi-tenant scoping")
+    # Not settable by the normalizer — _normalize_event()/get_normalizer() only
+    # ever pass entity_id through, the same way CanonicalFinancialTransaction's
+    # bank_account_id is resolved at persistence time rather than normalization
+    # time. Resolved from (entity_id, provider='zoho_calendar') in
+    # persist_calendar_event.
+    source_id: Optional[UUID] = Field(
+        default=None, description="FK to external_sources, resolved at persist time"
+    )
+
+    calendar_uid: str = Field(description="Which of the user's calendars this is in")
+    title: Optional[str] = None
+    description: Optional[str] = None
+    location: Optional[str] = None
+
+    start_at: Optional[datetime] = None
+    end_at: Optional[datetime] = None
+    all_day: bool = False
+
+    organizer: Optional[str] = None
+    attendees: List[Dict[str, Any]] = Field(default_factory=list)
+
+    # Free text (e.g. "confirmed", "cancelled") — provider-specific values
+    # are passed through rather than mapped to an enum, since this is
+    # read-only display data, not something ThreadWise acts on.
+    status: Optional[str] = None
+
+    # Full original payload, kept for fields not yet modeled above.
+    raw_metadata: Dict[str, Any] = Field(default_factory=dict)
     warnings: List[str] = Field(default_factory=list)

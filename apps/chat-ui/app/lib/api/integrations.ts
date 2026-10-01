@@ -197,6 +197,20 @@ export async function createExternalSource(
 }
 
 /**
+ * Build the URL for the "Connect with Zoho" link on the Integrations page.
+ *
+ * Unlike every other provider, Zoho Calendar isn't connected by submitting
+ * a form to createExternalSource — it needs real user-consent OAuth, so the
+ * button is a plain link straight to the backend's redirect-to-Zoho route.
+ * The backend builds the actual authorize URL (scopes, client_id, signed
+ * state); this helper never needs to know any of that.
+ */
+export function getZohoCalendarOAuthStartUrl(entityId: string): string {
+  const baseUrl = getApiBaseUrl();
+  return `${baseUrl}/oauth/zoho_calendar/start?entity_id=${encodeURIComponent(entityId)}`;
+}
+
+/**
  * Validate the API key for an integration
  *
  * Tests the API key by making a request to the provider's API.

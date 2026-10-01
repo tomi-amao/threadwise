@@ -23,6 +23,7 @@ from .sync_functions import (
 from .revolut_sync_functions import REVOLUT_SYNC_FUNCTIONS
 from .paypal_sync_functions import PAYPAL_SYNC_FUNCTIONS
 from .shopify_sync_functions import SHOPIFY_SYNC_FUNCTIONS
+from .zoho_calendar_sync_functions import ZOHO_CALENDAR_SYNC_FUNCTIONS
 from .journal_generation_functions import generate_all_journals_job, JOURNAL_GENERATION_FUNCTIONS
 
 # Import normalization functions and triggers
@@ -34,6 +35,7 @@ from ...normalization.inngest_functions import (
     normalize_after_revolut_sync,
     normalize_after_paypal_sync,
     normalize_after_shopify_sync,
+    normalize_after_zoho_calendar_sync,
     reprocess_failed_events,
     reprocess_stuck_processing_events,
     reprocess_failed_manual,
@@ -70,6 +72,7 @@ __all__ = [
     "REVOLUT_SYNC_FUNCTIONS",
     "PAYPAL_SYNC_FUNCTIONS",
     "SHOPIFY_SYNC_FUNCTIONS",
+    "ZOHO_CALENDAR_SYNC_FUNCTIONS",
     "generate_all_journals_job",
     "JOURNAL_GENERATION_FUNCTIONS",
     # Normalization functions
@@ -80,6 +83,7 @@ __all__ = [
     "normalize_after_revolut_sync",
     "normalize_after_paypal_sync",
     "normalize_after_shopify_sync",
+    "normalize_after_zoho_calendar_sync",
     "reprocess_failed_events",
     "reprocess_stuck_processing_events",
     "reprocess_failed_manual",

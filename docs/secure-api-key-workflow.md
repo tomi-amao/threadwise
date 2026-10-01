@@ -914,6 +914,111 @@ VITE_SUPABASE_ANON_KEY=eyJ...  # Public key only
 
 ---
 
+## 11. OAuth-Based Providers (Zoho Calendar)
+
+Everything above describes the **credentials-only** flow: a user pastes an
+API key (or, for Shopify/PayPal, a `client_id`/`client_secret` pair), the
+backend exchanges it for a token with no consent screen, and the result is
+Vault-encrypted per `external_sources` row. Zoho Calendar can't work that
+way — there's no credentials-only path to a specific person's own
+calendar — so it uses real 3-legged OAuth2 instead. This section describes
+what's different and, more importantly, what's *still the same*: the
+security model this whole document is about still holds, it's just applied
+one level up.
+
+### What's different: an app-wide client, not a per-connection secret
+
+Every flow above treats the credential as something **each user supplies**
+and that gets encrypted **per connection**. Zoho Calendar's OAuth client
+(`zoho_client_id`/`zoho_client_secret`) is the opposite: it identifies
+**ThreadWise itself** to Zoho, registered once in Zoho's API Console, and
+lives in app-wide config (`core/config.py` / `.env`) rather than in Vault.
+
+This is standard OAuth shape, not a weaker version of the credentials-only
+model — it's the same relationship as any "Sign in with Google" button on a
+multi-tenant SaaS product. One registered app, many separate end users each
+granting their own consent. Two different ThreadWise entities connecting
+two different Zoho accounts produce two separate `external_sources` rows
+with two separate refresh tokens, authorized through the same app-level
+client — never a shared token.
+
+### What's the same: the actual per-entity secret still goes through Vault
+
+The refresh token Zoho issues after a user's own consent **is** this
+connection's equivalent of an API key, and it's stored exactly the same way
+as every other provider's credentials — `store_api_key_secure`/
+`get_api_key_secure` against the same `external_sources.api_key_secret_id`
+column, just holding a different shape of secret:
+
+```json
+{ "refresh_token": "1000.abc123...", "api_domain": "https://www.zohoapis.eu" }
+```
+
+So the threat model in Section 5 is unchanged: the frontend never receives
+the refresh token (or the app's client secret) — its "Connect with Zoho"
+button is a plain `<a href="/oauth/zoho_calendar/start?entity_id=...">`
+link, and it never constructs an authorize URL or sees a token itself.
+
+### The flow
+
+```
+User clicks "Connect with Zoho"
+    ↓
+GET /oauth/zoho_calendar/start?entity_id=...
+    ↓ 302 to Zoho's consent screen (signed `state` embeds entity_id)
+Zoho redirects back with ?code=...&state=...
+    ↓
+GET /oauth/zoho_calendar/callback
+    1. verify_state(state) → entity_id        (HMAC-signed, 10-min TTL)
+    2. exchange_code_for_tokens(code)          (hard-fails if no refresh_token)
+    3. create the "ThreadWise Deadlines" calendar
+    4. create_external_source(..., credentials={"api_key": json_blob})
+    5. update_api_key_status(source_id, "valid")
+    ↓ 302 to {frontend_url}/app/integrations?zoho_calendar=connected
+```
+
+**Why `state` must be signed** (`apps/ai_agent/src/ai_agent/integrations/zoho_calendar/oauth.py`):
+the integrations router has no request auth, so `entity_id` is otherwise
+attacker-controlled at the callback — an unsigned `state` would let anyone
+attach their own Zoho calendar to someone else's `entity_id` mid-flow.
+`mint_state`/`verify_state` use `base64(entity_id|nonce|expiry)` +
+`hmac_sha256(zoho_client_secret, payload)`, reusing the app's own client
+secret as the HMAC key rather than adding a fifth env var.
+
+**Why the callback redirects to `frontend_url`, not a relative path**: the
+callback executes on this backend (`ai_agent`), not the frontend
+(`chat-ui`) — different host/port in dev. A bare `/app/integrations` path
+would resolve against the backend's own origin when the browser follows
+the redirect, so `frontend_url` is a dedicated setting purely so this
+backend can build an absolute URL back to the frontend.
+
+### Zoho-specific quirks (none of these are obvious from a REST client)
+
+- The token endpoint returns **HTTP 200 with an `{"error": ...}` body** on
+  a bad/expired code — `response.raise_for_status()` doesn't catch this;
+  the exchange code inspects the body explicitly.
+- The authorize URL **must** include both `access_type=offline` and
+  `prompt=consent`, or reconnecting an already-authorized account silently
+  returns no `refresh_token` — the exchange function hard-fails if one is
+  missing rather than storing a half-working connection.
+- Refresh tokens are capped at 20 per client per user with silent eviction
+  of the oldest — `delete_external_source` revokes the token on disconnect
+  so repeated connect/disconnect doesn't quietly break other connections.
+- Zoho's write endpoints (create/update a calendar or event) take a single
+  query parameter whose value is a JSON **string** (`calendarData`,
+  `eventdata`) — never a JSON request body, despite every read endpoint
+  looking like a normal REST API.
+
+### Disconnect
+
+Same UI affordance as every other provider, but `external_sync_service.py`'s
+`delete_external_source` adds one extra step for this provider: it calls
+Zoho's `/oauth/v2/token/revoke` with the stored refresh token before
+deleting the Vault secret, best-effort (a failure here is logged, not
+raised — the local disconnect still proceeds either way).
+
+---
+
 ## Conclusion
 
 This end-to-end workflow provides **bank-level security** for API key management while maintaining **developer-friendly UX**. Key strengths:

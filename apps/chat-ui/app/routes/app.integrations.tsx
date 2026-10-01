@@ -6,6 +6,7 @@
  */
 
 import React, { useState, useEffect, useCallback } from 'react';
+import { useSearchParams } from 'react-router';
 import { toast } from 'sonner';
 import {
   ArrowsClockwise,
@@ -34,6 +35,7 @@ import {
   CurrencyCircleDollar,
   BookOpen,
   ShoppingBag,
+  CalendarBlank,
 } from 'phosphor-react';
 import { Button } from '~/components/ui/button';
 import { Input } from '~/components/ui/input';
@@ -47,6 +49,7 @@ import {
   validateApiKey,
   reprocessFailedEvents,
   deleteExternalSource,
+  getZohoCalendarOAuthStartUrl,
   type IntegrationSummary,
 } from '~/lib/api/integrations';
 import { SyncProgressToast } from '~/components/integrations/SyncProgressToast';
@@ -87,6 +90,18 @@ const PROVIDERS = {
     color: 'green',
     credentialType: 'compound' as const,
   },
+  zoho_calendar: {
+    name: 'Zoho Calendar',
+    icon: <CalendarBlank size={24} weight="duotone" className="text-red-400" />,
+    description:
+      'Two-way sync with your Zoho Calendar: pull your events in, and push tax deadlines and collection launch dates out to a dedicated "ThreadWise Deadlines" calendar',
+    endpoints: ['calendar_events', 'tax_deadlines', 'collection_launches'],
+    color: 'red',
+    // Not a compound credential (client_id + secret typed into a form) —
+    // Zoho Calendar needs real user-consent OAuth, so this provider is
+    // connected via a redirect, never the manual form below.
+    credentialType: 'oauth' as const,
+  },
 };
 
 // Endpoint icons for visual distinction
@@ -101,6 +116,9 @@ const endpointIcons: Record<string, React.ReactNode> = {
   balance_transactions: <Coins size={14} weight="duotone" />,
   accounts: <Buildings size={14} weight="duotone" />,
   expenses: <Coins size={14} weight="duotone" />,
+  calendar_events: <CalendarBlank size={14} weight="duotone" />,
+  tax_deadlines: <CalendarBlank size={14} weight="duotone" />,
+  collection_launches: <CalendarBlank size={14} weight="duotone" />,
 };
 
 // Status styles
@@ -255,6 +273,10 @@ function IntegrationCard({
     providerConfig &&
     'credentialType' in providerConfig &&
     providerConfig.credentialType === 'compound';
+  const isOAuth =
+    providerConfig &&
+    'credentialType' in providerConfig &&
+    providerConfig.credentialType === 'oauth';
   const [showUpdateApiKey, setShowUpdateApiKey] = useState(false);
   const [newApiKey, setNewApiKey] = useState('');
   const [newClientId, setNewClientId] = useState('');
@@ -345,19 +367,33 @@ function IntegrationCard({
         {/* API Key Error Message */}
         {integration.api_key_status === 'invalid' && integration.api_key_error && (
           <div className="mb-4 p-3 rounded-xl bg-orange-500/10 border border-orange-500/20">
-            <p className="text-sm text-orange-500 font-medium">API Key Issue</p>
+            <p className="text-sm text-orange-500 font-medium">
+              {isOAuth ? 'Connection Issue' : 'API Key Issue'}
+            </p>
             <p className="text-sm text-orange-500/80 mt-1">{integration.api_key_error}</p>
-            <button
-              onClick={() => setShowUpdateApiKey(true)}
-              className="mt-2 text-xs text-orange-400 hover:text-orange-300 underline"
-            >
-              {isCompound ? 'Update Credentials' : 'Update API Key'}
-            </button>
+            {isOAuth ? (
+              // No manual credential to type back in — a broken Zoho
+              // connection (a revoked/expired refresh token) can only be
+              // fixed by re-running consent, same as the initial connect.
+              <a
+                href={getZohoCalendarOAuthStartUrl(integration.entity_id || '')}
+                className="mt-2 inline-block text-xs text-orange-400 hover:text-orange-300 underline"
+              >
+                Reconnect with Zoho
+              </a>
+            ) : (
+              <button
+                onClick={() => setShowUpdateApiKey(true)}
+                className="mt-2 text-xs text-orange-400 hover:text-orange-300 underline"
+              >
+                {isCompound ? 'Update Credentials' : 'Update API Key'}
+              </button>
+            )}
           </div>
         )}
 
         {/* Update API Key Form */}
-        {showUpdateApiKey && (
+        {!isOAuth && showUpdateApiKey && (
           <div className="mb-4 p-3 rounded-xl bg-muted/50 border border-border space-y-2">
             <p className="text-sm font-medium text-foreground">
               {isCompound ? 'Update Credentials' : 'Update API Key'}
@@ -918,6 +954,7 @@ function AddIntegrationForm({
   const providerConfig = PROVIDERS[provider];
   const isCompound =
     'credentialType' in providerConfig && providerConfig.credentialType === 'compound';
+  const isOAuth = 'credentialType' in providerConfig && providerConfig.credentialType === 'oauth';
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1028,128 +1065,161 @@ function AddIntegrationForm({
           </div>
         </div>
 
-        {/* External Account ID */}
-        <div>
-          <label className="block text-sm font-medium text-foreground mb-2">
-            {provider === 'squarespace'
-              ? 'Site ID'
-              : provider === 'revolut'
-                ? 'Business ID'
-                : provider === 'shopify'
-                  ? 'Shop Domain'
-                  : 'Account Email'}
-            <span className="text-destructive ml-1">*</span>
-          </label>
-          <Input
-            placeholder={
-              provider === 'squarespace'
-                ? 'Enter your Squarespace site ID'
-                : provider === 'revolut'
-                  ? 'Enter your Revolut business ID'
-                  : provider === 'shopify'
-                    ? 'mystore.myshopify.com'
-                    : 'Enter your PayPal account email'
-            }
-            value={externalAccountId}
-            onChange={e => setExternalAccountId(e.target.value)}
-            className="h-11"
-          />
-        </div>
+        {/* OAuth providers (Zoho Calendar) connect via a redirect, not this
+            form — there's no account ID or credential to type in, since the
+            calendar and the tokens are both determined by whichever Zoho
+            account the user authorizes with. */}
+        {isOAuth && (
+          <div className="p-4 rounded-xl bg-muted/50 border border-border space-y-3">
+            <p className="text-sm text-muted-foreground">
+              Zoho Calendar uses a sign-in flow rather than a pasted key. You&apos;ll be asked to
+              log into Zoho and grant access — make sure it&apos;s the account whose calendar you
+              want synced.
+            </p>
+            {entity?.id && (
+              <a href={getZohoCalendarOAuthStartUrl(entity.id)}>
+                <Button
+                  type="button"
+                  className={cn(
+                    'px-6 bg-gradient-to-r from-primary to-primary/90',
+                    'hover:from-primary/90 hover:to-primary/80',
+                    'shadow-lg shadow-primary/20'
+                  )}
+                >
+                  <CalendarBlank size={16} weight="bold" className="mr-2" />
+                  Connect with Zoho
+                </Button>
+              </a>
+            )}
+          </div>
+        )}
 
-        {/* Display Name */}
-        <div>
-          <label className="block text-sm font-medium text-foreground mb-2">
-            Display Name <span className="text-muted-foreground font-normal">(optional)</span>
-          </label>
-          <Input
-            placeholder="My Store"
-            value={displayName}
-            onChange={e => setDisplayName(e.target.value)}
-            className="h-11"
-          />
-        </div>
-
-        {/* Credentials */}
-        {isCompound ? (
+        {!isOAuth && (
           <>
+            {/* External Account ID */}
             <div>
               <label className="block text-sm font-medium text-foreground mb-2">
-                Client ID
+                {provider === 'squarespace'
+                  ? 'Site ID'
+                  : provider === 'revolut'
+                    ? 'Business ID'
+                    : provider === 'shopify'
+                      ? 'Shop Domain'
+                      : 'Account Email'}
                 <span className="text-destructive ml-1">*</span>
               </label>
               <Input
                 placeholder={
-                  provider === 'shopify'
-                    ? 'Enter your Shopify Client ID'
-                    : 'Enter your PayPal Client ID'
+                  provider === 'squarespace'
+                    ? 'Enter your Squarespace site ID'
+                    : provider === 'revolut'
+                      ? 'Enter your Revolut business ID'
+                      : provider === 'shopify'
+                        ? 'mystore.myshopify.com'
+                        : 'Enter your PayPal account email'
                 }
-                value={clientId}
-                onChange={e => setClientId(e.target.value)}
+                value={externalAccountId}
+                onChange={e => setExternalAccountId(e.target.value)}
                 className="h-11"
               />
             </div>
+
+            {/* Display Name */}
             <div>
               <label className="block text-sm font-medium text-foreground mb-2">
-                Secret
-                <span className="text-destructive ml-1">*</span>
+                Display Name <span className="text-muted-foreground font-normal">(optional)</span>
               </label>
-              <div className="relative">
-                <Input
-                  type={showApiKey ? 'text' : 'password'}
-                  placeholder={
-                    provider === 'shopify'
-                      ? 'Enter your Shopify Client Secret'
-                      : 'Enter your PayPal Secret'
-                  }
-                  value={clientSecret}
-                  onChange={e => setClientSecret(e.target.value)}
-                  className="pr-10 h-11"
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowApiKey(!showApiKey)}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
-                >
-                  {showApiKey ? <EyeSlash size={18} /> : <Eye size={18} />}
-                </button>
-              </div>
-              <p className="text-xs text-muted-foreground mt-2">
-                {provider === 'shopify'
-                  ? 'Get your Client ID and Client Secret from Shopify Partners → Apps → App setup'
-                  : 'Get your Client ID and Secret from the PayPal Developer Dashboard under REST API apps'}
-              </p>
-            </div>
-          </>
-        ) : (
-          <div>
-            <label className="block text-sm font-medium text-foreground mb-2">
-              API Key
-              <span className="text-destructive ml-1">*</span>
-            </label>
-            <div className="relative">
               <Input
-                type={showApiKey ? 'text' : 'password'}
-                placeholder="Enter your API key"
-                value={apiKey}
-                onChange={e => setApiKey(e.target.value)}
-                className="pr-10 h-11"
+                placeholder="My Store"
+                value={displayName}
+                onChange={e => setDisplayName(e.target.value)}
+                className="h-11"
               />
-              <button
-                type="button"
-                onClick={() => setShowApiKey(!showApiKey)}
-                className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
-              >
-                {showApiKey ? <EyeSlash size={18} /> : <Eye size={18} />}
-              </button>
             </div>
-            <p className="text-xs text-muted-foreground mt-2">
-              {provider === 'squarespace'
-                ? 'Generate an API key from Squarespace Settings → Advanced → Developer API Keys'
-                : provider === 'shopify'
-                  ? 'Generate an Admin API access token from Shopify Admin → Apps → Develop apps'
-                  : 'Get your API key from Revolut Business Settings'}
-            </p>
-          </div>
+
+            {/* Credentials */}
+            {isCompound ? (
+              <>
+                <div>
+                  <label className="block text-sm font-medium text-foreground mb-2">
+                    Client ID
+                    <span className="text-destructive ml-1">*</span>
+                  </label>
+                  <Input
+                    placeholder={
+                      provider === 'shopify'
+                        ? 'Enter your Shopify Client ID'
+                        : 'Enter your PayPal Client ID'
+                    }
+                    value={clientId}
+                    onChange={e => setClientId(e.target.value)}
+                    className="h-11"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-foreground mb-2">
+                    Secret
+                    <span className="text-destructive ml-1">*</span>
+                  </label>
+                  <div className="relative">
+                    <Input
+                      type={showApiKey ? 'text' : 'password'}
+                      placeholder={
+                        provider === 'shopify'
+                          ? 'Enter your Shopify Client Secret'
+                          : 'Enter your PayPal Secret'
+                      }
+                      value={clientSecret}
+                      onChange={e => setClientSecret(e.target.value)}
+                      className="pr-10 h-11"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowApiKey(!showApiKey)}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+                    >
+                      {showApiKey ? <EyeSlash size={18} /> : <Eye size={18} />}
+                    </button>
+                  </div>
+                  <p className="text-xs text-muted-foreground mt-2">
+                    {provider === 'shopify'
+                      ? 'Get your Client ID and Client Secret from Shopify Partners → Apps → App setup'
+                      : 'Get your Client ID and Secret from the PayPal Developer Dashboard under REST API apps'}
+                  </p>
+                </div>
+              </>
+            ) : (
+              <div>
+                <label className="block text-sm font-medium text-foreground mb-2">
+                  API Key
+                  <span className="text-destructive ml-1">*</span>
+                </label>
+                <div className="relative">
+                  <Input
+                    type={showApiKey ? 'text' : 'password'}
+                    placeholder="Enter your API key"
+                    value={apiKey}
+                    onChange={e => setApiKey(e.target.value)}
+                    className="pr-10 h-11"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowApiKey(!showApiKey)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+                  >
+                    {showApiKey ? <EyeSlash size={18} /> : <Eye size={18} />}
+                  </button>
+                </div>
+                <p className="text-xs text-muted-foreground mt-2">
+                  {provider === 'squarespace'
+                    ? 'Generate an API key from Squarespace Settings → Advanced → Developer API Keys'
+                    : provider === 'shopify'
+                      ? 'Generate an Admin API access token from Shopify Admin → Apps → Develop apps'
+                      : 'Get your API key from Revolut Business Settings'}
+                </p>
+              </div>
+            )}
+          </>
         )}
 
         {/* Error Message */}
@@ -1194,6 +1264,7 @@ function AddIntegrationForm({
 
 export default function IntegrationsPage() {
   const { entity } = useAuth();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [integrations, setIntegrations] = useState<IntegrationSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [syncingIds, setSyncingIds] = useState<Set<string>>(new Set());
@@ -1258,6 +1329,32 @@ export default function IntegrationsPage() {
     const interval = setInterval(fetchData, 15000);
     return () => clearInterval(interval);
   }, [fetchData]);
+
+  // The Zoho Calendar OAuth callback redirects back here with a
+  // ?zoho_calendar= result — this app never sees the OAuth flow itself
+  // (it's entirely backend-driven), so this is the only place a toast for
+  // it can be shown. The params are stripped right after so a page refresh
+  // doesn't re-show the toast.
+  useEffect(() => {
+    const result = searchParams.get('zoho_calendar');
+    if (!result) return;
+
+    if (result === 'connected') {
+      toast.success('Zoho Calendar connected');
+      fetchData();
+    } else if (result === 'error') {
+      const reason = searchParams.get('reason') || 'unknown_error';
+      toast.error(`Failed to connect Zoho Calendar (${reason})`);
+    }
+
+    const next = new URLSearchParams(searchParams);
+    next.delete('zoho_calendar');
+    next.delete('reason');
+    setSearchParams(next, { replace: true });
+    // Deliberately empty deps — this consumes a one-time redirect result on
+    // mount, not something that should re-run when fetchData/searchParams
+    // identity changes.
+  }, []);
 
   // Close sync progress dialog
   const handleCloseSyncProgress = () => {

@@ -53,7 +53,22 @@ class Settings(BaseSettings):
     
     # Development settings
     inngest_dev: Optional[str] = None
-    
+
+    # Zoho Calendar OAuth — ThreadWise's own registered OAuth client (app-wide,
+    # unlike Shopify/PayPal where each user brings their own custom-app
+    # credentials, so those never appear here). Per-entity refresh tokens are
+    # still stored per-connection via Vault, same as every other provider.
+    zoho_client_id: str = ""
+    zoho_client_secret: str = ""
+    zoho_redirect_uri: str = ""
+    zoho_accounts_domain: str = "accounts.zoho.com"
+
+    # Where the browser is redirected after an OAuth callback finishes —
+    # this backend has no other reason to know the frontend's own origin
+    # (CORS is wide open, not origin-specific), but a server-issued redirect
+    # needs an absolute URL, not a path relative to this backend's own host.
+    frontend_url: str = "http://localhost:5174"
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"

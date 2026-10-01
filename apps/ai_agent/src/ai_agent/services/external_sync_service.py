@@ -4,6 +4,7 @@ Handles bulk loading of raw API data without transformation.
 """
 
 import asyncio
+import json
 import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple, Union, cast
@@ -629,9 +630,10 @@ class ExternalSyncService:
         """Delete an external source and all associated data.
 
         Cascade:
-        1. Delete external_raw_events for this source
-        2. Remove API key from Vault via delete_api_key_secure RPC
-        3. Delete external_sources record
+        1. Revoke provider-side tokens where applicable (Zoho Calendar only)
+        2. Delete external_raw_events for this source
+        3. Remove API key from Vault via delete_api_key_secure RPC
+        4. Delete external_sources record
 
         Returns:
             Summary with counts of deleted records
@@ -641,7 +643,28 @@ class ExternalSyncService:
         if not source:
             return None
 
-        # 1. Delete raw events
+        # 1. Revoke provider-side tokens. Zoho Calendar specifically: Zoho
+        # caps refresh tokens at 20 per client per user and silently evicts
+        # the oldest, so a stale, un-revoked token left behind here would
+        # otherwise keep counting against that cap forever. Must happen
+        # before step 3 deletes the Vault-encrypted copy we'd need to revoke
+        # it. Best-effort — a failure here shouldn't block disconnecting the
+        # source in our own database.
+        if source.get("provider") == "zoho_calendar":
+            try:
+                api_key = await self.get_api_key(source_id)
+                if api_key:
+                    refresh_token = json.loads(api_key).get("refresh_token")
+                    if refresh_token:
+                        from ..integrations.zoho_calendar.oauth import (
+                            revoke_refresh_token,
+                        )
+
+                        await revoke_refresh_token(refresh_token)
+            except Exception as e:
+                logger.warning(f"Failed to revoke Zoho token for {source_id}: {e}")
+
+        # 2. Delete raw events
         events_result = await asyncio.to_thread(
             lambda: self.client.table("external_raw_events")
             .delete()
@@ -650,7 +673,7 @@ class ExternalSyncService:
         )
         events_deleted = len(events_result.data) if events_result.data else 0
 
-        # 2. Remove API key from Vault
+        # 3. Remove API key from Vault
         vault_cleaned = False
         try:
             await asyncio.to_thread(
@@ -663,7 +686,7 @@ class ExternalSyncService:
         except Exception as e:
             logger.warning(f"Failed to delete Vault key for {source_id}: {e}")
 
-        # 3. Delete external_sources record
+        # 4. Delete external_sources record
         await asyncio.to_thread(
             lambda: self.client.table("external_sources")
             .delete()
