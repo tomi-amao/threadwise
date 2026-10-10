@@ -1,10 +1,10 @@
 procs:
   web:
-    shell: "pnpm --filter threadwise-chat-ui dev"
+    shell: 'pnpm --filter threadwise-chat-ui dev'
 
   agent:
-    shell: "poetry run langgraph dev --port 2024 --no-browser"
-    cwd: "apps/ai_agent"
+    shell: 'poetry run langgraph dev --port 2024 --no-browser'
+    cwd: 'apps/ai_agent'
 
   inngest:
-    shell: "npx inngest-cli@latest dev -u http://localhost:2024/api/inngest"
+    shell: 'npx --yes inngest-cli@latest dev -u http://localhost:2024/api/inngest'

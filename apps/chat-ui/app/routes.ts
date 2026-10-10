@@ -53,4 +53,5 @@ export default [
   route('api/reports/account-drilldown', 'routes/api.reports.account-drilldown.tsx'),
   route('api/reports/cash-flow-pack', 'routes/api.reports.cash-flow-pack.tsx'),
   route('api/tax/ct600-pack', 'routes/api.tax.ct600-pack.tsx'),
+  route('api/collections/plan-pack', 'routes/api.collections.plan-pack.tsx'),
 ] satisfies RouteConfig;

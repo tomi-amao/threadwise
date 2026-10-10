@@ -21,6 +21,16 @@ import {
 import { Button } from '~/components/ui/button';
 import { getServerSupabaseClient } from '~/lib/supabase';
 import { cn } from '~/lib/utils';
+import {
+  computePlanProjections,
+  DEFAULT_PLAN_COST_CATEGORIES,
+  type CollectionPlanCost,
+  type CollectionPlanLine,
+  type CollectionPlanProjections,
+  type CollectionPlanRecord,
+} from '~/lib/collection-plans';
+import { fetchFxRate, type FxRateResult } from '~/lib/api/collection-plans.server';
+import { CollectionPlanPanel } from '~/components/collections/CollectionPlanPanel';
 
 export const meta: MetaFunction = () => [
   { title: 'Collections - ThreadWise' },
@@ -95,6 +105,13 @@ interface CollectionCostRow {
   transaction: FinancialTransactionRow | null;
 }
 
+export interface CollectionPlanData {
+  plan: CollectionPlanRecord;
+  lines: CollectionPlanLine[];
+  costs: CollectionPlanCost[];
+  projections: CollectionPlanProjections;
+}
+
 interface SalesAggregate {
   units: number;
   revenue: number;
@@ -128,6 +145,7 @@ interface CollectionSummary {
   grossProfit: number;
   grossMargin: number;
   budgetRemaining: number | null;
+  plan: CollectionPlanData | null;
 }
 
 interface LoaderData {
@@ -142,6 +160,7 @@ interface LoaderData {
   summaries: CollectionSummary[];
   selectedCollectionId: string | null;
   selectedCollection: CollectionSummary | null;
+  selectedPlanFxRate: FxRateResult | null;
   productOptions: ProductRow[];
   transactionOptions: FinancialTransactionRow[];
 }
@@ -467,6 +486,14 @@ export async function loader({ request }: LoaderFunctionArgs): Promise<LoaderDat
   const selectedCollectionId = url.searchParams.get('collection');
   const entityId = await resolveEntityId(supabase);
 
+  // It's the logged-in entity that actually holds any collaboration
+  // agreement, not the ThreadWise platform — payout labels in the plan use
+  // this name rather than hardcoding "ThreadWise".
+  const entityName = entityId
+    ? ((await supabase.from('entities').select('name').eq('id', entityId).maybeSingle()).data
+        ?.name ?? null)
+    : null;
+
   if (!entityId) {
     return {
       stats: {
@@ -480,74 +507,101 @@ export async function loader({ request }: LoaderFunctionArgs): Promise<LoaderDat
       summaries: [],
       selectedCollectionId: null,
       selectedCollection: null,
+      selectedPlanFxRate: null,
       productOptions: [],
       transactionOptions: [],
     };
   }
 
-  const [collectionsRes, membershipsRes, costsRes, productsRes, lineItems, transactions] =
-    await Promise.all([
+  const [
+    collectionsRes,
+    membershipsRes,
+    costsRes,
+    productsRes,
+    lineItems,
+    transactions,
+    plansRes,
+    planLinesRes,
+    planCostsRes,
+  ] = await Promise.all([
+    supabase
+      .from('collections')
+      .select(
+        'id, name, slug, status, collection_type, starts_at, ends_at, launch_date, planned_budget_amount, budget_currency, external_ref, metadata, created_at, updated_at'
+      )
+      .eq('entity_id', entityId)
+      .order('created_at', { ascending: false }),
+    supabase
+      .from('collection_products')
+      .select(
+        'id, collection_id, product_id, sku, variant_external_id, display_order, inclusion_reason, allocation_weight, created_at, products(id, name, provider, status, product_type, metadata)'
+      )
+      .order('display_order', { ascending: true, nullsFirst: false })
+      .order('created_at', { ascending: true }),
+    supabase
+      .from('collection_costs')
+      .select(
+        'id, collection_id, financial_transaction_id, cost_type, notes, created_at, financial_transactions(id, description, counterparty_name, amount, base_amount, occurred_at, currency_code, base_currency_code)'
+      )
+      .eq('entity_id', entityId)
+      .order('created_at', { ascending: false }),
+    supabase
+      .from('products')
+      .select('id, name, provider, status, product_type, metadata, variants')
+      .eq('entity_id', entityId)
+      .neq('status', 'archived')
+      .order('name'),
+    paginateAll<{
+      id: string;
+      product_id: string | null;
+      product_name: string | null;
+      order_id: string;
+      quantity: number;
+      total_price_amount: number | null;
+    }>((from, to) =>
       supabase
-        .from('collections')
+        .from('order_line_items')
+        .select('id, product_id, product_name, order_id, quantity, total_price_amount')
+        .range(from, to)
+    ),
+    paginateAll<{
+      id: string;
+      entity_id: string;
+      description: string | null;
+      counterparty_name: string | null;
+      amount: number | null;
+      base_amount: number | null;
+      occurred_at: string | null;
+      currency_code: string | null;
+      base_currency_code: string | null;
+      metadata: Record<string, unknown> | null;
+    }>((from, to) =>
+      supabase
+        .from('financial_transactions')
         .select(
-          'id, name, slug, status, collection_type, starts_at, ends_at, launch_date, planned_budget_amount, budget_currency, external_ref, metadata, created_at, updated_at'
+          'id, entity_id, description, counterparty_name, amount, base_amount, occurred_at, currency_code, base_currency_code, metadata'
         )
         .eq('entity_id', entityId)
-        .order('created_at', { ascending: false }),
-      supabase
-        .from('collection_products')
-        .select(
-          'id, collection_id, product_id, sku, variant_external_id, display_order, inclusion_reason, allocation_weight, created_at, products(id, name, provider, status, product_type, metadata)'
-        )
-        .order('display_order', { ascending: true, nullsFirst: false })
-        .order('created_at', { ascending: true }),
-      supabase
-        .from('collection_costs')
-        .select(
-          'id, collection_id, financial_transaction_id, cost_type, notes, created_at, financial_transactions(id, description, counterparty_name, amount, base_amount, occurred_at, currency_code, base_currency_code)'
-        )
-        .eq('entity_id', entityId)
-        .order('created_at', { ascending: false }),
-      supabase
-        .from('products')
-        .select('id, name, provider, status, product_type, metadata, variants')
-        .eq('entity_id', entityId)
-        .neq('status', 'archived')
-        .order('name'),
-      paginateAll<{
-        id: string;
-        product_id: string | null;
-        product_name: string | null;
-        order_id: string;
-        quantity: number;
-        total_price_amount: number | null;
-      }>((from, to) =>
-        supabase
-          .from('order_line_items')
-          .select('id, product_id, product_name, order_id, quantity, total_price_amount')
-          .range(from, to)
-      ),
-      paginateAll<{
-        id: string;
-        entity_id: string;
-        description: string | null;
-        counterparty_name: string | null;
-        amount: number | null;
-        base_amount: number | null;
-        occurred_at: string | null;
-        currency_code: string | null;
-        base_currency_code: string | null;
-        metadata: Record<string, unknown> | null;
-      }>((from, to) =>
-        supabase
-          .from('financial_transactions')
-          .select(
-            'id, entity_id, description, counterparty_name, amount, base_amount, occurred_at, currency_code, base_currency_code, metadata'
-          )
-          .eq('entity_id', entityId)
-          .range(from, to)
-      ),
-    ]);
+        .range(from, to)
+    ),
+    supabase
+      .from('collection_plans')
+      .select(
+        'id, collection_id, entity_id, collaboration_type, partner_name, currency, partner_currency, notes, metadata, created_at, updated_at'
+      )
+      .eq('entity_id', entityId),
+    supabase
+      .from('collection_plan_lines')
+      .select(
+        'id, plan_id, product_id, product_name, planned_quantity, unit_cost, unit_selling_price, expected_sell_through_pct, notes, display_order, unit_cost_currency, unit_cost_original, products(name)'
+      )
+      .order('display_order', { ascending: true, nullsFirst: false })
+      .order('created_at', { ascending: true }),
+    supabase
+      .from('collection_plan_costs')
+      .select('id, plan_id, cost_category, description, planned_amount, notes, created_at')
+      .order('created_at', { ascending: true }),
+  ]);
 
   const metadataAccountCodes = Array.from(
     new Set(
@@ -798,6 +852,110 @@ export async function loader({ request }: LoaderFunctionArgs): Promise<LoaderDat
     };
   });
 
+  interface RawPlanLineRow {
+    id: string;
+    plan_id: string;
+    product_id: string | null;
+    product_name: string | null;
+    planned_quantity: number | string | null;
+    unit_cost: number | string | null;
+    unit_selling_price: number | string | null;
+    expected_sell_through_pct: number | string | null;
+    notes: string | null;
+    display_order: number | string | null;
+    unit_cost_currency: string | null;
+    unit_cost_original: number | string | null;
+    products: { name: string | null } | null;
+  }
+
+  const planLinesByPlanId = new Map<string, CollectionPlanLine[]>();
+  for (const row of (planLinesRes.data ?? []) as unknown as RawPlanLineRow[]) {
+    const line: CollectionPlanLine = {
+      id: row.id,
+      planId: row.plan_id,
+      productId: row.product_id ?? null,
+      productName: row.product_name ?? null,
+      linkedProductName: row.products?.name ?? null,
+      plannedQuantity: Number(row.planned_quantity || 0),
+      unitCost: Number(row.unit_cost || 0),
+      unitSellingPrice: Number(row.unit_selling_price || 0),
+      expectedSellThroughPct: Number(row.expected_sell_through_pct ?? 100),
+      notes: row.notes ?? null,
+      displayOrder: row.display_order != null ? Number(row.display_order) : null,
+      unitCostCurrency: row.unit_cost_currency ?? null,
+      unitCostOriginal: row.unit_cost_original != null ? Number(row.unit_cost_original) : null,
+    };
+    const existing = planLinesByPlanId.get(line.planId) ?? [];
+    existing.push(line);
+    planLinesByPlanId.set(line.planId, existing);
+  }
+
+  interface RawPlanCostRow {
+    id: string;
+    plan_id: string;
+    cost_category: string;
+    description: string | null;
+    planned_amount: number | string | null;
+    notes: string | null;
+  }
+
+  const planCostsByPlanId = new Map<string, CollectionPlanCost[]>();
+  for (const row of (planCostsRes.data ?? []) as unknown as RawPlanCostRow[]) {
+    const cost: CollectionPlanCost = {
+      id: row.id,
+      planId: row.plan_id,
+      costCategory: row.cost_category,
+      description: row.description ?? null,
+      plannedAmount: row.planned_amount != null ? Number(row.planned_amount) : null,
+      notes: row.notes ?? null,
+    };
+    const existing = planCostsByPlanId.get(cost.planId) ?? [];
+    existing.push(cost);
+    planCostsByPlanId.set(cost.planId, existing);
+  }
+
+  interface RawPlanRow {
+    id: string;
+    collection_id: string;
+    entity_id: string;
+    collaboration_type: string | null;
+    partner_name: string | null;
+    currency: string | null;
+    partner_currency: string | null;
+    notes: string | null;
+    metadata: Record<string, unknown> | null;
+    created_at: string;
+    updated_at: string;
+  }
+
+  const plansByCollectionId = new Map<string, CollectionPlanData>();
+  for (const row of (plansRes.data ?? []) as unknown as RawPlanRow[]) {
+    const plan: CollectionPlanRecord = {
+      id: row.id,
+      collectionId: row.collection_id,
+      entityId: row.entity_id,
+      collaborationType: row.collaboration_type || 'in_house',
+      partnerName: row.partner_name ?? null,
+      currency: row.currency || 'GBP',
+      partnerCurrency: row.partner_currency ?? null,
+      notes: row.notes ?? null,
+      metadata: row.metadata ?? {},
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    };
+    const lines = planLinesByPlanId.get(plan.id) ?? [];
+    const planCosts = planCostsByPlanId.get(plan.id) ?? [];
+    const projections = computePlanProjections(
+      plan.collaborationType,
+      entityName,
+      plan.partnerName,
+      plan.metadata,
+      lines,
+      planCosts
+    );
+    plansByCollectionId.set(plan.collectionId, { plan, lines, costs: planCosts, projections });
+  }
+
   const summaries = collections.map<CollectionSummary>(collection => {
     const collectionMemberships = memberships
       .filter(membership => membership.collectionId === collection.id)
@@ -868,6 +1026,7 @@ export async function loader({ request }: LoaderFunctionArgs): Promise<LoaderDat
       grossProfit,
       grossMargin,
       budgetRemaining,
+      plan: plansByCollectionId.get(collection.id) ?? null,
     };
   });
 
@@ -875,6 +1034,16 @@ export async function loader({ request }: LoaderFunctionArgs): Promise<LoaderDat
     summaries.find(summary => summary.collection.id === selectedCollectionId) ??
     summaries[0] ??
     null;
+
+  // Only the one plan actually being displayed needs a live rate — fetching
+  // this for every collection's plan on a page that also renders the full
+  // sidebar list would mean one external API call per plan on every load.
+  const selectedPlan = selectedCollection?.plan;
+  const selectedPlanFxRate =
+    selectedPlan?.plan.partnerCurrency &&
+    selectedPlan.plan.partnerCurrency !== selectedPlan.plan.currency
+      ? await fetchFxRate(selectedPlan.plan.currency, selectedPlan.plan.partnerCurrency)
+      : null;
 
   const stats = {
     collections: summaries.length,
@@ -890,6 +1059,7 @@ export async function loader({ request }: LoaderFunctionArgs): Promise<LoaderDat
     summaries,
     selectedCollectionId: selectedCollection?.collection.id ?? null,
     selectedCollection,
+    selectedPlanFxRate,
     productOptions,
     transactionOptions,
   };
@@ -1096,6 +1266,294 @@ export async function action({ request }: ActionFunctionArgs) {
 
     if (error) return { ok: false, error: error.message };
     return { ok: true, intent: 'remove_cost' };
+  }
+
+  if (intent === 'create_plan') {
+    const collectionId = String(body.get('collectionId') || '');
+    if (!collectionId) {
+      return { ok: false, error: 'collectionId is required' };
+    }
+
+    const { data: existingPlan } = await supabase
+      .from('collection_plans')
+      .select('id')
+      .eq('collection_id', collectionId)
+      .maybeSingle();
+
+    if (existingPlan) {
+      return { ok: true, intent: 'create_plan', planId: (existingPlan as { id: string }).id };
+    }
+
+    const { data, error } = await supabase
+      .from('collection_plans')
+      .insert({ collection_id: collectionId, entity_id: entityId, collaboration_type: 'in_house' })
+      .select('id')
+      .single();
+
+    if (error) return { ok: false, error: error.message };
+
+    // Seeded with no amount ("to be determined") — the point is that a
+    // collaboration partner sees the full cost category list upfront, not
+    // that every number is known yet. Best-effort: a failure here shouldn't
+    // block plan creation, since every category can still be added by hand.
+    await supabase.from('collection_plan_costs').insert(
+      DEFAULT_PLAN_COST_CATEGORIES.map(costCategory => ({
+        plan_id: data.id,
+        cost_category: costCategory,
+        planned_amount: null,
+      }))
+    );
+
+    return { ok: true, intent: 'create_plan', planId: data.id };
+  }
+
+  if (intent === 'update_plan') {
+    const planId = String(body.get('planId') || '');
+    const collectionIdFromForm = String(body.get('collectionId') || '');
+    const collaborationType = String(body.get('collaborationType') || 'in_house').trim();
+    const partnerName = String(body.get('partnerName') || '').trim();
+    const currency = String(body.get('currency') || 'GBP').trim();
+    const partnerCurrency = String(body.get('partnerCurrency') || '')
+      .trim()
+      .toUpperCase();
+    const notes = String(body.get('notes') || '').trim();
+    const metadataRaw = String(body.get('metadata') || '{}');
+
+    if (!planId || !collectionIdFromForm) {
+      return { ok: false, error: 'planId and collectionId are required' };
+    }
+    if (partnerCurrency && !/^[A-Z]{3}$/.test(partnerCurrency)) {
+      return { ok: false, error: 'Partner currency must be a 3-letter code, e.g. USD' };
+    }
+
+    let metadata: Record<string, unknown> = {};
+    try {
+      metadata = metadataRaw ? JSON.parse(metadataRaw) : {};
+    } catch {
+      return { ok: false, error: 'metadata must be valid JSON' };
+    }
+
+    const { data: plan } = await supabase
+      .from('collection_plans')
+      .select('collection_id, entity_id')
+      .eq('id', planId)
+      .maybeSingle();
+
+    const planOwnership = plan as { collection_id: string; entity_id: string } | null;
+    if (!planOwnership || planOwnership.collection_id !== collectionIdFromForm) {
+      return { ok: false, error: 'Plan does not belong to this collection' };
+    }
+    if (planOwnership.entity_id !== entityId) {
+      return { ok: false, error: 'Unauthorized' };
+    }
+
+    const { error } = await supabase
+      .from('collection_plans')
+      .update({
+        collaboration_type: collaborationType || 'in_house',
+        partner_name: partnerName || null,
+        currency: currency || 'GBP',
+        partner_currency: partnerCurrency || null,
+        notes: notes || null,
+        metadata,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', planId);
+
+    if (error) return { ok: false, error: error.message };
+    return { ok: true, intent: 'update_plan' };
+  }
+
+  if (intent === 'add_plan_line') {
+    const planId = String(body.get('planId') || '');
+    const productId = String(body.get('productId') || '').trim();
+    const productName = String(body.get('productName') || '').trim();
+    const plannedQuantityRaw = String(body.get('plannedQuantity') || '').trim();
+    const unitCostRaw = String(body.get('unitCost') || '').trim();
+    const unitCostCurrency = String(body.get('unitCostCurrency') || '')
+      .trim()
+      .toUpperCase();
+    const unitSellingPriceRaw = String(body.get('unitSellingPrice') || '').trim();
+    const sellThroughRaw = String(body.get('expectedSellThroughPct') || '100').trim();
+    const notes = String(body.get('notes') || '').trim();
+
+    if (!planId || !collectionIdFromBody) {
+      return { ok: false, error: 'planId and collectionId are required' };
+    }
+    if (!productId && !productName) {
+      return { ok: false, error: 'Choose a product or enter a product name' };
+    }
+    if (
+      [plannedQuantityRaw, unitCostRaw, unitSellingPriceRaw].some(
+        v => !v || Number.isNaN(Number(v))
+      )
+    ) {
+      return {
+        ok: false,
+        error: 'Planned quantity, unit cost, and unit selling price must be numbers',
+      };
+    }
+    if (sellThroughRaw && Number.isNaN(Number(sellThroughRaw))) {
+      return { ok: false, error: 'Expected sell-through must be a number' };
+    }
+
+    const { data: plan } = await supabase
+      .from('collection_plans')
+      .select('collection_id, entity_id, currency')
+      .eq('id', planId)
+      .maybeSingle();
+
+    const planOwnership = plan as {
+      collection_id: string;
+      entity_id: string;
+      currency: string;
+    } | null;
+    if (!planOwnership || planOwnership.collection_id !== collectionIdFromBody) {
+      return { ok: false, error: 'Plan does not belong to this collection' };
+    }
+    if (planOwnership.entity_id !== entityId) {
+      return { ok: false, error: 'Unauthorized' };
+    }
+
+    const planCurrency = planOwnership.currency || 'GBP';
+    const enteredUnitCost = Number(unitCostRaw);
+
+    // If the supplier quotes in a different currency, convert to the
+    // plan's own currency once, now, and store the result as the
+    // authoritative unit_cost — every projection reads that field
+    // unchanged. The original entered amount + currency are kept purely so
+    // the plan can display "£8.50 (≈ $10.00)" using what was actually
+    // entered, not a live-recomputed figure. A failed conversion is
+    // surfaced as an error rather than silently stored wrong, since this
+    // feeds real COGS/margin math.
+    let unitCostForStorage = enteredUnitCost;
+    let unitCostCurrencyForStorage: string | null = null;
+    let unitCostOriginalForStorage: number | null = null;
+
+    if (unitCostCurrency && unitCostCurrency !== planCurrency) {
+      const fxRate = await fetchFxRate(unitCostCurrency, planCurrency);
+      if (!fxRate) {
+        return {
+          ok: false,
+          error: `Couldn't get a live rate for ${unitCostCurrency} right now — try again, or enter the amount in ${planCurrency} directly.`,
+        };
+      }
+      unitCostForStorage = enteredUnitCost * fxRate.rate;
+      unitCostCurrencyForStorage = unitCostCurrency;
+      unitCostOriginalForStorage = enteredUnitCost;
+    }
+
+    const { error } = await supabase.from('collection_plan_lines').insert({
+      plan_id: planId,
+      product_id: productId || null,
+      product_name: productId ? null : productName,
+      planned_quantity: Number(plannedQuantityRaw),
+      unit_cost: unitCostForStorage,
+      unit_cost_currency: unitCostCurrencyForStorage,
+      unit_cost_original: unitCostOriginalForStorage,
+      unit_selling_price: Number(unitSellingPriceRaw),
+      expected_sell_through_pct: sellThroughRaw ? Number(sellThroughRaw) : 100,
+      notes: notes || null,
+    });
+
+    if (error) return { ok: false, error: error.message };
+    return { ok: true, intent: 'add_plan_line' };
+  }
+
+  if (intent === 'remove_plan_line') {
+    const lineId = String(body.get('lineId') || '');
+    if (!lineId || !collectionIdFromBody) {
+      return { ok: false, error: 'lineId and collectionId are required' };
+    }
+
+    const { data: line } = await supabase
+      .from('collection_plan_lines')
+      .select('plan_id, collection_plans(collection_id, entity_id)')
+      .eq('id', lineId)
+      .maybeSingle();
+
+    const linePlan = (
+      line as { collection_plans: { collection_id: string; entity_id: string } | null } | null
+    )?.collection_plans;
+    if (!linePlan || linePlan.collection_id !== collectionIdFromBody) {
+      return { ok: false, error: 'Line does not belong to this collection' };
+    }
+    if (linePlan.entity_id !== entityId) {
+      return { ok: false, error: 'Unauthorized' };
+    }
+
+    const { error } = await supabase.from('collection_plan_lines').delete().eq('id', lineId);
+    if (error) return { ok: false, error: error.message };
+    return { ok: true, intent: 'remove_plan_line' };
+  }
+
+  if (intent === 'add_plan_cost') {
+    const planId = String(body.get('planId') || '');
+    const costCategory = String(body.get('costCategory') || '').trim();
+    const description = String(body.get('description') || '').trim();
+    const plannedAmountRaw = String(body.get('plannedAmount') || '').trim();
+    const notes = String(body.get('notes') || '').trim();
+
+    if (!planId || !costCategory || !collectionIdFromBody) {
+      return { ok: false, error: 'planId, costCategory, and collectionId are required' };
+    }
+    // Amount is optional — a category can be disclosed before its figure is
+    // known ("to be determined"), but if something was typed it must parse.
+    if (plannedAmountRaw && Number.isNaN(Number(plannedAmountRaw))) {
+      return { ok: false, error: 'Planned amount must be a number' };
+    }
+
+    const { data: costPlan } = await supabase
+      .from('collection_plans')
+      .select('collection_id, entity_id')
+      .eq('id', planId)
+      .maybeSingle();
+
+    const planOwnership = costPlan as { collection_id: string; entity_id: string } | null;
+    if (!planOwnership || planOwnership.collection_id !== collectionIdFromBody) {
+      return { ok: false, error: 'Plan does not belong to this collection' };
+    }
+    if (planOwnership.entity_id !== entityId) {
+      return { ok: false, error: 'Unauthorized' };
+    }
+
+    const { error } = await supabase.from('collection_plan_costs').insert({
+      plan_id: planId,
+      cost_category: costCategory,
+      description: description || null,
+      planned_amount: plannedAmountRaw ? Number(plannedAmountRaw) : null,
+      notes: notes || null,
+    });
+
+    if (error) return { ok: false, error: error.message };
+    return { ok: true, intent: 'add_plan_cost' };
+  }
+
+  if (intent === 'remove_plan_cost') {
+    const costId = String(body.get('costId') || '');
+    if (!costId || !collectionIdFromBody) {
+      return { ok: false, error: 'costId and collectionId are required' };
+    }
+
+    const { data: cost } = await supabase
+      .from('collection_plan_costs')
+      .select('plan_id, collection_plans(collection_id, entity_id)')
+      .eq('id', costId)
+      .maybeSingle();
+
+    const costPlan = (
+      cost as { collection_plans: { collection_id: string; entity_id: string } | null } | null
+    )?.collection_plans;
+    if (!costPlan || costPlan.collection_id !== collectionIdFromBody) {
+      return { ok: false, error: 'Cost does not belong to this collection' };
+    }
+    if (costPlan.entity_id !== entityId) {
+      return { ok: false, error: 'Unauthorized' };
+    }
+
+    const { error } = await supabase.from('collection_plan_costs').delete().eq('id', costId);
+    if (error) return { ok: false, error: error.message };
+    return { ok: true, intent: 'remove_plan_cost' };
   }
 
   return { ok: false, error: `Unknown intent: ${intent}` };
@@ -1925,10 +2383,12 @@ function CollectionDetail({
   summary,
   productOptions,
   transactionOptions,
+  planFxRate,
 }: {
   summary: CollectionSummary;
   productOptions: ProductRow[];
   transactionOptions: FinancialTransactionRow[];
+  planFxRate: FxRateResult | null;
 }) {
   const collection = summary.collection;
   const budgetCurrency = collection.budgetCurrency || 'GBP';
@@ -2028,6 +2488,13 @@ function CollectionDetail({
           />
         </div>
       </div>
+
+      <CollectionPlanPanel
+        collectionId={collection.id}
+        plan={summary.plan}
+        productOptions={productOptions}
+        fxRate={planFxRate}
+      />
 
       <div className="grid lg:grid-cols-[1.2fr_0.8fr] gap-6 items-start">
         <div className="space-y-6">
@@ -2260,6 +2727,7 @@ export default function CollectionsPage() {
     summaries,
     selectedCollectionId,
     selectedCollection,
+    selectedPlanFxRate,
     productOptions,
     transactionOptions,
   } = useLoaderData<LoaderData>();
@@ -2389,6 +2857,7 @@ export default function CollectionsPage() {
               summary={selectedCollection}
               productOptions={productOptions}
               transactionOptions={transactionOptions}
+              planFxRate={selectedPlanFxRate}
             />
           ) : (
             <div className="rounded-3xl border border-dashed border-border bg-card p-12 text-center text-muted-foreground">
