@@ -152,7 +152,7 @@ jobs:
             type=raw,value=latest
 
       - name: Build and push Docker image
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v7
         with:
           context: ${{ matrix.service == 'chat-ui' && '.' || './apps/ai_agent' }}
           file: ${{ matrix.service == 'chat-ui' && './apps/chat-ui/Dockerfile' || './apps/ai_agent/Dockerfile' }}
