@@ -92,7 +92,9 @@ export async function loader({ request }: LoaderFunctionArgs) {
   const lineRows = lines
     .map(line => {
       const sellThrough = Math.max(0, Math.min(100, line.expectedSellThroughPct)) / 100;
-      const projRevenue = line.plannedQuantity * sellThrough * line.unitSellingPrice;
+      const giftedUnits = Math.max(0, Math.min(line.plannedQuantity, line.giftedUnits));
+      const sellableUnits = line.plannedQuantity - giftedUnits;
+      const projRevenue = sellableUnits * sellThrough * line.unitSellingPrice;
       const projCogs = line.plannedQuantity * line.unitCost;
       const unitCostCell =
         line.unitCostCurrency && line.unitCostOriginal != null
@@ -102,6 +104,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
       <tr>
         <td>${escapeHtml(line.linkedProductName || line.productName || 'Unnamed product')}</td>
         <td class="num">${line.plannedQuantity}</td>
+        <td class="num">${giftedUnits > 0 ? giftedUnits : '—'}</td>
         <td class="num">${unitCostCell}</td>
         <td class="num">${GBP(line.unitSellingPrice)}</td>
         <td class="num">${line.expectedSellThroughPct}%</td>
@@ -208,6 +211,20 @@ export async function loader({ request }: LoaderFunctionArgs) {
     </tr>
     ${metricRow('Net margin', p => `${p.projectedNetMarginPct.toFixed(1)}%`)}
     ${
+      isCollab
+        ? metricRow(`${plan.partnerName || 'Partner'} needs to pay`, p =>
+            p.partnerPaymentDue?.amount != null ? withPartnerFx(p.partnerPaymentDue.amount) : '—'
+          )
+        : ''
+    }
+    ${
+      plan.collaborationType === 'co_branded'
+        ? metricRow('Your upfront cash outlay', p =>
+            p.entityUpfrontCost != null ? GBP(p.entityUpfrontCost) : '—'
+          )
+        : ''
+    }
+    ${
       payoutRows
         ? `<tr><td colspan="${scenarios.length + 1}" style="padding-top:10px;font-size:11px;color:#666;text-transform:uppercase;letter-spacing:.04em;">Who gets paid</td></tr>${payoutRows}`
         : ''
@@ -258,6 +275,11 @@ ${
   .callout { border: 1px solid #ddd; border-left: 3px solid #8b5cf6; border-radius: 4px;
              padding: 11px 14px; margin: 14px 0; font-size: 12px; color: #444; background: #faf8ff; }
   .callout strong { color: #111; }
+  .callout-pay { border-left-color: #10b981; background: #f0fdf7; }
+  .callout-pay.due-none { border-left-color: #ccc; background: #fafafa; }
+  .callout-pay .amount { font-size: 20px; font-weight: 700; color: #111; margin: 2px 0 4px; }
+  .callout-cash { border-left-color: #f59e0b; background: #fffbeb; }
+  .callout-cash .amount { font-size: 20px; font-weight: 700; color: #111; margin: 2px 0 4px; }
   .foot { margin-top: 32px; padding-top: 14px; border-top: 1px solid #ddd;
           font-size: 11px; color: #777; }
   @media print { body { padding: 0; } .noprint { display: none; } h2 { break-after: avoid; } tr { break-inside: avoid; } }
@@ -281,6 +303,34 @@ ${
   <div class="card"><h3>Projected net profit</h3><div class="big">${GBP(projections.projectedNetProfit)}</div></div>
   <div class="card"><h3>Net margin</h3><div class="big">${projections.projectedNetMarginPct.toFixed(1)}%</div></div>
 </div>
+
+${
+  projections.partnerPaymentDue
+    ? `<div class="callout callout-pay${projections.partnerPaymentDue.amount == null ? ' due-none' : ''}">
+        <strong>${escapeHtml(plan.partnerName || 'Partner')} needs to pay</strong>
+        <div class="amount">${
+          projections.partnerPaymentDue.amount != null
+            ? withPartnerFx(projections.partnerPaymentDue.amount)
+            : 'Nothing, right now'
+        }</div>
+        ${escapeHtml(projections.partnerPaymentDue.basis)}
+      </div>`
+    : ''
+}
+
+${
+  projections.entityUpfrontCost != null
+    ? `<div class="callout callout-cash">
+        <strong>Your upfront cash outlay</strong>
+        <div class="amount">${GBP(projections.entityUpfrontCost)}</div>
+        ${
+          projections.entityUpfrontCost === projections.projectedTotalCost
+            ? "The full planned cost — their share isn't paid in upfront, so you're fronting all of it until revenue settles."
+            : 'Your own cost-split share — the partner is covering theirs separately, upfront.'
+        }
+      </div>`
+    : ''
+}
 
 ${
   projections.payouts.length > 0
@@ -327,12 +377,12 @@ ${
 <table>
   <thead>
     <tr>
-      <th>Product</th><th class="num">Qty</th><th class="num">Unit cost</th>
+      <th>Product</th><th class="num">Qty</th><th class="num">Gifted</th><th class="num">Unit cost</th>
       <th class="num">Sell price</th><th class="num">Sell-through</th>
       <th class="num">Proj. revenue</th><th class="num">Proj. COGS</th>
     </tr>
   </thead>
-  <tbody>${lineRows || '<tr><td colspan="7" style="color:#888;">No product lines yet.</td></tr>'}</tbody>
+  <tbody>${lineRows || '<tr><td colspan="8" style="color:#888;">No product lines yet.</td></tr>'}</tbody>
 </table>
 
 <h2>Other planned costs</h2>

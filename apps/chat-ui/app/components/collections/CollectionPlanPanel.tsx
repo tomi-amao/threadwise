@@ -4,6 +4,7 @@ import {
   ChartBar,
   ChartLineUp,
   ClipboardText,
+  Coins,
   CurrencyGbp,
   FilePdf,
   Handshake,
@@ -11,6 +12,7 @@ import {
   Receipt,
   Trash,
   TrendUp,
+  Wallet,
 } from 'phosphor-react';
 import { Button } from '~/components/ui/button';
 import { SearchableSelect } from '~/components/ui/searchable-select';
@@ -239,6 +241,65 @@ function PlanSummaryCards({
         />
       </div>
 
+      {p.partnerPaymentDue && (
+        <div
+          className={cn(
+            'rounded-xl border p-4 flex items-start gap-3',
+            p.partnerPaymentDue.amount != null
+              ? 'border-emerald-500/20 bg-emerald-500/5'
+              : 'border-border bg-muted/20'
+          )}
+        >
+          <Coins
+            size={18}
+            className={cn(
+              'mt-0.5 shrink-0',
+              p.partnerPaymentDue.amount != null ? 'text-emerald-600' : 'text-muted-foreground'
+            )}
+          />
+          <div className="flex-1">
+            <p className="text-sm font-medium text-foreground">
+              {plan.plan.partnerName || 'Partner'} needs to pay
+            </p>
+            {p.partnerPaymentDue.amount != null ? (
+              <p className="text-2xl font-semibold text-foreground mt-1 tabular-nums">
+                {formatMoney(p.partnerPaymentDue.amount, currency)}
+                {fxRate && (
+                  <span className="ml-2 text-sm font-normal text-muted-foreground">
+                    (≈{' '}
+                    {formatMoneySafe(
+                      p.partnerPaymentDue.amount * fxRate.rate,
+                      fxRate.targetCurrency
+                    )}
+                    )
+                  </span>
+                )}
+              </p>
+            ) : (
+              <p className="text-sm text-muted-foreground mt-1">Nothing, right now</p>
+            )}
+            <p className="text-xs text-muted-foreground mt-1">{p.partnerPaymentDue.basis}</p>
+          </div>
+        </div>
+      )}
+
+      {p.entityUpfrontCost != null && (
+        <div className="rounded-xl border border-amber-500/20 bg-amber-500/5 p-4 flex items-start gap-3">
+          <Wallet size={18} className="text-amber-600 mt-0.5 shrink-0" />
+          <div className="flex-1">
+            <p className="text-sm font-medium text-foreground">Your upfront cash outlay</p>
+            <p className="text-2xl font-semibold text-foreground mt-1 tabular-nums">
+              {formatMoney(p.entityUpfrontCost, currency)}
+            </p>
+            <p className="text-xs text-muted-foreground mt-1">
+              {p.entityUpfrontCost === p.projectedTotalCost
+                ? "The full planned cost — their share isn't paid in upfront, so you're fronting all of it until revenue settles."
+                : 'Your own cost-split share — the partner is covering theirs separately, upfront.'}
+            </p>
+          </div>
+        </div>
+      )}
+
       {p.payouts.length > 0 && (
         <div className="rounded-xl border border-violet-500/20 bg-violet-500/5 p-4 flex items-start gap-3">
           <Handshake size={18} className="text-violet-600 mt-0.5 shrink-0" />
@@ -341,6 +402,12 @@ function PlanSettingsForm({
         value: term.value,
       }))
   );
+  // co_branded only — a real boolean, so (like custom_terms) it's kept out
+  // of the generic string-keyed metadata state below. Defaults true to
+  // match computePlanProjections' "missing means paid upfront" fallback.
+  const [costsPaidUpfront, setCostsPaidUpfront] = useState(
+    plan.metadata?.costs_paid_upfront !== false
+  );
 
   useEffect(() => {
     if (lastState.current !== 'idle' && fetcher.state === 'idle' && fetcher.data?.ok) {
@@ -381,6 +448,7 @@ function PlanSettingsForm({
             revenue_split_pct: numeric('revenue_split_pct'),
             co_brand_credit_notes: text('co_brand_credit_notes'),
             marketing_commitment_notes: text('marketing_commitment_notes'),
+            costs_paid_upfront: costsPaidUpfront,
           };
         case 'revenue_share':
           return {
@@ -503,6 +571,8 @@ function PlanSettingsForm({
         collaborationType={collaborationType}
         metadata={metadata}
         setField={setField}
+        costsPaidUpfront={costsPaidUpfront}
+        setCostsPaidUpfront={setCostsPaidUpfront}
       />
 
       {collaborationType !== 'in_house' && (
@@ -588,10 +658,14 @@ function CollaborationFields({
   collaborationType,
   metadata,
   setField,
+  costsPaidUpfront,
+  setCostsPaidUpfront,
 }: {
   collaborationType: string;
   metadata: Record<string, string>;
   setField: (key: string, value: string) => void;
+  costsPaidUpfront: boolean;
+  setCostsPaidUpfront: (value: boolean) => void;
 }) {
   const field = (
     key: string,
@@ -629,6 +703,22 @@ function CollaborationFields({
           {field('revenue_split_pct', 'Your revenue split %', { type: 'number' })}
           {field('cost_split_pct', 'Your cost split %', { type: 'number' })}
         </div>
+        <label className="flex items-start gap-2 text-xs text-foreground">
+          <input
+            type="checkbox"
+            checked={costsPaidUpfront}
+            onChange={event => setCostsPaidUpfront(event.target.checked)}
+            className="mt-0.5"
+          />
+          <span>
+            Partner pays their cost share upfront
+            <span className="block text-muted-foreground mt-0.5">
+              {costsPaidUpfront
+                ? 'They contribute cash before launch, independent of sales.'
+                : 'Unchecked: their share is deducted from their revenue split instead — you front the full planned cost yourself.'}
+            </span>
+          </span>
+        </label>
         {field('co_brand_credit_notes', 'Co-brand credit', {
           placeholder: 'e.g. 50/50 branding on packaging',
         })}
@@ -714,6 +804,7 @@ function PlanLinesSection({
               <tr>
                 <th className="px-5 py-3 font-medium">Product</th>
                 <th className="px-3 py-3 font-medium text-right">Qty</th>
+                <th className="px-3 py-3 font-medium text-right">Gifted</th>
                 <th className="px-3 py-3 font-medium text-right">Unit cost</th>
                 <th className="px-3 py-3 font-medium text-right">Sell price</th>
                 <th className="px-3 py-3 font-medium text-right">Sell-through</th>
@@ -725,7 +816,9 @@ function PlanLinesSection({
             <tbody>
               {lines.map(line => {
                 const sellThrough = Math.max(0, Math.min(100, line.expectedSellThroughPct)) / 100;
-                const projRevenue = line.plannedQuantity * sellThrough * line.unitSellingPrice;
+                const giftedUnits = Math.max(0, Math.min(line.plannedQuantity, line.giftedUnits));
+                const sellableUnits = line.plannedQuantity - giftedUnits;
+                const projRevenue = sellableUnits * sellThrough * line.unitSellingPrice;
                 const projCogs = line.plannedQuantity * line.unitCost;
                 return (
                   <tr key={line.id} className="border-t border-border/60 hover:bg-muted/20">
@@ -734,6 +827,9 @@ function PlanLinesSection({
                     </td>
                     <td className="px-3 py-3 text-right tabular-nums text-muted-foreground">
                       {formatNum(line.plannedQuantity)}
+                    </td>
+                    <td className="px-3 py-3 text-right tabular-nums text-muted-foreground">
+                      {giftedUnits > 0 ? formatNum(giftedUnits) : '—'}
                     </td>
                     <td className="px-3 py-3 text-right tabular-nums text-muted-foreground">
                       {formatMoney(line.unitCost, currency)}
@@ -796,6 +892,7 @@ function AddPlanLineForm({
   const [productId, setProductId] = useState('');
   const [productName, setProductName] = useState('');
   const [plannedQuantity, setPlannedQuantity] = useState('');
+  const [giftedUnits, setGiftedUnits] = useState('');
   const [unitCost, setUnitCost] = useState('');
   // Defaults to USD rather than the plan's own currency — most suppliers
   // here are quoted in USD, so this makes the common case zero extra
@@ -811,6 +908,7 @@ function AddPlanLineForm({
       setProductId('');
       setProductName('');
       setPlannedQuantity('');
+      setGiftedUnits('');
       setUnitCost('');
       setUnitCostCurrency('USD');
       setUnitSellingPrice('');
@@ -895,6 +993,22 @@ function AddPlanLineForm({
             className="mt-1 w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/20"
             required
           />
+        </div>
+        <div>
+          <label className="text-xs font-medium text-muted-foreground">
+            Gifted units (PR, free to partner)
+          </label>
+          <input
+            type="number"
+            name="giftedUnits"
+            min="0"
+            max={plannedQuantity || undefined}
+            value={giftedUnits}
+            onChange={event => setGiftedUnits(event.target.value)}
+            placeholder="0"
+            className="mt-1 w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/20"
+          />
+          <p className="text-xs text-muted-foreground mt-1">Still costs COGS, earns no revenue.</p>
         </div>
         <div>
           <label className="text-xs font-medium text-muted-foreground">

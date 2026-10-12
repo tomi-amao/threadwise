@@ -84,7 +84,7 @@ export async function getCollectionPlanPackData(
     supabase
       .from('collection_plan_lines')
       .select(
-        'id, plan_id, product_id, product_name, planned_quantity, unit_cost, unit_selling_price, expected_sell_through_pct, notes, display_order, unit_cost_currency, unit_cost_original, products(name)'
+        'id, plan_id, product_id, product_name, planned_quantity, gifted_units, unit_cost, unit_selling_price, expected_sell_through_pct, notes, display_order, unit_cost_currency, unit_cost_original, products(name)'
       )
       .eq('plan_id', planRow.id)
       .order('display_order', { ascending: true, nullsFirst: false })
@@ -108,6 +108,7 @@ export async function getCollectionPlanPackData(
     product_id: string | null;
     product_name: string | null;
     planned_quantity: number | string | null;
+    gifted_units: number | string | null;
     unit_cost: number | string | null;
     unit_selling_price: number | string | null;
     expected_sell_through_pct: number | string | null;
@@ -126,6 +127,7 @@ export async function getCollectionPlanPackData(
       productName: row.product_name ?? null,
       linkedProductName: row.products?.name ?? null,
       plannedQuantity: Number(row.planned_quantity || 0),
+      giftedUnits: Number(row.gifted_units || 0),
       unitCost: Number(row.unit_cost || 0),
       unitSellingPrice: Number(row.unit_selling_price || 0),
       expectedSellThroughPct: Number(row.expected_sell_through_pct ?? 100),

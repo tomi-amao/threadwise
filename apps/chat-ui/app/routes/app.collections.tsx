@@ -593,7 +593,7 @@ export async function loader({ request }: LoaderFunctionArgs): Promise<LoaderDat
     supabase
       .from('collection_plan_lines')
       .select(
-        'id, plan_id, product_id, product_name, planned_quantity, unit_cost, unit_selling_price, expected_sell_through_pct, notes, display_order, unit_cost_currency, unit_cost_original, products(name)'
+        'id, plan_id, product_id, product_name, planned_quantity, gifted_units, unit_cost, unit_selling_price, expected_sell_through_pct, notes, display_order, unit_cost_currency, unit_cost_original, products(name)'
       )
       .order('display_order', { ascending: true, nullsFirst: false })
       .order('created_at', { ascending: true }),
@@ -858,6 +858,7 @@ export async function loader({ request }: LoaderFunctionArgs): Promise<LoaderDat
     product_id: string | null;
     product_name: string | null;
     planned_quantity: number | string | null;
+    gifted_units: number | string | null;
     unit_cost: number | string | null;
     unit_selling_price: number | string | null;
     expected_sell_through_pct: number | string | null;
@@ -877,6 +878,7 @@ export async function loader({ request }: LoaderFunctionArgs): Promise<LoaderDat
       productName: row.product_name ?? null,
       linkedProductName: row.products?.name ?? null,
       plannedQuantity: Number(row.planned_quantity || 0),
+      giftedUnits: Number(row.gifted_units || 0),
       unitCost: Number(row.unit_cost || 0),
       unitSellingPrice: Number(row.unit_selling_price || 0),
       expectedSellThroughPct: Number(row.expected_sell_through_pct ?? 100),
@@ -1369,6 +1371,7 @@ export async function action({ request }: ActionFunctionArgs) {
     const productId = String(body.get('productId') || '').trim();
     const productName = String(body.get('productName') || '').trim();
     const plannedQuantityRaw = String(body.get('plannedQuantity') || '').trim();
+    const giftedUnitsRaw = String(body.get('giftedUnits') || '0').trim();
     const unitCostRaw = String(body.get('unitCost') || '').trim();
     const unitCostCurrency = String(body.get('unitCostCurrency') || '')
       .trim()
@@ -1395,6 +1398,12 @@ export async function action({ request }: ActionFunctionArgs) {
     }
     if (sellThroughRaw && Number.isNaN(Number(sellThroughRaw))) {
       return { ok: false, error: 'Expected sell-through must be a number' };
+    }
+    if (giftedUnitsRaw && Number.isNaN(Number(giftedUnitsRaw))) {
+      return { ok: false, error: 'Gifted units must be a number' };
+    }
+    if (Number(giftedUnitsRaw || 0) > Number(plannedQuantityRaw)) {
+      return { ok: false, error: 'Gifted units cannot exceed planned quantity' };
     }
 
     const { data: plan } = await supabase
@@ -1448,6 +1457,7 @@ export async function action({ request }: ActionFunctionArgs) {
       product_id: productId || null,
       product_name: productId ? null : productName,
       planned_quantity: Number(plannedQuantityRaw),
+      gifted_units: Number(giftedUnitsRaw || 0),
       unit_cost: unitCostForStorage,
       unit_cost_currency: unitCostCurrencyForStorage,
       unit_cost_original: unitCostOriginalForStorage,

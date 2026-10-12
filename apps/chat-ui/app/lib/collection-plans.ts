@@ -34,7 +34,13 @@ export const PLAN_COST_CATEGORIES = [
 // than being surprised by a cost that only shows up once it's known.
 // Categories, not fixed amounts: each is created with planned_amount null,
 // shown as "to be determined" until someone fills one in.
-export const DEFAULT_PLAN_COST_CATEGORIES = ['freight_in', 'outbound_shipping', 'gifting'];
+// "gifting" is deliberately not a default here — gifted units are now
+// entered per product line (CollectionPlanLine.giftedUnits) and reduce
+// projected revenue directly, so a separate TBD cost placeholder for the
+// same thing would just be redundant/confusing. "Gifting / PR" stays
+// selectable in PLAN_COST_CATEGORIES above for a genuine cash cost (e.g.
+// gift packaging) that isn't captured by the per-line reduction.
+export const DEFAULT_PLAN_COST_CATEGORIES = ['freight_in', 'outbound_shipping'];
 
 export const COLLABORATION_TYPES = [
   { value: 'in_house', label: 'In-house (no partner)' },
@@ -234,6 +240,12 @@ export interface CollectionPlanLine {
   productName: string | null;
   linkedProductName: string | null;
   plannedQuantity: number;
+  /** Units of this line given away for free (PR/influencer/partner gifting)
+   * rather than sold — always sold, not an estimate. Still incurs full COGS
+   * (plannedQuantity includes them — you paid to produce them), but earns
+   * no revenue, so it's subtracted from the sellable pool before
+   * expectedSellThroughPct is applied. */
+  giftedUnits: number;
   /** Always the plan's own base currency — the authoritative figure every
    * projection is computed from, converted once at entry time if the
    * supplier quoted in a different currency (see unitCostCurrency below). */
@@ -316,6 +328,17 @@ export interface PlanPayout {
   basis: string;
 }
 
+export interface PlanPartnerPayment {
+  /** Null means the partner owes nothing *in this direction* — either
+   * because this collaboration type pays the other way (e.g. pop_up: the
+   * entity pays the partner's venue cost) or because the terms needed to
+   * calculate it (e.g. co_branded's cost split) aren't set yet. basis
+   * always explains which of those it is, so "no payment" is a stated
+   * fact rather than a silent gap. */
+  amount: number | null;
+  basis: string;
+}
+
 export interface CollectionPlanProjections {
   projectedRevenue: number;
   projectedProductCost: number;
@@ -334,6 +357,20 @@ export interface CollectionPlanProjections {
   // how much" statement — estimatedShareRevenue/Profit above are kept only
   // for the simpler single-figure callout already in the UI.
   payouts: PlanPayout[];
+  // What the collaborating party owes the entity, specifically — distinct
+  // from payouts above (which states who receives money from the revenue
+  // this plan generates, in either direction). Null for in_house, since
+  // there's no collaborating party to owe anything.
+  partnerPaymentDue: PlanPartnerPayment | null;
+  // co_branded only (null for every other type): what the entity itself
+  // must have in cash before any revenue comes in. When the partner pays
+  // their cost-split share upfront (the default), that's just the
+  // entity's own cost share — the partner is separately covering theirs.
+  // When metadata.costs_paid_upfront is false, the partner's share is
+  // instead netted out of their later revenue split, so nobody but the
+  // entity has put any cash in before launch — the entity is fronting the
+  // *full* planned cost, not just their split share.
+  entityUpfrontCost: number | null;
   // Costs with no amount yet ("to be determined") — excluded from every
   // total above, so this is how a reader knows the real figure can still
   // go up, not just a cosmetic footnote.
@@ -415,8 +452,15 @@ export function computePlanProjections(
         Number.isFinite(line.expectedSellThroughPct) ? line.expectedSellThroughPct : 100
       )
     );
-    const unitsSold = line.plannedQuantity * (sellThroughPct / 100);
+    const giftedUnits = Math.max(
+      0,
+      Math.min(line.plannedQuantity, Number.isFinite(line.giftedUnits) ? line.giftedUnits : 0)
+    );
+    const sellableUnits = line.plannedQuantity - giftedUnits;
+    const unitsSold = sellableUnits * (sellThroughPct / 100);
     projectedRevenue += unitsSold * line.unitSellingPrice;
+    // COGS is charged on every unit produced, gifted or not — gifting
+    // doesn't reduce what you paid, only what you earn.
     projectedProductCost += line.plannedQuantity * line.unitCost;
   }
 
@@ -442,16 +486,25 @@ export function computePlanProjections(
   let estimatedShareRevenue: number | null = null;
   let estimatedShareProfit: number | null = null;
   const payouts: PlanPayout[] = [];
+  let partnerPaymentDue: PlanPartnerPayment | null = null;
+  let entityUpfrontCost: number | null = null;
   const partnerLabel = partnerName || 'Partner';
   const entityLabel = entityName || 'You';
 
   if (collaborationType === 'wholesale') {
+    const paymentTerms = typeof metadata?.payment_terms === 'string' ? metadata.payment_terms : '';
     payouts.push({
       party: entityLabel,
       isPartner: false,
       amount: projectedRevenue,
       basis: `${partnerLabel} pays wholesale price × planned quantity`,
     });
+    partnerPaymentDue = {
+      amount: projectedRevenue,
+      basis: paymentTerms
+        ? `Wholesale price × planned quantity, due ${paymentTerms}`
+        : 'Wholesale price × planned quantity',
+    };
   } else if (collaborationType === 'revenue_share') {
     const revenueSharePct = toNumberOrNull(metadata?.revenue_share_pct);
     if (revenueSharePct != null) {
@@ -477,6 +530,13 @@ export function computePlanProjections(
         amount: estimatedShareProfit,
         basis: 'Remaining revenue less total planned costs',
       });
+      // Under revenue_share, the entity collects all sales and remits a
+      // cut — it's the entity who pays, not the partner, so there's no
+      // upfront amount owed in this direction.
+      partnerPaymentDue = {
+        amount: null,
+        basis: `No upfront payment — you pay ${partnerLabel} their revenue share after sales, shown in "Who gets paid" above`,
+      };
     }
   } else if (collaborationType === 'co_branded') {
     const revenueSplitPct = toNumberOrNull(metadata?.revenue_split_pct);
@@ -493,6 +553,12 @@ export function computePlanProjections(
       estimatedShareRevenue = entityRevenue;
       estimatedShareProfit = entityRevenue - entityCost;
 
+      // Default true so plans saved before this toggle existed keep behaving
+      // exactly as before: partner contributes their cost share in cash,
+      // upfront, before any revenue exists.
+      const costsPaidUpfront = metadata?.costs_paid_upfront !== false;
+      const partnerNetPayout = partnerRevenue - partnerCost;
+
       payouts.push({
         party: entityLabel,
         isPartner: false,
@@ -502,9 +568,44 @@ export function computePlanProjections(
       payouts.push({
         party: partnerLabel,
         isPartner: true,
-        amount: partnerRevenue - partnerCost,
-        basis: `${100 - rPct}% revenue share, ${100 - cPct}% cost share`,
+        amount: partnerNetPayout,
+        basis: costsPaidUpfront
+          ? `${100 - rPct}% revenue share, ${100 - cPct}% cost share`
+          : `${100 - rPct}% revenue share, less their ${100 - cPct}% cost share (deducted here instead of paid upfront)`,
       });
+
+      if (costsPaidUpfront) {
+        // The partner's cost-split share is a real contribution obligation —
+        // independent of how revenue ends up split, and due regardless of
+        // whether sales meet projections, so it's shown even if partnerCost
+        // comes out to 0 (e.g. cost split wasn't set, defaulting to 100%
+        // entity-funded).
+        partnerPaymentDue = {
+          amount: partnerCost,
+          basis: `${100 - cPct}% of total planned costs (their cost-split contribution)`,
+        };
+        // The partner is covering their own share in cash, so the entity
+        // only needs to front its own share.
+        entityUpfrontCost = entityCost;
+      } else {
+        const shortfall = partnerNetPayout < 0;
+        partnerPaymentDue = {
+          amount: null,
+          basis: shortfall
+            ? `No upfront payment — their ${100 - cPct}% cost share (${Math.round(partnerCost).toLocaleString()}) is deducted from their revenue split instead, but their revenue share alone doesn't cover it — you may not recover the full shortfall if sales come in as planned`
+            : `No upfront payment — their ${100 - cPct}% cost share is deducted from their revenue split when it settles instead`,
+        };
+        // Nobody but the entity has put cash in before launch, so the
+        // entity is exposed for the *full* planned cost, not just its own
+        // split share — the partner's contribution only arrives later, net,
+        // out of revenue that doesn't exist yet.
+        entityUpfrontCost = projectedTotalCost;
+      }
+    } else {
+      partnerPaymentDue = {
+        amount: null,
+        basis: `Set a cost split above to calculate ${partnerLabel}'s contribution`,
+      };
     }
   } else if (collaborationType === 'pop_up' && popUp) {
     payouts.push({
@@ -513,6 +614,12 @@ export function computePlanProjections(
       amount: popUp.venueCostTotal,
       basis: popUp.venueBasis,
     });
+    // Pop_up pays the other way too — the entity pays the partner's venue
+    // cost, so there's nothing the partner owes here.
+    partnerPaymentDue = {
+      amount: null,
+      basis: `No payment due from ${partnerLabel} — you pay their venue cost, shown in "Who gets paid" above`,
+    };
   }
 
   return {
@@ -527,6 +634,8 @@ export function computePlanProjections(
     estimatedShareRevenue,
     estimatedShareProfit,
     payouts,
+    partnerPaymentDue,
+    entityUpfrontCost,
     costsPendingCount,
   };
 }
