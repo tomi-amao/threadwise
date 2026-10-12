@@ -1,6 +1,6 @@
 # Frontend redesign plan
 
-Status: proposal · Branch: `feat/frontend-redesign` · Oct 13, 2026
+Status: decisions made, ready for Phase 0 · Branch: `feat/frontend-redesign` · Oct 13, 2026
 
 ## Goal
 
@@ -13,6 +13,26 @@ The five preview pages (`/dashboard-v2`, `/transactions-v2`, `/inventory-v2`,
 `/reports-v2`, `/collections-v2`) have been built, opened in Chrome and measured.
 This plan turns what they taught us into a rollout.
 
+## Decisions (resolved Oct 13)
+
+| #   | Question       | Decision                                                                                                                                                                                                                                                                                    |
+| --- | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | Sidebar        | Follows the theme. **Light by default.**                                                                                                                                                                                                                                                    |
+| 2   | Header density | **Compact header** on dense pages (Transactions, Inventory, Orders, Customers, Products, Invoices, Journals, Reclassification). **Hero only where strictly necessary:** Dashboard, Reports, Collections index, Landing.                                                                     |
+| 3   | Charts         | **Keep Nivo, theme it, and improve it** (shared wrappers, tokens, real tooltips, keyboard and text alternatives). No custom-SVG rewrite.                                                                                                                                                    |
+| 4   | Testing        | **Add Playwright** in Phase 0 and **write tests as each page changes**.                                                                                                                                                                                                                     |
+| 5   | Legacy pages   | **Delete each old page as its replacement ships and is verified**, not in a final sweep.                                                                                                                                                                                                    |
+| 6   | Card cream     | **`#FCF8F4`** on a **`#FFFFFF`** page. Alt band `#F8F1EA`. A step lighter than the preview's `#FBF6F1`: still 1.06:1 against white, every text pair still passes 4.5:1 (muted text 5.0:1), and warmer than `#FDFAF7`, which is nearly white and leaves cards relying on their border alone. |
+| 7   | Dark mode      | **Full parity, light default** (see below).                                                                                                                                                                                                                                                 |
+
+**What "full parity" means for dark mode.** Dark is not a lesser, best-effort skin. Every
+page, drawer, dialog, chart and empty state ships in both themes, from the same tokens, with
+the same layouts. In practice that is three rules: no hard-coded colours (only tokens, so a
+theme can never be missed); the contrast gate runs for both themes; and every Playwright
+page test runs in both themes. It does _not_ mean separate dark designs or a "System"
+setting. There is one Light/Dark toggle, light is the default, and the choice is stored in
+a cookie.
+
 ## What the previews proved
 
 **Keep**
@@ -23,6 +43,8 @@ This plan turns what they taught us into a rollout.
 - Drawers beat permanent side forms. Add/edit flows move out of the page into
   slide-overs, and the page keeps one amber action.
 - Hairline borders and almost no shadow hold up in both themes.
+- A compact header is needed on dense pages; the hero is for pages where one number or
+  one sentence is the point.
 - Statement tables with bracketed deductions suit finance pages.
 - Computed headline sentences ("Three products carry 19% of sales") are more useful
   than static page titles.
@@ -37,7 +59,7 @@ This plan turns what they taught us into a rollout.
 - Loss and problem states need their own colour. Use a muted brick (`#A8432C`
   light, `#E0806A` dark), never amber.
 - The large hero costs a lot of height on tool pages. Dense pages need a compact
-  header variant (see Open decisions).
+  header variant (decided: compact on dense pages, hero only where strictly necessary).
 - Reports lost its ⓘ definitions in the preview. Accounting pages must keep them.
 
 **Bugs the previews surfaced, to design out**
@@ -79,7 +101,7 @@ This plan turns what they taught us into a rollout.
 
 ## Phases
 
-### Phase 0: Decisions and foundations
+### Phase 0: Foundations
 
 Exit: every page can opt into the new look by changing nothing but its route module.
 
@@ -99,11 +121,18 @@ Exit: every page can opt into the new look by changing nothing but its route mod
    `DataTable` (with scroll wrapper), `Statement`, `Drawer`, `EmptyState`, `Field`.
    `Drawer` is built on Radix Dialog (already a dependency) for focus trap, focus
    restore and Escape.
-5. **Charts.** Decide the library question (see Open decisions), then build the
-   shared bar, line and stacked-share charts with real tooltips and keyboard focus.
-6. **Shell.** Re-theme `AppLayout`, `Sidebar` and the mobile header. This closes
-   the dark-sidebar-beside-cream-page seam seen in every preview.
-7. **Quality gates** (see below) set up before any page is converted.
+5. **Charts (Nivo, themed).** Keep `@nivo/*`. Build one themed wrapper per chart type
+   (bar, line, pie/share) that reads colours from the tokens (amber ramp, plum, brick), so
+   they follow the theme with no per-chart colour props. Improve on today's charts: real
+   tooltips matching the primitives, keyboard-reachable data points, a text summary for
+   screen readers, consistent axes (`£12k` formatting, dashed gridlines, zero line) and
+   sensible empty and single-point states.
+6. **Shell.** Re-theme `AppLayout`, `Sidebar` and the mobile header so the sidebar follows
+   the theme (light by default), which closes the dark-sidebar-beside-white-page seam seen
+   in every preview. Add the Light/Dark toggle here, plus a `CompactHeader` and `Hero`
+   page-header pair so pages pick one.
+7. **Playwright** (see Testing) and the **quality gates** set up before any page is
+   converted.
 
 ### Phase 1: Prove it on one page: Dashboard
 
@@ -163,17 +192,19 @@ and the preview is the least complete. Parity gaps to close first:
 
 ### Phase 6: Cleanup
 
-Delete the `-v2` preview routes and `collections-v2`-style folders, the old
-components, and unused tokens. Remove legacy route aliases. Update `CLAUDE.md`
-and `design-language.md` with the decisions made here (contrast, amber, plum,
-white page).
+Pages are deleted as they ship (see Migration mechanics), so this phase only removes what
+is left: the `-v2` preview routes and folders, orphaned components and unused tokens.
+Update `CLAUDE.md` and `design-language.md` with the decisions made here (contrast, amber,
+plum, white page and `#FCF8F4` cards, compact vs hero headers).
 
 ## Migration mechanics
 
 - Build the new page against the **existing loader data**; do not change loaders.
 - Each page lands as: new components, then a one-line change in `routes.ts` to point
-  the path at the new route module. The old module stays on disk until the page
-  is signed off, then is deleted in Phase 6.
+  the path at the new route module. Once the page passes its parity checklist, its
+  Playwright tests and the quality gates, **the old route module and any components only it
+  used are deleted in the same PR** (or the next, if you want a verification window).
+  Nothing legacy is kept around for a release.
 - Preview routes stay reachable during the work so the new and old can be compared
   side by side.
 - Mock data modules (`*-v2/data.ts`) are throwaway. Real adapters read loader
@@ -192,9 +223,26 @@ white page).
 | Accessibility          | Drawers trap and restore focus; rows are reachable by keyboard; charts have text alternatives            |
 | Types / lint / build   | `pnpm typecheck` (do not add errors to the existing ~8), ESLint on touched files, `pnpm build`           |
 
-There is no frontend test runner today. Recommend adding Playwright for smoke and
-screenshot checks per route as part of Phase 0, because this redesign touches every
-screen and manual checking will not scale. This is the one tooling addition proposed.
+## Testing (Playwright)
+
+There is no frontend test runner today. Playwright is added in Phase 0 and each page's
+tests ship in the same PR as the page. Per page:
+
+- **Smoke:** loads with no console errors; key sections and the page's one amber action
+  are present.
+- **Flows:** the behaviours in that page's parity checklist (open and close each drawer,
+  apply a filter, switch tabs, submit an edit).
+- **Themes:** every test runs in light and dark.
+- **Widths:** assert no horizontal overflow at 390, 768 and 1280px.
+- **Accessibility:** `@axe-core/playwright` scan per route and per open drawer; drawers
+  restore focus on close.
+- **Visual:** a screenshot per route and theme, kept as the baseline for later changes.
+
+**Open item to settle at the start of Phase 0.** The app sits behind Supabase login, and
+route loaders run on the server, so a browser test cannot stub their data over the network.
+We need one of: a seeded test database and a dedicated test user (preferred; credentials
+live in an example-config file, not the repo), or a test-mode fixture for loaders. Until
+then, tests that need real data cannot run in CI.
 
 ## Risks
 
@@ -203,34 +251,18 @@ screen and manual checking will not scale. This is the one tooling addition prop
 - **Token remap side effects.** Changing the app-wide tokens re-themes every page at
   once, including ones not yet redesigned. Mitigate by landing tokens behind the
   theme switch first and checking unconverted pages for regressions.
+- **Deleting as we go.** Removing a legacy page on ship means no easy fallback. The
+  parity checklist and Playwright flows are the safety net; revert the PR if one is missed.
 - **Dropped functionality.** The previews intentionally simplified. The parity
   checklist is the control.
 - **Lint and typecheck backlog.** Pre-existing failures (see `CLAUDE.md`) mean the
   Husky hook may block commits; keep new code clean and do not widen the backlog.
 - **Fonts.** Three families increase first-load weight. Self-host, subset, and preload.
 
-## Open decisions for you
-
-1. **Sidebar:** light, dark, or follows theme? Recommended: follows theme, light by default.
-2. **Dark mode:** first-class and at parity (recommended), or secondary?
-3. **Header density:** keep the large hero on every page, or use a compact header
-   (eyebrow + headline + inline actions) on dense tool pages like Transactions
-   and Inventory? Recommended: hero on Dashboard, Reports and Collections index;
-   compact elsewhere.
-4. **Card cream:** keep `#FBF6F1`, or lighten (about `#FDFAF7`) to keep the page from
-   feeling grey-beige on white?
-5. **Charts:** keep Nivo and theme it, or standardise on small custom SVG charts
-   (lighter, fully on-brand, but we own tooltips and accessibility)?
-6. **Legacy routes:** delete old pages as each new one ships (recommended), or keep
-   `/x-legacy` for one release?
-7. **Copy tone:** the doc asks for specific, honest, number-led copy. Do we rewrite
-   page copy as we go, or keep current wording and revisit?
-8. **Playwright:** OK to add as a dev dependency in Phase 0?
-
 ## Suggested order of work
 
-1. Decide the open items above.
-2. Phase 0 (tokens, fonts, theme switch, primitives, shell, gates).
-3. Phase 1 Dashboard, review, adjust the primitives.
+1. Settle the Playwright test-data approach (above).
+2. Phase 0 (tokens, fonts, theme switch, primitives, themed charts, shell, Playwright, gates).
+3. Phase 1 Dashboard (with its tests), review, adjust the primitives.
 4. Phases 2 to 4 in order; Phase 5 chat design can start in parallel once Phase 0 lands.
 5. Phase 6 cleanup.
