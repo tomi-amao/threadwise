@@ -6,7 +6,7 @@ repos:
     hooks:
       - id: black
         language_version: python3
-        files: ^apps/ai-agent/.*\.py$
+        files: ^apps/ai_agent/.*\.py$
 
   # isort - Import statement organizer
   - repo: https://github.com/PyCQA/isort
@@ -14,26 +14,26 @@ repos:
     hooks:
       - id: isort
         args: ["--profile", "black"]  # Make isort compatible with black
-        files: ^apps/ai-agent/.*\.py$
+        files: ^apps/ai_agent/.*\.py$
 
   # Pre-commit hooks for general file hygiene
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v5.0.0  # Updated to latest stable version
     hooks:
       - id: end-of-file-fixer
-        files: ^apps/ai-agent/
+        files: ^apps/ai_agent/
       - id: trailing-whitespace
-        files: ^apps/ai-agent/
+        files: ^apps/ai_agent/
       - id: check-yaml
       - id: check-added-large-files
         args: ['--maxkb=10000']  # Limit file size to 10MB
       - id: check-merge-conflict
       - id: check-toml
-        files: ^apps/ai-agent/.*\.toml$
+        files: ^apps/ai_agent/.*\.toml$
       - id: debug-statements
-        files: ^apps/ai-agent/.*\.py$
+        files: ^apps/ai_agent/.*\.py$
       - id: name-tests-test
-        files: ^apps/ai-agent/tests/.*\.py$
+        files: ^apps/ai_agent/tests/.*\.py$
 
   # Flake8 - Python linting
   - repo: https://github.com/pycqa/flake8
@@ -45,7 +45,7 @@ repos:
           "--max-line-length=88",  # Match black's line length
           "--extend-ignore=E203,W503"  # Ignore conflicts with black
         ]
-        files: ^apps/ai-agent/.*\.py$
+        files: ^apps/ai_agent/.*\.py$
 
   # mypy - Static type checking
   - repo: https://github.com/pre-commit/mirrors-mypy
@@ -54,13 +54,13 @@ repos:
       - id: mypy
         additional_dependencies: [types-requests]
         args: [--ignore-missing-imports]
-        files: ^apps/ai-agent/.*\.py$
+        files: ^apps/ai_agent/.*\.py$
 
   # Security checks
   - repo: https://github.com/PyCQA/bandit
     rev: 1.8.0
     hooks:
       - id: bandit
-        args: ["-r", "apps/ai-agent/src/"]
-        files: ^apps/ai-agent/.*\.py$
-        exclude: ^apps/ai-agent/tests/
+        args: ["-r", "apps/ai_agent/src/"]
+        files: ^apps/ai_agent/.*\.py$
+        exclude: ^apps/ai_agent/tests/

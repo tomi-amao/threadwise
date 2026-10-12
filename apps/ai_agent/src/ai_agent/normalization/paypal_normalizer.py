@@ -1,0 +1,423 @@
+"""PayPal-specific normalizer for transforming raw API payloads.
+
+Handles the specific structure of PayPal Transaction Search API responses
+and transforms them into canonical financial models.
+
+Key behaviours:
+- ``reference`` is folded into ``description`` (the DB no longer has a
+  ``reference`` column).
+- FX fields (``currency_code``, ``base_currency_code``, ``fx_rate``,
+  ``base_amount``) are populated from PayPal's amount structures.
+"""
+
+import logging
+from decimal import Decimal
+from typing import Any, Dict, List, Optional
+from uuid import UUID
+
+from .models import (
+    CanonicalBankAccount,
+    CanonicalFinancialTransaction,
+    TxnDirection,
+    TxnSource,
+    TxnStatus,
+    TxnType,
+)
+from .normalizer import FinancialNormalizer, NormalizationResult
+
+logger = logging.getLogger(__name__)
+
+
+class PayPalNormalizer(FinancialNormalizer):
+    """Normalizer for PayPal Transaction Search API payloads.
+
+    Supports:
+    - Financial transactions (/v1/reporting/transactions)
+
+    Does NOT support bank_account (PayPal has no equivalent endpoint
+    in the Transaction Search API).
+    """
+
+    provider = "paypal"
+    supported_entity_types = ["financial_transaction"]
+
+    # =========================================================================
+    # TYPE MAPPINGS
+    # =========================================================================
+
+    # PayPal transaction event codes -> canonical types
+    # See: https://developer.paypal.com/docs/transaction-search/transaction-event-codes/
+    TRANSACTION_TYPE_MAP: Dict[str, TxnType] = {
+        "T0000": TxnType.PAYMENT,
+        "T0001": TxnType.PAYMENT,
+        "T0002": TxnType.PAYMENT,
+        "T0003": TxnType.PAYMENT,
+        # T0006 = invoice-based payment. Can be IN (client pays TBA) or OUT (TBA pays invoice).
+        # Historically mapped to FEE which caused fee,in for incoming invoices — corrected to PAYMENT.
+        "T0006": TxnType.PAYMENT,
+        # T0007 = payment sent to merchant
+        "T0007": TxnType.PAYMENT,
+        # T0011 = send money / mass pay (generic outbound payment to individual or supplier)
+        "T0011": TxnType.PAYMENT,
+        "T0400": TxnType.REFUND,
+        # T0600 = general withdrawal (PayPal balance → external bank). Always an internal transfer.
+        # The cleaning service excludes matched T0600s (paired with Revolut receipt).
+        # Unmatched T0600s represent real outflows from PayPal to a non-tracked account.
+        "T0600": TxnType.TRANSFER,
+        "T0700": TxnType.TRANSFER,
+        "T0803": TxnType.OTHER,       # chargeback reversal debit
+        "T1000": TxnType.PAYMENT,     # consumer-initiated payment
+        "T1106": TxnType.FX_CONVERSION,
+        # T1107 = chargeback reversal / non-bank reversal. NOT an FX conversion.
+        # The cleaning service handles T1107+T0600 chargeback pairs (excludes both).
+        # Unmatched T1107s are treated as payments; direction is set from the raw amount sign.
+        "T1107": TxnType.PAYMENT,
+    }
+
+    # =========================================================================
+    # BANK ACCOUNT NORMALIZATION (not supported)
+    # =========================================================================
+
+    def normalize_bank_account(
+        self,
+        external_id: str,
+        payload: Dict[str, Any],
+        raw_event_id: UUID,
+    ) -> NormalizationResult:
+        """PayPal Transaction Search API does not provide bank accounts.
+
+        Always returns a failure result.
+        """
+        return NormalizationResult.failure_result(
+            entity_type="bank_account",
+            external_id=external_id,
+            raw_event_id=raw_event_id,
+            error_message="PayPal normalizer does not support bank accounts",
+        )
+
+    # =========================================================================
+    # EXPENSE NORMALIZATION (not supported)
+    # =========================================================================
+
+    def normalize_expense(
+        self,
+        external_id: str,
+        payload: Dict[str, Any],
+        raw_event_id: UUID,
+    ) -> NormalizationResult:
+        """PayPal Transaction Search API does not provide separate expenses.
+
+        Always returns a failure result. Expenses appear as regular
+        transactions in PayPal's API.
+        """
+        return NormalizationResult.failure_result(
+            entity_type="expense",
+            external_id=external_id,
+            raw_event_id=raw_event_id,
+            error_message="PayPal normalizer does not support separate expenses",
+        )
+
+    # =========================================================================
+    # FINANCIAL TRANSACTION NORMALIZATION
+    # =========================================================================
+
+    def normalize_financial_transaction(
+        self,
+        external_id: str,
+        payload: Dict[str, Any],
+        raw_event_id: UUID,
+    ) -> NormalizationResult:
+        """Normalize a PayPal transaction_details item.
+
+        PayPal Transaction Search item structure:
+        - transaction_info: transaction_id, transaction_event_code,
+          transaction_initiation_date, transaction_amount, fee_amount,
+          transaction_status, transaction_subject, transaction_note,
+          ending_balance
+        - payer_info: account_id, email_address, payer_name
+        - cart_info, store_info, auction_info, incentive_info
+        """
+        warnings: List[str] = []
+
+        try:
+            txn_info = payload.get("transaction_info", {})
+            payer_info = payload.get("payer_info", {})
+
+            # -----------------------------------------------------------------
+            # Amount and currency
+            # -----------------------------------------------------------------
+            txn_amount = txn_info.get("transaction_amount", {})
+            amount_str = txn_amount.get("value", "0")
+            currency = txn_amount.get("currency_code", "GBP")
+
+            amount_decimal = Decimal(str(amount_str))
+            amount_value = abs(amount_decimal)
+
+            if amount_value == 0:
+                return NormalizationResult.skip_result(
+                    entity_type="financial_transaction",
+                    external_id=external_id,
+                    raw_event_id=raw_event_id,
+                    skip_reason="Zero-amount transaction",
+                )
+
+            # -----------------------------------------------------------------
+            # Direction (negative = OUT, positive = IN)
+            # -----------------------------------------------------------------
+            direction = (
+                TxnDirection.IN
+                if amount_decimal > 0
+                else TxnDirection.OUT
+            )
+
+            # -----------------------------------------------------------------
+            # Transaction type from event code
+            # -----------------------------------------------------------------
+            event_code = txn_info.get("transaction_event_code", "")
+            txn_type = self.TRANSACTION_TYPE_MAP.get(
+                event_code, TxnType.OTHER
+            )
+
+            # -----------------------------------------------------------------
+            # Declined / voided / failed detection
+            # PayPal transaction_status codes that indicate no real movement:
+            #   D = Denied   V = Voided   F = Failed/Reversed
+            # We still persist these for audit, but mark them excluded so
+            # they never appear in journals or cash-flow reports.
+            # -----------------------------------------------------------------
+            PAYPAL_DECLINED_STATUSES = {"D", "V", "F"}
+            paypal_status = str(txn_info.get("transaction_status") or "").upper()
+            txn_excluded_reason: Optional[str] = None
+            txn_model_status = TxnStatus.PENDING
+            if paypal_status in PAYPAL_DECLINED_STATUSES:
+                status_labels = {"D": "Denied", "V": "Voided", "F": "Failed/Reversed"}
+                label = status_labels.get(paypal_status, paypal_status)
+                txn_excluded_reason = (
+                    f"PayPal transaction status '{label}' ({paypal_status}) — "
+                    "no money movement occurred; excluded from business records"
+                )
+                txn_model_status = TxnStatus.EXCLUDED
+                warnings.append(f"Transaction excluded: PayPal status={paypal_status} ({label})")
+
+            # -----------------------------------------------------------------
+            # Timestamps
+            # -----------------------------------------------------------------
+            occurred_at = (
+                self._parse_datetime(
+                    txn_info.get("transaction_initiation_date")
+                )
+                or self._parse_datetime(
+                    txn_info.get("transaction_updated_date")
+                )
+            )
+            if not occurred_at:
+                return NormalizationResult.failure_result(
+                    entity_type="financial_transaction",
+                    external_id=external_id,
+                    raw_event_id=raw_event_id,
+                    error_message="Transaction has no timestamp",
+                )
+
+            created_at = self._parse_datetime(
+                txn_info.get("transaction_initiation_date")
+            )
+
+            # -----------------------------------------------------------------
+            # Counterparty name
+            # -----------------------------------------------------------------
+            payer_name = payer_info.get("payer_name", {})
+            counterparty_name = payer_name.get("alternate_full_name")
+            if not counterparty_name:
+                given = payer_name.get("given_name", "")
+                surname = payer_name.get("surname", "")
+                full = f"{given} {surname}".strip()
+                counterparty_name = full if full else None
+
+            # -----------------------------------------------------------------
+            # Description — build a rich, human-readable description
+            # using cart item names, counterparty, and subject/note fields.
+            # Falls back to event code + reference only when nothing better
+            # is available.
+            # -----------------------------------------------------------------
+            cart_info = payload.get("cart_info", {})
+            item_details = cart_info.get("item_details", [])
+
+            # Best source: cart item names / descriptions
+            item_names = [
+                (item.get("item_description") or item.get("item_name") or "").strip()
+                for item in item_details
+                if item.get("item_name") or item.get("item_description")
+            ]
+            # Deduplicate while preserving order
+            seen: set = set()
+            unique_item_names: List[str] = []
+            for n in item_names:
+                if n and n not in seen:
+                    seen.add(n)
+                    unique_item_names.append(n)
+
+            subject_or_note = (
+                txn_info.get("transaction_subject")
+                or txn_info.get("transaction_note")
+            )
+
+            if unique_item_names:
+                description = "; ".join(unique_item_names)
+            elif subject_or_note:
+                description = subject_or_note
+            else:
+                description = event_code
+
+            # Append counterparty if available
+            if counterparty_name:
+                description = f"{description} — {counterparty_name}"
+
+            reference = txn_info.get("transaction_id")
+            if reference:
+                description = f"{description} | Ref: {reference}"
+
+            # -----------------------------------------------------------------
+            # Base amount / FX rate
+            # -----------------------------------------------------------------
+            base_currency = "GBP"
+            if currency == base_currency:
+                fx_rate = None
+                base_amount = amount_value
+            else:
+                # PayPal Transaction Search API does not return a converted
+                # GBP amount.  Setting base_amount to the raw foreign-currency
+                # value (the prior behaviour) caused those amounts to be treated
+                # as GBP in cash-flow reports.  Instead, leave both fields NULL
+                # so that a downstream FX enrichment step or manual correction
+                # must fill them in before the transaction can be accurately
+                # reported.
+                base_amount = None
+                fx_rate = None
+                warnings.append(
+                    f"Foreign-currency transaction ({currency} {amount_value}): "
+                    f"base_amount and fx_rate left NULL — FX enrichment required"
+                )
+
+            # -----------------------------------------------------------------
+            # Metadata (provider-specific extras)
+            # -----------------------------------------------------------------
+            metadata: Dict[str, Any] = {
+                "transaction_event_code": event_code,
+                "transaction_status": txn_info.get("transaction_status"),
+            }
+
+            # Invoice reference — critical for invoice matching
+            invoice_id = txn_info.get("invoice_id")
+            if invoice_id:
+                metadata["invoice_id"] = invoice_id
+
+            fee_amount = txn_info.get("fee_amount")
+            if fee_amount:
+                metadata["fee_amount"] = fee_amount
+
+            ending_balance = txn_info.get("ending_balance")
+            if ending_balance:
+                metadata["ending_balance"] = ending_balance
+
+            # Payer info — extract useful fields (not raw object dump)
+            if payer_info:
+                payer_email = payer_info.get("email_address")
+                if payer_email:
+                    metadata["payer_email"] = payer_email
+
+                payer_full_name = (
+                    payer_name.get("alternate_full_name")
+                    or f"{payer_name.get('given_name', '')} {payer_name.get('surname', '')}".strip()
+                    or None
+                )
+                if payer_full_name:
+                    metadata["payer_name"] = payer_full_name
+
+                payer_country = payer_info.get("country_code")
+                if payer_country:
+                    metadata["payer_country"] = payer_country
+
+            # Cart info — simplified item details and invoice numbers
+            if item_details:
+                metadata["cart_items"] = [
+                    {
+                        "name": item.get("item_name"),
+                        "description": item.get("item_description"),
+                        "quantity": item.get("item_quantity"),
+                        "unit_price": (item.get("item_unit_price") or {}).get("value"),
+                        "amount": (item.get("item_amount") or {}).get("value"),
+                        "invoice_number": item.get("invoice_number"),
+                    }
+                    for item in item_details
+                    if item.get("item_name")
+                ]
+
+                # Deduplicated invoice numbers for easy lookup
+                invoice_numbers = list({
+                    item.get("invoice_number")
+                    for item in item_details
+                    if item.get("invoice_number")
+                })
+                if invoice_numbers:
+                    metadata["invoice_numbers"] = invoice_numbers
+
+            paypal_invoice_id = cart_info.get("paypal_invoice_id")
+            if paypal_invoice_id:
+                metadata["paypal_invoice_id"] = paypal_invoice_id
+
+            # Shipping info — simplified
+            shipping_info = payload.get("shipping_info", {})
+            if shipping_info and shipping_info.get("name"):
+                shipping_address = shipping_info.get("address", {})
+                metadata["shipping"] = {
+                    "name": shipping_info.get("name"),
+                    "city": shipping_address.get("city"),
+                    "country_code": shipping_address.get("country_code"),
+                    "postal_code": shipping_address.get("postal_code"),
+                }
+
+            # -----------------------------------------------------------------
+            # Build canonical model
+            # -----------------------------------------------------------------
+            canonical = CanonicalFinancialTransaction(
+                provider=self.provider,
+                external_id=external_id,
+                raw_event_id=raw_event_id,
+                created_at=created_at,
+                entity_id=self.entity_id,
+                bank_account_id=None,  # Resolved during persistence
+                source=TxnSource.PAYPAL,
+                external_transaction_id=external_id,
+                transaction_type=txn_type,
+                direction=direction,
+                occurred_at=occurred_at,
+                description=description,
+                counterparty_name=counterparty_name,
+                amount=amount_value,
+                currency_code=currency,
+                base_currency_code=base_currency,
+                fx_rate=fx_rate,
+                base_amount=base_amount,
+                status=txn_model_status,
+                excluded_reason=txn_excluded_reason,
+                metadata=metadata,
+            )
+
+            return NormalizationResult.success_result(
+                canonical=canonical,
+                entity_type="financial_transaction",
+                external_id=external_id,
+                raw_event_id=raw_event_id,
+                warnings=warnings if warnings else None,
+            )
+
+        except Exception as e:
+            logger.exception(
+                "Error normalizing PayPal transaction %s", external_id
+            )
+            return NormalizationResult.failure_result(
+                entity_type="financial_transaction",
+                external_id=external_id,
+                raw_event_id=raw_event_id,
+                error_message=f"Failed to normalize transaction: {str(e)}",
+            )

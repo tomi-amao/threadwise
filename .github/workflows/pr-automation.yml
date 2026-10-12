@@ -1,0 +1,305 @@
+name: PR Automation
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened, labeled, unlabeled]
+  pull_request_target:
+    types: [opened]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+jobs:
+  auto-label:
+    name: Auto Label PR
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Label based on changed files
+        uses: actions/labeler@v5
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+          configuration-path: .github/labeler.yml
+
+      - name: Label PR size
+        uses: codelytv/pr-size-labeler@v1
+        with:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          xs_label: 'size/xs'
+          xs_max_size: 10
+          s_label: 'size/s'
+          s_max_size: 100
+          m_label: 'size/m'
+          m_max_size: 500
+          l_label: 'size/l'
+          l_max_size: 1000
+          xl_label: 'size/xl'
+          fail_if_xl: false
+
+  semantic-pr-title:
+    name: Validate PR Title
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - name: Validate PR title follows Conventional Commits
+        uses: amannn/action-semantic-pull-request@v5
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          types: |
+            feat
+            fix
+            docs
+            style
+            refactor
+            perf
+            test
+            build
+            ci
+            chore
+            revert
+          scopes: |
+            frontend
+            backend
+            chat-ui
+            ai-agent
+            deps
+            ci
+            docker
+            db
+          requireScope: false
+          subjectPattern: ^[A-Z].+$
+          subjectPatternError: |
+            The subject "{subject}" found in the pull request title "{title}"
+            didn't match the configured pattern. Please ensure that the subject
+            starts with an uppercase character.
+
+  greeting:
+    name: Greet First Time Contributors
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request_target' && github.event.action == 'opened'
+    steps:
+      - name: Greet first-time contributors
+        uses: actions/first-interaction@v1
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+          pr-message: |
+            👋 Thanks for opening your first pull request in ThreadWise!
+
+            A maintainer will review your PR soon. In the meantime, please make sure:
+            - [ ] Your PR title follows [Conventional Commits](https://www.conventionalcommits.org/)
+            - [ ] All CI checks are passing
+            - [ ] You've added tests if applicable
+            - [ ] Documentation is updated if needed
+
+            We appreciate your contribution! 🎉
+
+  auto-assign-reviewers:
+    name: Auto Assign Reviewers
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request' && github.event.action == 'opened'
+    steps:
+      - name: Assign reviewers based on files changed
+        uses: kentaro-m/auto-assign-action@v2.0.0
+        with:
+          configuration-path: .github/auto-assign.yml
+
+  pr-checklist:
+    name: PR Checklist Reminder
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request' && github.event.action == 'opened'
+    steps:
+      - name: Add PR checklist comment
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const body = `## PR Checklist
+
+            Please ensure your PR meets these requirements:
+
+            ### Code Quality
+            - [ ] Code follows project style guidelines
+            - [ ] No console.logs or debugging code left
+            - [ ] All linting checks pass
+            - [ ] Type checking passes
+
+            ### Testing
+            - [ ] Tests added/updated for new functionality
+            - [ ] All tests pass locally
+            - [ ] Manual testing completed
+
+            ### Documentation
+            - [ ] Code is self-documenting or includes comments
+            - [ ] README updated if needed
+            - [ ] API changes documented
+
+            ### Security
+            - [ ] No sensitive data exposed (API keys, passwords, etc.)
+            - [ ] Input validation added where needed
+            - [ ] Security best practices followed
+
+            ### Database
+            - [ ] Database migrations included if schema changed
+            - [ ] Migrations tested locally
+            - [ ] Rollback plan considered
+
+            ### Performance
+            - [ ] No significant performance regressions
+            - [ ] Large queries optimized
+            - [ ] Proper caching implemented if needed
+
+            ---
+            *This checklist is a reminder. Feel free to remove items that don't apply to your PR.*`;
+
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: body
+            });
+
+  link-issues:
+    name: Link Related Issues
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - name: Link issues from PR description
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const prBody = context.payload.pull_request.body || '';
+            const issuePattern = /(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#(\d+)/gi;
+            const matches = [...prBody.matchAll(issuePattern)];
+
+            if (matches.length > 0) {
+              const issues = matches.map(m => `#${m[1]}`).join(', ');
+              console.log(`Found linked issues: ${issues}`);
+
+              // Add label to indicate PR fixes issues
+              await github.rest.issues.addLabels({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                labels: ['fixes-issue']
+              });
+            }
+
+  require-tests:
+    name: Require Tests for Code Changes
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check if tests are included
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { data: files } = await github.rest.pulls.listFiles({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.issue.number,
+            });
+
+            const codeFiles = files.filter(file =>
+              (file.filename.endsWith('.ts') ||
+               file.filename.endsWith('.tsx') ||
+               file.filename.endsWith('.py')) &&
+              !file.filename.includes('test') &&
+              !file.filename.includes('spec') &&
+              file.status !== 'removed'
+            );
+
+            const testFiles = files.filter(file =>
+              (file.filename.includes('test') ||
+               file.filename.includes('spec')) &&
+              file.status !== 'removed'
+            );
+
+            if (codeFiles.length > 0 && testFiles.length === 0) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: `⚠️ **No test files detected**\n\nThis PR modifies ${codeFiles.length} code file(s) but doesn't include any test files. Please consider adding tests to ensure code quality and prevent regressions.\n\nIf tests aren't applicable for this PR, you can ignore this message.`
+              });
+
+              await github.rest.issues.addLabels({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                labels: ['needs-tests']
+              });
+            }
+
+  pr-summary:
+    name: PR Summary Comment
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request' && github.event.action == 'opened'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Generate PR summary
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { data: files } = await github.rest.pulls.listFiles({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.issue.number,
+            });
+
+            const stats = {
+              added: 0,
+              deleted: 0,
+              changed: files.length,
+              frontend: 0,
+              backend: 0,
+              config: 0,
+              docs: 0,
+              tests: 0
+            };
+
+            files.forEach(file => {
+              stats.added += file.additions;
+              stats.deleted += file.deletions;
+
+              if (file.filename.startsWith('apps/chat-ui/')) stats.frontend++;
+              else if (file.filename.startsWith('apps/ai_agent/')) stats.backend++;
+              else if (file.filename.includes('test') || file.filename.includes('spec')) stats.tests++;
+              else if (file.filename.endsWith('.md')) stats.docs++;
+              else stats.config++;
+            });
+
+            const summary = `## 📊 PR Statistics
+
+            **Lines Changed**: +${stats.added} -${stats.deleted}
+            **Files Changed**: ${stats.changed}
+
+            **By Category**:
+            - 🎨 Frontend: ${stats.frontend} files
+            - 🤖 Backend: ${stats.backend} files
+            - ✅ Tests: ${stats.tests} files
+            - 📝 Docs: ${stats.docs} files
+            - ⚙️ Config: ${stats.config} files
+
+            ---
+            *Generated automatically by PR Automation*`;
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: summary
+            });

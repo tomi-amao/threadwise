@@ -5,5 +5,10 @@ node_modules
 infrastructure/supabase/volumes
 **.env
 **.zip
-apps/ai-agent
 apps/chat-ui/.react-router
+apps/chat-ui/build
+
+apps/ai_agent/utils/example_approaches
+**/.env.local
+.mcp.json
+apps/chat-ui/.env.local

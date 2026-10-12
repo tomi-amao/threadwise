@@ -1,0 +1,130 @@
+version: 2
+updates:
+  # GitHub Actions
+  - package-ecosystem: 'github-actions'
+    directory: '/'
+    schedule:
+      interval: 'weekly'
+      day: 'monday'
+    labels:
+      - 'dependencies'
+      - 'github-actions'
+    commit-message:
+      prefix: 'chore(deps)'
+      include: 'scope'
+
+  # Frontend - pnpm workspace
+  - package-ecosystem: 'npm'
+    directory: '/'
+    schedule:
+      interval: 'weekly'
+      day: 'tuesday'
+    labels:
+      - 'dependencies'
+      - 'frontend'
+    versioning-strategy: increase
+    commit-message:
+      prefix: 'chore(deps)'
+      include: 'scope'
+    groups:
+      react:
+        patterns:
+          - 'react'
+          - 'react-dom'
+          - 'react-router*'
+      ai-sdk:
+        patterns:
+          - '@ai-sdk/*'
+          - '@langchain/*'
+      ui-libraries:
+        patterns:
+          - '@radix-ui/*'
+          - 'framer-motion'
+          - 'tailwindcss'
+      dev-dependencies:
+        dependency-type: 'development'
+        update-types:
+          - 'minor'
+          - 'patch'
+
+  # Chat UI app specific
+  - package-ecosystem: 'npm'
+    directory: '/apps/chat-ui'
+    schedule:
+      interval: 'weekly'
+      day: 'tuesday'
+    labels:
+      - 'dependencies'
+      - 'chat-ui'
+    versioning-strategy: increase
+    commit-message:
+      prefix: 'chore(deps)'
+      include: 'scope'
+    ignore:
+      # Ignore major version updates for critical dependencies
+      - dependency-name: 'react'
+        update-types: ['version-update:semver-major']
+      - dependency-name: 'react-dom'
+        update-types: ['version-update:semver-major']
+      - dependency-name: 'react-router'
+        update-types: ['version-update:semver-major']
+
+  # Backend - Poetry
+  - package-ecosystem: 'pip'
+    directory: '/apps/ai_agent'
+    schedule:
+      interval: 'weekly'
+      day: 'wednesday'
+    labels:
+      - 'dependencies'
+      - 'backend'
+      - 'python'
+    commit-message:
+      prefix: 'chore(deps)'
+      include: 'scope'
+    groups:
+      langchain:
+        patterns:
+          - 'langchain*'
+          - 'langgraph*'
+      fastapi:
+        patterns:
+          - 'fastapi'
+          - 'uvicorn'
+          - 'pydantic*'
+      database:
+        patterns:
+          - 'psycopg*'
+          - 'supabase'
+          - 'redis'
+      testing:
+        patterns:
+          - 'pytest*'
+      linting:
+        patterns:
+          - 'black'
+          - 'flake8'
+          - 'isort'
+          - 'mypy'
+          - 'bandit'
+    ignore:
+      # Ignore major version updates for critical dependencies
+      - dependency-name: 'fastapi'
+        update-types: ['version-update:semver-major']
+      - dependency-name: 'langchain'
+        update-types: ['version-update:semver-major']
+      - dependency-name: 'langgraph'
+        update-types: ['version-update:semver-major']
+
+  # Docker
+  - package-ecosystem: 'docker'
+    directory: '/apps/ai_agent'
+    schedule:
+      interval: 'weekly'
+      day: 'thursday'
+    labels:
+      - 'dependencies'
+      - 'docker'
+    commit-message:
+      prefix: 'chore(deps)'
+      include: 'scope'

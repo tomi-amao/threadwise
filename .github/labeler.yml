@@ -1,0 +1,74 @@
+frontend:
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'apps/chat-ui/**/*'
+          - '!apps/chat-ui/**/*.md'
+
+backend:
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'apps/ai_agent/**/*'
+          - '!apps/ai_agent/**/*.md'
+
+dependencies:
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'package.json'
+          - 'pnpm-lock.yaml'
+          - 'apps/ai_agent/poetry.lock'
+          - 'apps/ai_agent/pyproject.toml'
+
+docker:
+  - changed-files:
+      - any-glob-to-any-file:
+          - '**/Dockerfile'
+          - 'docker-compose*.yml'
+
+ci/cd:
+  - changed-files:
+      - any-glob-to-any-file:
+          - '.github/workflows/**/*'
+          - '.github/dependabot.yml'
+
+documentation:
+  - changed-files:
+      - any-glob-to-any-file:
+          - '**/*.md'
+          - 'docs/**/*'
+
+database:
+  - changed-files:
+      - any-glob-to-any-file:
+          - '**/migrations/**/*'
+          - 'infrastructure/supabase/**/*.sql'
+
+tests:
+  - changed-files:
+      - any-glob-to-any-file:
+          - '**/*.test.*'
+          - '**/*.spec.*'
+          - '**/tests/**/*'
+
+configuration:
+  - changed-files:
+      - any-glob-to-any-file:
+          - '**/*.config.*'
+          - '**/*.json'
+          - '**/.env*'
+          - '**/tsconfig.json'
+          - '**/.eslintrc*'
+          - '**/.prettierrc*'
+
+security:
+  - changed-files:
+      - any-glob-to-any-file:
+          - '**/secrets/**/*'
+          - '**/*auth*'
+          - '**/*security*'
+
+performance:
+  - changed-files:
+      - any-glob-to-any-file:
+          - '**/*performance*'
+          - '**/*optimization*'
+          - '**/*cache*'

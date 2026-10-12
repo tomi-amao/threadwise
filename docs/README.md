@@ -46,3 +46,113 @@ Langgraph server now accepts additional custom api routes by setting the http se
 created a vector database in supabase
 
 will need to provide an authentication for langgraph server
+Query enhancement: Modify the input question to improve retrieval quality. This can involve rewriting unclear queries, generating multiple variations, or expanding queries with additional context.
+Retrieval validation: Evaluate whether retrieved documents are relevant and sufficient. If not, the system may refine the query and retrieve again.
+Answer validation: Check the generated answer for accuracy, completeness, and alignment with source content. If needed, the system can regenerate or revise the answer.
+
+Using Langgraph generative UI compared to Tool Resultins when rending UI
+
+| Aspect                    | LangGraph Generative UI          | Tool Result Rendering         |
+| ------------------------- | -------------------------------- | ----------------------------- |
+| Works with create_agent() | ❌ No (tools can't push UI)      | ✅ Yes                        |
+| Requires CLI bundling     | ✅ Yes (ui.tsx bundled)          | ❌ No                         |
+| Component loading         | External (network request)       | Inline (already bundled)      |
+| Complexity                | High (custom graph nodes needed) | Low (just parse tool output)  |
+| Real-time streaming       | ✅ Yes (partial updates)         | ❌ No (renders on completion) |
+
+Comparing LoadExternalComponent to LocalUIRenderer
+
+| Comparison               | LoadExternalComponent                      | LocalUIRenderer (Current)                |
+| ------------------------ | ------------------------------------------ | ---------------------------------------- |
+| Component Location       | Colocated with agent (`ui.tsx`)            | Frontend (visualizations)                |
+| Bundling                 | LangGraph CLI bundles React components     | Already bundled with your Vite/React app |
+| Network Request          | Fetches component JS from LangGraph server | No extra requests – components are local |
+| Requires `langgraph dev` | ✅ Yes                                     | ❌ No                                    |
+| Works with any server    | ❌ Only LangGraph CLI                      | ✅ Yes (uvicorn, Docker, etc.)           |
+
+Further improvements including adding semantic search for memories, caching requests
+
+Changed to pinecone vector store as it enables hybrid search capability, lexical and semantic search
+Additionally it includes reranking to improve document relevantcy
+
+TO DOs
+Check if an uploaded documents has been successfully embeded, if not add functionality to retry embed
+
+add memories with semantic search, based on logged in user
+
+create database funcions to calacualre common financial reports metrics
+
+implement backend authentication
+
+reprocess button in integration page
+
+highlight raw events that are stuck in processing
+
+Adding Stripe endpoints to improve context
+Does Stripe Improve AI Context?
+
+Yes — significantly.
+
+It adds:
+
+Payment success rate metrics
+
+Fraud signals
+
+Risk exposure
+
+Dispute patterns
+
+Real liquidity data
+
+Settlement timing data
+
+Customer payment behaviour
+
+decision between database approach and mcp-only appraoch
+Database Approach
+
+You are building:
+
+A persistent, structured, versioned memory of the business.
+
+Your agent queries:
+
+Canonical objects
+
+Derived aggregates
+
+Ledger balances
+
+Reconciled data
+
+This enables:
+
+Forecasting
+
+Trend detection
+
+Risk scoring
+
+Stable financial statements
+
+MCP-Only Approach
+
+You are building:
+
+A live query synthesizer.
+
+The agent must:
+
+Pull raw data
+
+Normalize on the fly
+
+Reconcile on the fly
+
+Infer clearing logic on the fly
+
+Add marketing context to understand how marketing translates to purchase orders
+
+consider SQL triggers e.g.
+Would you like me to write the SQL trigger that automatically updates your Inventory levels whenever a customer_invoice is marked as 'PAID'?

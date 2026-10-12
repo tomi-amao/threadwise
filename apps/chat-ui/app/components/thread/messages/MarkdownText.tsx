@@ -51,19 +51,31 @@ const defaultComponents: any = {
     <h1 className="mb-4 scroll-m-20 text-3xl font-bold tracking-tight first:mt-0" {...props} />
   ),
   h2: ({ className, ...props }: { className?: string }) => (
-    <h2 className="mb-3 mt-6 scroll-m-20 text-2xl font-semibold tracking-tight first:mt-0" {...props} />
+    <h2
+      className="mb-3 mt-6 scroll-m-20 text-2xl font-semibold tracking-tight first:mt-0"
+      {...props}
+    />
   ),
   h3: ({ className, ...props }: { className?: string }) => (
-    <h3 className="mb-2 mt-4 scroll-m-20 text-xl font-semibold tracking-tight first:mt-0" {...props} />
+    <h3
+      className="mb-2 mt-4 scroll-m-20 text-xl font-semibold tracking-tight first:mt-0"
+      {...props}
+    />
   ),
   h4: ({ className, ...props }: { className?: string }) => (
-    <h4 className="mb-2 mt-4 scroll-m-20 text-lg font-semibold tracking-tight first:mt-0" {...props} />
+    <h4
+      className="mb-2 mt-4 scroll-m-20 text-lg font-semibold tracking-tight first:mt-0"
+      {...props}
+    />
   ),
   p: ({ className, ...props }: { className?: string }) => (
     <p className="mb-4 leading-7 first:mt-0 last:mb-0" {...props} />
   ),
   a: ({ className, ...props }: { className?: string }) => (
-    <a className="text-primary font-medium underline underline-offset-4 hover:text-primary/80" {...props} />
+    <a
+      className="text-primary font-medium underline underline-offset-4 hover:text-primary/80"
+      {...props}
+    />
   ),
   blockquote: ({ className, ...props }: { className?: string }) => (
     <blockquote className="border-l-2 border-primary pl-4 italic my-4" {...props} />

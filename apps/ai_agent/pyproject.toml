@@ -8,27 +8,36 @@ authors = [
 readme = "README.md"
 requires-python = "<3.14,>=3.10"
 dependencies = [
-    "fastapi (>=0.115.12,<0.116.0)",
+    "fastapi (>=0.141.1,<0.142.0)",
     "uvicorn (>=0.34.2,<0.35.0)",
     "pydantic (>=2.11.5,<3.0.0)",
     "httpx (>=0.28.1,<0.29.0)",
-    "mypy (>=1.15.0,<2.0.0)",
+    "mypy (>=2.3.1,<3.0.0)",
     "langgraph (>=0.6.6)",
     "langchain-openai (>=0.3.32)",
-    "dotenv (>=0.9.9,<0.10.0)",
     "langchain-community (>=0.3.28)",
     "psycopg2-binary (>=2.9.10,<3.0.0)",
     "python-dotenv (>=1.1.1,<2.0.0)",
-    "sentence-transformers (>=3.3.1,<4.0.0)",
+    "sentence-transformers (>=6.0.1,<7.0.0)",
     "supabase (>=2.10.0)",
-    "PyPDF2 (>=3.0.0,<4.0.0)",
+    "pypdf (>=6.0.0,<7.0.0)",
     "python-docx (>=1.1.0,<2.0.0)",
     "python-multipart (>=0.0.20,<1.0.0)",
     "langchain-huggingface (>=0.3.1)",
-    "pypdf (>=6.0.0,<7.0.0)",
     "langchain (>=1.0.2,<2.0.0)",
     "langgraph-cli[inmem] (>=0.4.4,<0.5.0)",
     "langchain-text-splitters (>=1.0.0,<2.0.0)",
+    "langchain-google-genai (>=4.2.0,<5.0.0)",
+    # Pinecone vector store integration
+    "pinecone (>=5.0.0)",
+    "langchain-pinecone (>=0.2.0)",
+    "inngest (>=0.5.15,<0.6.0)",
+    "langchain-mcp-adapters (>=0.2.1,<0.3.0)",
+    # langchain-mcp-adapters declares "mcp >=1.9.2" with no upper bound, but its
+    # actual code isn't compatible with mcp 2.x (mcp.shared.context.RequestContext
+    # was removed/moved there) — cap it here until langchain-mcp-adapters itself
+    # bumps its constraint after verifying compatibility.
+    "mcp (<2.0.0)",
 ]
 
 [tool.poetry]
@@ -47,14 +56,20 @@ python_version = "3.13"
 warn_return_any = true
 warn_unused_configs = true
 
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
 
 [tool.poetry.group.dev.dependencies]
-black = "^25.1.0"
+black = "^26.3.0"
 isort = "^6.0.1"
-pytest = "^8.3.5"
+pytest = "^9.0.3"
+pytest-cov = "^7.0.0"
 watchfiles = "^1.0.5"
 pre-commit = "^4.2.0"
+flake8 = "^7.1.1"
 flake8-isort = "^6.1.2"
+bandit = "^1.8.0"
 
 [build-system]
 requires = ["poetry-core>=2.0.0,<3.0.0"]

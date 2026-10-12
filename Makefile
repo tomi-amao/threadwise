@@ -1,4 +1,4 @@
-.PHONY: help setup dev build start test clean docker-up docker-down docker-logs
+.PHONY: help setup dev dev-all clean-agent-state build start test clean docker-up docker-down docker-logs
 
 # Colors for output
 GREEN := \033[32m
@@ -14,11 +14,15 @@ help: ## Show this help message
 setup: ## Install all dependencies
 	@echo "$(YELLOW)Setting up all dependencies...$(RESET)"
 	pnpm install
-	cd apps/ai-agent && poetry install
+	cd apps/ai_agent && poetry install
 
 dev: ## Start all applications in development mode
 	@echo "$(GREEN)Starting all applications in development mode...$(RESET)"
 	pnpm dev
+
+dev-all: ## Start web, LangGraph agent, and Inngest dev server in one interactive multiplexer (mprocs)
+	@echo "$(GREEN)Starting web, agent, and Inngest dev server via mprocs...$(RESET)"
+	pnpm dev:all
 
 dev-web: ## Start only the React Router app
 	@echo "$(GREEN)Starting React Router app...$(RESET)"
@@ -55,6 +59,10 @@ format: ## Format all files
 clean: ## Clean all build artifacts and caches
 	@echo "$(YELLOW)Cleaning build artifacts...$(RESET)"
 	pnpm clean
+
+clean-agent-state: ## Wipe langgraph dev's local threads/checkpoints (stop the agent server first)
+	@echo "$(YELLOW)Removing apps/ai_agent/.langgraph_api ($$(du -sh apps/ai_agent/.langgraph_api 2>/dev/null | cut -f1))...$(RESET)"
+	rm -rf apps/ai_agent/.langgraph_api
 
 reset: ## Reset environment (clean + reinstall)
 	@echo "$(YELLOW)Resetting environment...$(RESET)"

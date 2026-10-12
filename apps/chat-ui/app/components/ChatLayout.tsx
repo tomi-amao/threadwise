@@ -1,25 +1,27 @@
-import React, { useEffect, useState } from "react";
-import { useChat } from "~/providers/ChatProvider";
-import { ThreadSidebar } from "./thread/ThreadSidebar";
-import { ChatArea } from "./thread/ChatArea";
-import { Button } from "./ui/button";
-import { List, ChatCircle } from "phosphor-react";
+import React, { useEffect, useState } from 'react';
+import { useChat } from '~/providers/ChatProvider';
+import { useSidebar } from '~/providers/SidebarProvider';
+import { ThreadSidebar } from './thread/ThreadSidebar';
+import { ChatArea } from './thread/ChatArea';
+import { Button } from './ui/button';
+import { List, ChatCircle, Sidebar } from 'phosphor-react';
 
 /**
  * ChatLayout Component - Main responsive layout manager for ThreadWise chat interface
- * 
+ *
  * Features:
  * - Mobile-first responsive design with sidebar overlay
  * - Desktop fixed sidebar layout
  * - Welcome screen when no thread selected
  * - Mobile navigation with hamburger menu
- * 
+ *
  * Layout Strategy:
  * - Mobile (< 1024px): Overlay sidebar with backdrop
  * - Desktop (>= 1024px): Fixed sidebar layout
  */
 export function ChatLayout() {
   const { threads, currentThread, createThread } = useChat();
+  const { setMobileOpen: setNavSidebarOpen } = useSidebar();
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
   // Mobile UX: Auto-close sidebar when thread is selected
@@ -31,22 +33,27 @@ export function ChatLayout() {
   }, [currentThread]);
 
   return (
-    <div className="flex h-screen bg-background overflow-hidden">
+    <div className="flex h-screen bg-background overflow-hidden max-h-screen">
+      {/* Ensure no overflow beyond screen height */}
       {/* Mobile Sidebar Overlay System */}
-      <div className={`
+      <div
+        className={`
         fixed inset-0 z-40 lg:hidden transition-opacity duration-300
         ${sidebarOpen ? 'opacity-100' : 'opacity-0 pointer-events-none'}
-      `}>
+      `}
+      >
         {/* Semi-transparent backdrop with blur effect */}
-        <div 
+        <div
           className="absolute inset-0 bg-black/50 backdrop-blur-sm"
           onClick={() => setSidebarOpen(false)}
         />
         {/* Sidebar container with slide animation */}
-        <div className={`
+        <div
+          className={`
           absolute left-0 top-0 h-full w-80 max-w-[85vw] transition-transform duration-300
           ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'}
-        `}>
+        `}
+        >
           <ThreadSidebar onClose={() => setSidebarOpen(false)} />
         </div>
       </div>
@@ -57,25 +64,35 @@ export function ChatLayout() {
       </div>
 
       {/* Main Content Area - Flexible layout for chat interface */}
-      <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
+      <div className="flex-1 flex flex-col min-w-0 overflow-hidden max-h-screen">
+        {/* Prevent overflow beyond screen height */}
         {/* Mobile Header Bar */}
-        <div className="lg:hidden border-b border-border bg-card/95 backdrop-blur-sm p-4 flex-shrink-0">
+        <div className="lg:hidden border-b border-border bg-card/95 backdrop-blur-sm p-4 shrink-0">
           <div className="flex items-center justify-between">
-            {/* Hamburger menu button */}
+            {/* Navigation sidebar hamburger */}
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => setNavSidebarOpen(true)}
+              className="h-8 w-8"
+              title="Open navigation menu"
+            >
+              <Sidebar size={20} weight="bold" />
+            </Button>
+
+            {/* Centered ThreadWise logo/title */}
+            <h1 className="text-lg font-semibold">ThreadWise</h1>
+
+            {/* Chat list sidebar hamburger */}
             <Button
               variant="ghost"
               size="icon"
               onClick={() => setSidebarOpen(true)}
               className="h-8 w-8"
+              title="Open chat list"
             >
               <List size={20} weight="bold" />
             </Button>
-            
-            {/* Centered ThreadWise logo/title */}
-            <h1 className="text-lg font-semibold">ThreadWise</h1>
-            
-            {/* Spacer for perfect centering */}
-            <div className="w-8" />
           </div>
         </div>
 
@@ -135,7 +152,8 @@ export function ChatLayout() {
 
               {/* Helper text */}
               <p className="text-xs text-muted-foreground max-w-sm mx-auto">
-                Ask me anything about your business data, analytics, or get insights from your connected platforms.
+                Ask me anything about your business data, analytics, or get insights from your
+                connected platforms.
               </p>
             </div>
           </div>

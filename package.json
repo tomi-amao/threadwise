@@ -9,25 +9,26 @@
     "format": "prettier --write .",
     "prepare": "husky",
     "dev": "concurrently --names \"WEB,API\" --prefix-colors \"blue,green\" \"pnpm dev:react-router\" \"pnpm dev:ai-agent\"",
-    "dev:react-router": "pnpm --filter threadwise-react-router dev",
-    "dev:ai-agent": "cd apps/ai-agent && poetry run uvicorn src.ai_agent.main:app --reload --host 0.0.0.0 --port 8000",
+    "dev:all": "mprocs",
+    "dev:react-router": "pnpm --filter threadwise-chat-ui dev",
+    "dev:ai-agent": "cd apps/ai_agent && poetry run uvicorn src.ai_agent.main:app --reload --host 0.0.0.0 --port 8000",
     "dev:web": "pnpm dev:react-router",
     "dev:api": "pnpm dev:ai-agent",
     "build": "pnpm build:react-router && pnpm build:ai-agent",
-    "build:react-router": "pnpm --filter threadwise-react-router build",
-    "build:ai-agent": "cd apps/ai-agent && poetry build",
+    "build:react-router": "pnpm --filter threadwise-chat-ui build",
+    "build:ai-agent": "cd apps/ai_agent && poetry build",
     "start": "concurrently --names \"WEB,API\" --prefix-colors \"blue,green\" \"pnpm start:react-router\" \"pnpm start:ai-agent\"",
-    "start:react-router": "pnpm --filter threadwise-react-router start",
-    "start:ai-agent": "cd apps/ai-agent && poetry run uvicorn src.ai_agent.main:app --host 0.0.0.0 --port 8000",
-    "setup": "pnpm install && cd apps/ai-agent && poetry install",
-    "clean": "pnpm --filter threadwise-react-router clean || true && cd apps/ai-agent && poetry run pip cache purge || true",
+    "start:react-router": "pnpm --filter threadwise-chat-ui start",
+    "start:ai-agent": "cd apps/ai_agent && poetry run uvicorn src.ai_agent.main:app --host 0.0.0.0 --port 8000",
+    "setup": "pnpm install && cd apps/ai_agent && poetry install",
+    "clean": "pnpm --filter threadwise-chat-ui clean || true && cd apps/ai_agent && poetry run pip cache purge || true",
     "reset": "pnpm clean && rm -rf node_modules apps/*/node_modules && pnpm setup",
-    "test:react-router": "pnpm --filter threadwise-react-router test",
-    "test:ai-agent": "cd apps/ai-agent && poetry run pytest",
-    "test:watch": "concurrently \"pnpm test:react-router --watch\" \"cd apps/ai-agent && poetry run pytest --watch\"",
+    "test:react-router": "pnpm --filter threadwise-chat-ui test",
+    "test:ai-agent": "cd apps/ai_agent && poetry run pytest",
+    "test:watch": "concurrently \"pnpm test:react-router --watch\" \"cd apps/ai_agent && poetry run pytest --watch\"",
     "typecheck": "pnpm typecheck:react-router && pnpm typecheck:ai-agent",
-    "typecheck:react-router": "pnpm --filter threadwise-react-router typecheck",
-    "typecheck:ai-agent": "cd apps/ai-agent && poetry run mypy src/",
+    "typecheck:react-router": "pnpm --filter threadwise-chat-ui typecheck",
+    "typecheck:ai-agent": "cd apps/ai_agent && poetry run mypy src/",
     "docker:build": "docker-compose build",
     "docker:up": "docker-compose up -d",
     "docker:down": "docker-compose down",
@@ -37,27 +38,37 @@
   "author": "",
   "license": "ISC",
   "packageManager": "pnpm@10.11.0",
+  "engines": {
+    "node": ">=24"
+  },
   "devDependencies": {
     "@eslint/css": "^0.8.1",
-    "@eslint/js": "^9.27.0",
+    "@eslint/js": "^9.39.5",
     "@eslint/json": "^0.12.0",
-    "@eslint/markdown": "^6.4.0",
-    "concurrently": "^9.1.0",
-    "eslint": "^9.27.0",
-    "eslint-config-prettier": "^10.1.5",
-    "eslint-plugin-prettier": "^5.4.0",
+    "@eslint/markdown": "^6.6.0",
+    "concurrently": "^9.2.4",
+    "eslint": "^9.39.5",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-prettier": "^5.5.6",
     "eslint-plugin-react": "^7.37.5",
-    "globals": "^16.2.0",
+    "globals": "^16.5.0",
     "husky": "^9.1.7",
-    "lint-staged": "^16.1.0",
-    "prettier": "^3.5.3",
-    "typescript": "^5.8.3",
-    "typescript-eslint": "^8.33.0"
+    "lint-staged": "^16.4.0",
+    "mprocs": "^0.9.6",
+    "prettier": "^3.9.7",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.70.0"
   },
   "lint-staged": {
     "*.{js,jsx,ts,tsx,json,css,md}": [
       "prettier --write",
       "eslint --fix"
     ]
+  },
+  "pnpm": {
+    "overrides": {
+      "ws@>=8.0.0 <8.21.0": ">=8.21.3",
+      "@eslint/plugin-kit@<0.3.4": ">=0.7.3"
+    }
   }
 }
