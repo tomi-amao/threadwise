@@ -238,11 +238,25 @@ tests ship in the same PR as the page. Per page:
   restore focus on close.
 - **Visual:** a screenshot per route and theme, kept as the baseline for later changes.
 
-**Open item to settle at the start of Phase 0.** The app sits behind Supabase login, and
-route loaders run on the server, so a browser test cannot stub their data over the network.
-We need one of: a seeded test database and a dedicated test user (preferred; credentials
-live in an example-config file, not the repo), or a test-mode fixture for loaders. Until
-then, tests that need real data cannot run in CI.
+**Test data: resolved (Oct 16).** The app sits behind Supabase login and loaders run on the
+server, so browser tests cannot stub their data. The suite therefore runs against a throwaway
+**local Supabase stack** with a seeded test user:
+
+- `supabase/migrations/20261014000000_baseline.sql` rebuilds the schema from scratch (the
+  repo previously held only additive migrations). The older migrations are in
+  `supabase/archive/`.
+- `pnpm db:start`, `pnpm e2e:env`, `pnpm e2e:seed`, `pnpm e2e` (or `pnpm db:fresh` to reset
+  and re-seed). Setup and layout are documented in `apps/chat-ui/e2e/README.md`.
+- Safety: every entry point refuses to run unless `SUPABASE_URL` is local, the test web
+  server never reuses an existing one, and a fixture fails any test whose browser contacts a
+  hosted Supabase project.
+- CI: `.github/workflows/e2e.yml` starts the same local stack (not yet exercised on a PR).
+- Seed data grows with each phase: Dashboard data exists now; Inventory, Reports and
+  Collections add their own rows when those pages are converted.
+
+First finding from the suite: the Dashboard header shows "Your Business" because loaders
+cannot see the browser's `localStorage` session. Recorded as a `test.fixme`; the redesign
+should move to cookie-based auth for loaders.
 
 ## Risks
 

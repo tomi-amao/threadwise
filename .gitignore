@@ -12,3 +12,14 @@ apps/ai_agent/utils/example_approaches
 **/.env.local
 .mcp.json
 apps/chat-ui/.env.local
+supabase/.temp
+# Supabase CLI local state
+supabase/.branches
+supabase/snippets
+
+# Playwright / e2e
+apps/chat-ui/.env.test
+apps/chat-ui/playwright-report
+apps/chat-ui/test-results
+apps/chat-ui/e2e/.auth
+apps/chat-ui/e2e/.seed-manifest.json

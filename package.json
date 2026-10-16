@@ -32,7 +32,14 @@
     "docker:build": "docker-compose build",
     "docker:up": "docker-compose up -d",
     "docker:down": "docker-compose down",
-    "docker:logs": "docker-compose logs -f"
+    "docker:logs": "docker-compose logs -f",
+    "db:start": "supabase start",
+    "db:stop": "supabase stop",
+    "db:reset": "supabase db reset",
+    "db:fresh": "supabase db reset && pnpm e2e:env && pnpm e2e:seed",
+    "e2e:env": "pnpm --filter threadwise-chat-ui e2e:env",
+    "e2e:seed": "pnpm --filter threadwise-chat-ui e2e:seed",
+    "e2e": "pnpm --filter threadwise-chat-ui test:e2e"
   },
   "keywords": [],
   "author": "",

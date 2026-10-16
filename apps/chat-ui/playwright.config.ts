@@ -1,0 +1,78 @@
+import { defineConfig, devices } from '@playwright/test';
+import { AUTH_FILE, assertLocalSupabase, loadTestEnv, requireEnv } from './e2e/env';
+
+// Refuse to start at all unless Supabase is the local stack (see e2e/env.ts).
+loadTestEnv();
+const supabaseUrl = assertLocalSupabase(process.env.SUPABASE_URL);
+const anonKey = requireEnv('SUPABASE_ANON_KEY');
+const serviceKey = requireEnv('SUPABASE_SERVICE_ROLE_KEY');
+
+const PORT = 5180; // not 5174, so a normal dev server (which may point at the hosted DB) is never reused
+const BASE_URL = `http://localhost:${PORT}`;
+
+const desktop = { ...devices['Desktop Chrome'], viewport: { width: 1280, height: 900 } };
+
+export default defineConfig({
+  testDir: './e2e',
+  testMatch: /.*\.(spec|setup)\.ts/,
+  fullyParallel: true,
+  forbidOnly: !!process.env.CI,
+  retries: process.env.CI ? 1 : 0,
+  workers: process.env.CI ? 1 : undefined,
+  timeout: 30_000,
+  expect: { timeout: 10_000 },
+  reporter: process.env.CI ? [['list'], ['html', { open: 'never' }]] : [['list']],
+  use: {
+    baseURL: BASE_URL,
+    trace: 'retain-on-failure',
+    screenshot: 'only-on-failure',
+  },
+
+  projects: [
+    { name: 'setup', testMatch: /auth\.setup\.ts/, use: desktop },
+    {
+      name: 'desktop',
+      testIgnore: /auth\.setup\.ts/,
+      dependencies: ['setup'],
+      use: { ...desktop, storageState: AUTH_FILE },
+    },
+    {
+      name: 'tablet',
+      testIgnore: /auth\.setup\.ts/,
+      dependencies: ['setup'],
+      use: { ...desktop, viewport: { width: 768, height: 1024 }, storageState: AUTH_FILE },
+    },
+    {
+      name: 'mobile',
+      testIgnore: /auth\.setup\.ts/,
+      dependencies: ['setup'],
+      use: {
+        ...desktop,
+        viewport: { width: 390, height: 844 },
+        isMobile: true,
+        hasTouch: true,
+        storageState: AUTH_FILE,
+      },
+    },
+  ],
+
+  webServer: {
+    command: `pnpm exec react-router dev --port ${PORT} --strictPort`,
+    url: `${BASE_URL}/login`,
+    // Never attach to an already-running server: it could be configured for another database.
+    reuseExistingServer: false,
+    timeout: 120_000,
+    // Explicit env wins over any .env / .env.local file, so the hosted keys in
+    // .env.local can never leak into a test run.
+    env: {
+      SUPABASE_URL: supabaseUrl,
+      SUPABASE_ANON_KEY: anonKey,
+      SUPABASE_SERVICE_ROLE_KEY: serviceKey,
+      SUPABASE_SECRET_KEY: serviceKey,
+      SUPABASE_PUBLISHABLE_KEY: anonKey,
+      VITE_SUPABASE_URL: supabaseUrl,
+      VITE_SUPABASE_ANON_KEY: anonKey,
+      VITE_SUPABASE_PUBLISHABLE_KEY: anonKey,
+    },
+  },
+});
