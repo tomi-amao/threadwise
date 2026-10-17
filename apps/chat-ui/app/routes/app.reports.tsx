@@ -1089,10 +1089,10 @@ function RevenueAnalysisTab({
                 tickPadding: 8,
                 format: v => `£${Number(v) >= 1000 ? `${(Number(v) / 1000).toFixed(0)}k` : v}`,
               }}
-              colors={['hsl(var(--primary))', 'hsl(142, 71%, 45%)']}
+              colors={['var(--primary)', 'hsl(142, 71%, 45%)']}
               lineWidth={2.5}
               pointSize={5}
-              pointColor="hsl(var(--card))"
+              pointColor="var(--card)"
               pointBorderWidth={2}
               pointBorderColor={{ from: 'serieColor' }}
               enableArea={false}
@@ -1108,17 +1108,17 @@ function RevenueAnalysisTab({
                   itemHeight: 20,
                   symbolSize: 10,
                   symbolShape: 'circle',
-                  itemTextColor: 'hsl(var(--muted-foreground))',
+                  itemTextColor: 'var(--muted-foreground)',
                 },
               ]}
               theme={{
-                text: { fill: 'hsl(var(--muted-foreground))' },
+                text: { fill: 'var(--muted-foreground)' },
                 axis: {
                   ticks: {
-                    text: { fontSize: 11, fill: 'hsl(var(--muted-foreground))' },
+                    text: { fontSize: 11, fill: 'var(--muted-foreground)' },
                   },
                 },
-                grid: { line: { stroke: 'hsl(var(--border))', strokeWidth: 1 } },
+                grid: { line: { stroke: 'var(--border)', strokeWidth: 1 } },
                 legends: { text: { fontSize: 11 } },
               }}
               tooltip={({ point }) => (
@@ -1904,13 +1904,13 @@ function CashTrendChart({ insights }: { insights: CashInsights }) {
             {
               axis: 'y',
               value: 0,
-              lineStyle: { stroke: 'hsl(var(--border))', strokeWidth: 1.5 },
+              lineStyle: { stroke: 'var(--border)', strokeWidth: 1.5 },
             },
           ]}
           theme={{
-            text: { fill: 'hsl(var(--muted-foreground))' },
-            axis: { ticks: { text: { fontSize: 11, fill: 'hsl(var(--muted-foreground))' } } },
-            grid: { line: { stroke: 'hsl(var(--border))', strokeWidth: 1 } },
+            text: { fill: 'var(--muted-foreground)' },
+            axis: { ticks: { text: { fontSize: 11, fill: 'var(--muted-foreground)' } } },
+            grid: { line: { stroke: 'var(--border)', strokeWidth: 1 } },
           }}
           tooltip={({ data: d }) => (
             <div className="bg-popover text-popover-foreground border border-border rounded-lg px-3 py-2 shadow-lg text-xs space-y-0.5">

@@ -159,7 +159,7 @@ function SectionHeader({
   return (
     <div
       className={cn(
-        'flex items-center justify-between py-3 border-b border-white/8',
+        'flex items-center justify-between py-3 border-b border-foreground/8',
         collapsible && 'cursor-pointer select-none'
       )}
       onClick={collapsible ? onToggle : undefined}
@@ -184,7 +184,7 @@ function SectionHeader({
 
 function DetailRow({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <div className="flex items-start justify-between gap-3 py-2 text-sm border-b border-white/5 last:border-0">
+    <div className="flex items-start justify-between gap-3 py-2 text-sm border-b border-foreground/5 last:border-0">
       <span className="text-muted-foreground shrink-0 w-36">{label}</span>
       <span className="text-foreground text-right">{children}</span>
     </div>
@@ -199,10 +199,10 @@ function LineItemsTable({ items }: { items: JournalLineItemWithAccount[] }) {
   const currency = items[0]?.currency ?? 'GBP';
 
   return (
-    <div className="mt-3 rounded-lg border border-white/10 overflow-hidden text-xs">
+    <div className="mt-3 rounded-lg border border-foreground/10 overflow-hidden text-xs">
       <table className="w-full">
         <thead>
-          <tr className="bg-white/5 text-muted-foreground">
+          <tr className="bg-foreground/5 text-muted-foreground">
             <th className="text-left px-3 py-2 font-medium">Account</th>
             <th className="text-right px-3 py-2 font-medium">Debit</th>
             <th className="text-right px-3 py-2 font-medium">Credit</th>
@@ -210,7 +210,7 @@ function LineItemsTable({ items }: { items: JournalLineItemWithAccount[] }) {
         </thead>
         <tbody>
           {items.map(item => (
-            <tr key={item.id} className="border-t border-white/8 hover:bg-white/3">
+            <tr key={item.id} className="border-t border-foreground/8 hover:bg-foreground/3">
               <td className="px-3 py-2">
                 <div className="font-medium text-foreground">
                   {item.account_number} — {item.account_name ?? item.account_id.slice(0, 8)}
@@ -231,7 +231,7 @@ function LineItemsTable({ items }: { items: JournalLineItemWithAccount[] }) {
           ))}
         </tbody>
         <tfoot>
-          <tr className="bg-white/5 border-t border-white/10 font-semibold">
+          <tr className="bg-foreground/5 border-t border-foreground/10 font-semibold">
             <td className="px-3 py-2 text-muted-foreground">Total</td>
             <td className="px-3 py-2 text-right font-mono text-emerald-400">
               {formatMoney(totalDebit, currency)}
@@ -307,7 +307,7 @@ function EditForm({ txn, chartOfAccounts, onSave, isSaving }: EditFormProps) {
           id="edit-description"
           value={description}
           onChange={e => setDescription(e.target.value)}
-          className="h-8 text-sm bg-white/5 border-white/15"
+          className="h-8 text-sm bg-foreground/5 border-foreground/15"
           placeholder="Transaction description"
         />
       </div>
@@ -321,7 +321,7 @@ function EditForm({ txn, chartOfAccounts, onSave, isSaving }: EditFormProps) {
           id="edit-counterparty"
           value={counterparty}
           onChange={e => setCounterparty(e.target.value)}
-          className="h-8 text-sm bg-white/5 border-white/15"
+          className="h-8 text-sm bg-foreground/5 border-foreground/15"
           placeholder="Vendor or counterparty name"
         />
       </div>
@@ -334,7 +334,7 @@ function EditForm({ txn, chartOfAccounts, onSave, isSaving }: EditFormProps) {
           value={accountCode}
           onChange={setAccountCode}
           placeholder="Select account..."
-          className="h-8 text-sm bg-white/5 border-white/15"
+          className="h-8 text-sm bg-foreground/5 border-foreground/15"
         />
         {accountCode && (
           <p className="text-[11px] text-muted-foreground">
@@ -344,7 +344,7 @@ function EditForm({ txn, chartOfAccounts, onSave, isSaving }: EditFormProps) {
       </div>
 
       {/* Exclude toggle */}
-      <div className="rounded-lg border border-white/10 p-3 space-y-3">
+      <div className="rounded-lg border border-foreground/10 p-3 space-y-3">
         <label className="flex items-center gap-3 cursor-pointer">
           <input
             type="checkbox"
@@ -363,7 +363,7 @@ function EditForm({ txn, chartOfAccounts, onSave, isSaving }: EditFormProps) {
           <Input
             value={excludeReason}
             onChange={e => setExcludeReason(e.target.value)}
-            className="h-8 text-sm bg-white/5 border-white/15"
+            className="h-8 text-sm bg-foreground/5 border-foreground/15"
             placeholder="Reason for exclusion (e.g. 'Internal transfer')"
           />
         )}
@@ -490,13 +490,13 @@ export function TransactionDrawer({
       <div
         className={cn(
           'fixed top-0 right-0 h-full w-full sm:w-[520px] z-50 flex flex-col',
-          'bg-card border-l border-white/10 shadow-2xl',
+          'bg-card border-l border-foreground/10 shadow-2xl',
           'transition-transform duration-300 ease-in-out',
           isOpen ? 'translate-x-0' : 'translate-x-full'
         )}
       >
         {/* Header */}
-        <div className="flex items-center justify-between px-5 py-4 border-b border-white/10 shrink-0">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-foreground/10 shrink-0">
           <div className="flex items-center gap-2">
             <CurrencyCircleDollar size={20} weight="duotone" className="text-primary" />
             <span className="font-semibold text-foreground">Transaction Detail</span>
@@ -637,10 +637,10 @@ export function TransactionDrawer({
               </div>
 
               {/* ── Edit Section ── */}
-              <div className="mt-4 rounded-lg border border-white/10 overflow-hidden">
+              <div className="mt-4 rounded-lg border border-foreground/10 overflow-hidden">
                 <button
                   type="button"
-                  className="w-full flex items-center justify-between px-4 py-3 text-sm font-semibold text-foreground hover:bg-white/5 transition-colors"
+                  className="w-full flex items-center justify-between px-4 py-3 text-sm font-semibold text-foreground hover:bg-foreground/5 transition-colors"
                   onClick={() => setEditOpen(v => !v)}
                 >
                   <div className="flex items-center gap-2">
@@ -651,7 +651,7 @@ export function TransactionDrawer({
                 </button>
 
                 {editOpen && (
-                  <div className="px-4 pb-4 border-t border-white/10">
+                  <div className="px-4 pb-4 border-t border-foreground/10">
                     {journal && journal.status === 'posted' && (
                       <div className="flex items-start gap-2 my-3 p-3 rounded-lg bg-amber-500/10 border border-amber-500/20 text-xs text-amber-300">
                         <Warning size={14} className="shrink-0 mt-0.5" />

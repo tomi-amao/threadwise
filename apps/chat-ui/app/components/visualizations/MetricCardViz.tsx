@@ -44,7 +44,7 @@ export function MetricCardViz({
         return 'text-red-400';
       case 'neutral':
       default:
-        return 'text-neutral-400';
+        return 'text-muted-foreground';
     }
   };
 
@@ -52,10 +52,12 @@ export function MetricCardViz({
     trend?.direction === 'up' ? TrendingUp : trend?.direction === 'down' ? TrendingDown : Minus;
 
   return (
-    <div className="bg-neutral-900 rounded-lg p-6 border border-neutral-800 hover:border-neutral-700 transition-colors">
+    <div className="bg-card rounded-lg p-6 border border-border hover:border-border-strong transition-colors">
       <div className="flex flex-col gap-2">
-        <h3 className="text-sm font-medium text-neutral-400 uppercase tracking-wide">{title}</h3>
-        <div className="text-3xl font-bold text-white">{formatValue(value, format)}</div>
+        <h3 className="text-sm font-medium text-muted-foreground uppercase tracking-wide">
+          {title}
+        </h3>
+        <div className="text-3xl font-bold text-foreground">{formatValue(value, format)}</div>
         {trend && (
           <div className={`flex items-center gap-1 text-sm ${getTrendColor(trend.direction)}`}>
             <TrendIcon className="w-4 h-4" />
@@ -63,7 +65,7 @@ export function MetricCardViz({
             <span className="text-neutral-500">{trend.period}</span>
           </div>
         )}
-        {description && <p className="text-sm text-neutral-400 mt-2">{description}</p>}
+        {description && <p className="text-sm text-muted-foreground mt-2">{description}</p>}
       </div>
     </div>
   );

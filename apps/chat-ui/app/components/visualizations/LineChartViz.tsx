@@ -39,8 +39,8 @@ export function LineChartViz({
   format = 'number',
 }: LineChartProps) {
   return (
-    <div className="w-full bg-neutral-900 rounded-lg p-6 border border-neutral-800">
-      <h3 className="text-lg font-semibold text-white mb-4">{title}</h3>
+    <div className="w-full bg-card rounded-lg p-6 border border-border">
+      <h3 className="text-lg font-semibold text-foreground mb-4">{title}</h3>
       <div className="h-[400px] w-full">
         <ResponsiveLine
           data={data}
@@ -83,12 +83,12 @@ export function LineChartViz({
           enableArea={true}
           areaOpacity={0.1}
           tooltip={({ point }) => (
-            <div className="bg-neutral-800 px-3 py-2 rounded shadow-lg border border-neutral-700">
+            <div className="bg-popover px-3 py-2 rounded shadow-lg border border-border-strong">
               <div className="flex items-center gap-2">
                 <div className="w-3 h-3 rounded-full" style={{ backgroundColor: point.color }} />
-                <span className="text-white font-medium">{point.seriesId}</span>
+                <span className="text-foreground font-medium">{point.seriesId}</span>
               </div>
-              <div className="text-neutral-300 text-sm mt-1">
+              <div className="text-text-2 text-sm mt-1">
                 {point.data.xFormatted}: {formatValue(Number(point.data.y), format)}
               </div>
             </div>

@@ -30,8 +30,8 @@ const formatValue = (value: number, format?: 'currency' | 'number' | 'percentage
 
 export function PieChartViz({ title, data, format = 'number' }: PieChartProps) {
   return (
-    <div className="w-full bg-neutral-900 rounded-lg p-6 border border-neutral-800">
-      <h3 className="text-lg font-semibold text-white mb-4">{title}</h3>
+    <div className="w-full bg-card rounded-lg p-6 border border-border">
+      <h3 className="text-lg font-semibold text-foreground mb-4">{title}</h3>
       <div className="h-[400px] w-full">
         <ResponsivePie
           data={data}
@@ -57,12 +57,12 @@ export function PieChartViz({ title, data, format = 'number' }: PieChartProps) {
           }}
           valueFormat={value => formatValue(value, format)}
           tooltip={({ datum }) => (
-            <div className="bg-neutral-800 px-3 py-2 rounded shadow-lg border border-neutral-700">
+            <div className="bg-popover px-3 py-2 rounded shadow-lg border border-border-strong">
               <div className="flex items-center gap-2">
                 <div className="w-3 h-3 rounded" style={{ backgroundColor: datum.color }} />
-                <span className="text-white font-medium">{datum.label}</span>
+                <span className="text-foreground font-medium">{datum.label}</span>
               </div>
-              <div className="text-neutral-300 text-sm mt-1">
+              <div className="text-text-2 text-sm mt-1">
                 {formatValue(datum.value, format)} ({datum.formattedValue})
               </div>
             </div>

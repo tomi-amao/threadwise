@@ -125,7 +125,7 @@ function FilterSelect({
       value={value}
       onChange={e => onChange(e.target.value)}
       className={cn(
-        'h-8 px-2 py-0 rounded-lg text-xs bg-white/8 border border-white/15 text-foreground',
+        'h-8 px-2 py-0 rounded-lg text-xs bg-foreground/8 border border-foreground/15 text-foreground',
         'focus:outline-none focus:ring-1 focus:ring-primary/50 cursor-pointer appearance-none pr-6',
         'bg-[url("data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 fill=%27none%27 viewBox=%270 0 20 20%27%3E%3Cpath stroke=%27%236b7280%27 stroke-linecap=%27round%27 stroke-linejoin=%27round%27 stroke-width=%271.5%27 d=%27M6 8l4 4 4-4%27/%3E%3C/svg%3E")] bg-no-repeat bg-right',
         className
@@ -205,7 +205,7 @@ function StatsBar({
       ].map(stat => (
         <div
           key={stat.label}
-          className="bg-card rounded-xl border border-white/8 px-4 py-3 flex items-center gap-3"
+          className="bg-card rounded-xl border border-foreground/8 px-4 py-3 flex items-center gap-3"
         >
           {stat.icon && <span className={stat.className}>{stat.icon}</span>}
           <div>
@@ -367,7 +367,7 @@ export function TransactionsPage() {
       />
 
       {/* ── Search & Filter Bar ── */}
-      <div className="bg-card rounded-xl border border-white/8 p-4 space-y-3">
+      <div className="bg-card rounded-xl border border-foreground/8 p-4 space-y-3">
         <div className="flex items-center gap-2">
           {/* Search */}
           <div className="relative flex-1">
@@ -379,7 +379,7 @@ export function TransactionsPage() {
               value={pendingSearch}
               onChange={e => handleSearchChange(e.target.value)}
               placeholder="Search description or counterparty…"
-              className="h-9 pl-9 pr-8 text-sm bg-white/5 border-white/15"
+              className="h-9 pl-9 pr-8 text-sm bg-foreground/5 border-foreground/15"
             />
             {pendingSearch && (
               <button
@@ -457,14 +457,14 @@ export function TransactionsPage() {
                 type="date"
                 value={filters.dateFrom}
                 onChange={e => updateFilter('dateFrom', e.target.value)}
-                className="h-8 px-2 rounded-lg text-xs bg-white/8 border border-white/15 text-foreground focus:outline-none focus:ring-1 focus:ring-primary/50"
+                className="h-8 px-2 rounded-lg text-xs bg-foreground/8 border border-foreground/15 text-foreground focus:outline-none focus:ring-1 focus:ring-primary/50"
               />
               <span>To</span>
               <input
                 type="date"
                 value={filters.dateTo}
                 onChange={e => updateFilter('dateTo', e.target.value)}
-                className="h-8 px-2 rounded-lg text-xs bg-white/8 border border-white/15 text-foreground focus:outline-none focus:ring-1 focus:ring-primary/50"
+                className="h-8 px-2 rounded-lg text-xs bg-foreground/8 border border-foreground/15 text-foreground focus:outline-none focus:ring-1 focus:ring-primary/50"
               />
             </div>
           </div>
@@ -472,9 +472,9 @@ export function TransactionsPage() {
       </div>
 
       {/* ── Table ── */}
-      <div className="bg-card rounded-xl border border-white/8 overflow-hidden">
+      <div className="bg-card rounded-xl border border-foreground/8 overflow-hidden">
         {/* Table header */}
-        <div className="grid grid-cols-[1fr_auto_auto_auto_auto] gap-3 px-4 py-2.5 border-b border-white/8 bg-white/3 text-[11px] font-semibold text-muted-foreground uppercase tracking-wide">
+        <div className="grid grid-cols-[1fr_auto_auto_auto_auto] gap-3 px-4 py-2.5 border-b border-foreground/8 bg-foreground/3 text-[11px] font-semibold text-muted-foreground uppercase tracking-wide">
           <span>Description / Counterparty</span>
           <span className="text-right hidden sm:block">Date</span>
           <span className="hidden md:block">Type</span>
@@ -509,10 +509,10 @@ export function TransactionsPage() {
               onClick={() => setSelectedId(txn.id)}
               className={cn(
                 'w-full grid grid-cols-[1fr_auto_auto_auto_auto] gap-3 px-4 py-3 items-center text-left',
-                'border-b border-white/5 last:border-0',
-                'hover:bg-white/4 transition-colors group',
+                'border-b border-foreground/5 last:border-0',
+                'hover:bg-foreground/4 transition-colors group',
                 txn.excluded_reason && 'opacity-50',
-                selectedId === txn.id && 'bg-white/6'
+                selectedId === txn.id && 'bg-foreground/6'
               )}
             >
               {/* Description */}
