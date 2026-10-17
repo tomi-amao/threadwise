@@ -403,3 +403,61 @@ export async function readJournalsByDescription(description: string) {
 export async function readJournalByDescription(description: string) {
   return (await readJournalsByDescription(description))[0];
 }
+
+// ─── Payment matching (an invoice's bank payment) ──────────────────────────────────────────────
+
+export interface BorrowedTxn {
+  id: string;
+  restore: () => Promise<void>;
+}
+
+/**
+ * Make an unmatched bank transaction of the given direction look like the payment for an invoice
+ * (its amount and counterparty), and hand back how to put it back as it was.
+ */
+export async function borrowTransaction(
+  direction: 'in' | 'out',
+  amount: number,
+  counterparty: string
+): Promise<BorrowedTxn> {
+  const rows = await rest<
+    {
+      id: string;
+      amount: number;
+      base_amount: number;
+      counterparty_name: string | null;
+      metadata: Record<string, unknown> | null;
+    }[]
+  >(
+    'GET',
+    'financial_transactions',
+    `select=id,amount,base_amount,counterparty_name,metadata&direction=eq.${direction}&excluded_reason=is.null&external_transaction_id=like.e2e-txn-*&order=external_transaction_id.desc&limit=40`
+  );
+  const row = rows.find(r => !r.metadata?.invoice_id);
+  if (!row) throw new Error('No unmatched transaction to borrow');
+  await rest('PATCH', 'financial_transactions', `id=eq.${row.id}`, {
+    amount,
+    base_amount: amount,
+    counterparty_name: counterparty,
+  });
+  return {
+    id: row.id,
+    restore: async () => {
+      await rest('PATCH', 'financial_transactions', `id=eq.${row.id}`, {
+        amount: row.amount,
+        base_amount: row.base_amount,
+        counterparty_name: row.counterparty_name,
+        metadata: row.metadata ?? {},
+      });
+    },
+  };
+}
+
+export async function readTxnInvoiceId(id: string): Promise<unknown> {
+  const rows = await rest<{ metadata: Record<string, unknown> | null }[]>(
+    'GET',
+    'financial_transactions',
+    `select=metadata&id=eq.${id}`
+  );
+  return rows[0]?.metadata?.invoice_id;
+}

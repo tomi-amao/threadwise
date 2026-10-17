@@ -23,7 +23,6 @@ import {
   ShoppingCart,
   Package,
   Users,
-  Wrench,
   BookOpen,
   Scales,
   StackSimple,
@@ -196,18 +195,6 @@ export function Sidebar({ className }: SidebarProps) {
             to="/customers"
             icon={<Users size={20} weight="light" />}
             label="Customers"
-            collapsed={collapsed}
-            onClick={closeMobile}
-          />
-        </div>
-
-        {/* Tools Section */}
-        <div className="mb-4">
-          {!collapsed && <p className="eyebrow px-4 py-2">Tools</p>}
-          <NavItem
-            to="/reclassification"
-            icon={<Wrench size={20} weight="light" />}
-            label="Reclassification"
             collapsed={collapsed}
             onClick={closeMobile}
           />

@@ -11,8 +11,7 @@
  */
 
 import { useCallback, useEffect, useState } from 'react';
-import { Link } from 'react-router';
-import { ArrowRight, ArrowSquareOut, CircleNotch, FileText } from 'phosphor-react';
+import { ArrowRight, CircleNotch, FileText } from 'phosphor-react';
 import { toast } from 'sonner';
 import { Button } from '~/components/ui/button';
 import { Chip } from '~/components/ui/chip';
@@ -29,6 +28,7 @@ import { FIELD_TRIGGER_CLASS, SearchableSelect } from '~/components/ui/searchabl
 import { Textarea } from '~/components/ui/textarea';
 import type { InvoiceDetail, InvoiceStatus, StockDecision } from '~/types/invoice';
 import { cn } from '~/lib/utils';
+import { PaymentMatch } from './PaymentMatch';
 import { StockSection, looksLikeStock } from './StockSection';
 import {
   DIRECTION,
@@ -489,14 +489,6 @@ function Body({
                 ? 'Paid, and matched to a bank transaction.'
                 : 'Paid. No bank transaction is matched to it yet.'}
             </p>
-            {matched_transaction_id && (
-              <Link
-                to={`/transactions?transactionId=${matched_transaction_id}`}
-                className="inline-flex items-center gap-1 rounded-sm text-[14px] text-accent-text underline underline-offset-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              >
-                View the transaction <ArrowSquareOut size={14} aria-hidden />
-              </Link>
-            )}
           </div>
         )}
 
@@ -507,6 +499,21 @@ function Body({
           </p>
         )}
       </section>
+
+      {finalised && (
+        <PaymentMatch
+          matchedId={matched_transaction_id}
+          candidates={detail.payment_candidates}
+          isSale={isSale}
+          busy={busy !== null}
+          onMatch={id =>
+            run('match', { intent: 'matchPayment', transactionId: id }, () => 'Payment matched')
+          }
+          onUnmatch={id =>
+            run('match', { intent: 'unmatchPayment', transactionId: id }, () => 'Match removed')
+          }
+        />
+      )}
 
       <section aria-label="Amounts" className="space-y-3">
         <dl className="grid grid-cols-3 gap-3">

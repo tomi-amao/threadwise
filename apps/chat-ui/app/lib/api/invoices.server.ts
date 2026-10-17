@@ -24,6 +24,7 @@ import type {
   InvoiceDetail,
   InvoiceLineItem,
   InvoiceRow,
+  PaymentCandidate,
 } from '~/types/invoice';
 
 const CONTACT_COLUMNS = 'id, name, company_name, email, contact_type';
@@ -105,7 +106,7 @@ export async function getInvoiceDetail(
     .sort((a, b) => a.id.localeCompare(b.id));
 
   const entityId = invoice.entity_id;
-  const [journals, matched, stocked, accounts, products] = await Promise.all([
+  const [journals, matched, stocked, accounts, products, candidates] = await Promise.all([
     readJournals(user, entityId, invoiceId),
     findMatchingTransaction(user, invoice.invoice_number, entityId),
     readStockedLines(
@@ -114,6 +115,7 @@ export async function getInvoiceDetail(
     ),
     readGlAccounts(user),
     readProducts(user, entityId),
+    findPaymentCandidates(user, invoice),
   ]);
 
   return {
@@ -121,6 +123,7 @@ export async function getInvoiceDetail(
     lines,
     journals,
     matched_transaction_id: matched,
+    payment_candidates: matched ? [] : candidates,
     stocked_line_ids: stocked,
     gl_accounts: accounts,
     products,
@@ -197,6 +200,99 @@ export async function findMatchingTransaction(
     .maybeSingle();
   if (error) throw new Error(`Failed to check for a matching payment: ${error.message}`);
   return data?.id ?? null;
+}
+
+/**
+ * Bank transactions that could be the payment for a finalised invoice: money going the right way
+ * (out for a purchase, in for a sale), in the invoice's currency, within 10% of its total, and
+ * not already matched to another invoice. Nearest amount first.
+ */
+export async function findPaymentCandidates(
+  supabase: SupabaseClient,
+  invoice: InvoiceRow
+): Promise<PaymentCandidate[]> {
+  if (invoice.status === 'DRAFT' || invoice.status === 'CANCELLED' || invoice.status === 'VOID') {
+    return [];
+  }
+  const total = invoice.gross_amount;
+  if (!(total > 0)) return [];
+  const { data, error } = await supabase
+    .from('financial_transactions')
+    .select('id, occurred_at, description, counterparty_name, amount, currency_code, metadata')
+    .eq('entity_id', invoice.entity_id)
+    .eq('direction', invoice.invoice_type === 'SALE' ? 'in' : 'out')
+    .eq('currency_code', invoice.currency)
+    .is('excluded_reason', null)
+    .gte('amount', total * 0.9)
+    .lte('amount', total * 1.1)
+    .order('occurred_at', { ascending: false })
+    .limit(200);
+  if (error) throw new Error(`Failed to look for a matching payment: ${error.message}`);
+  return (data ?? [])
+    .filter(t => !(t.metadata as Record<string, unknown> | null)?.invoice_id)
+    .map(t => ({
+      id: t.id as string,
+      occurred_at: t.occurred_at as string,
+      description: (t.description as string | null) ?? null,
+      counterparty: (t.counterparty_name as string | null) ?? null,
+      amount: Number(t.amount),
+      currency: t.currency_code as string,
+    }))
+    .sort(
+      (a, b) =>
+        Math.abs(a.amount - total) - Math.abs(b.amount - total) ||
+        b.occurred_at.localeCompare(a.occurred_at)
+    )
+    .slice(0, 8);
+}
+
+/**
+ * Link a bank transaction to an invoice (the invoice number goes in its metadata, which is what
+ * the paid-invoice check and the PayPal enrichment look for), or take the link off again. Both
+ * transaction and invoice are read as the signed-in user first; the write is service-role only
+ * because users have no write policy on transactions.
+ */
+export async function setPaymentMatch(
+  supabase: SupabaseClient,
+  invoice: OwnedInvoice,
+  transactionId: string,
+  match: boolean
+): Promise<{ ok: true; message: string } | { ok: false; error: string }> {
+  const { data: txn, error } = await supabase
+    .from('financial_transactions')
+    .select('id, entity_id, direction, excluded_reason, metadata')
+    .eq('id', transactionId)
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  if (!txn || txn.entity_id !== invoice.entity_id) {
+    return { ok: false, error: 'That transaction was not found.' };
+  }
+  const metadata = { ...((txn.metadata as Record<string, unknown> | null) ?? {}) };
+  if (match) {
+    if (txn.excluded_reason)
+      return { ok: false, error: 'That transaction is left out of your books.' };
+    if (txn.direction !== (invoice.invoice_type === 'SALE' ? 'in' : 'out')) {
+      return {
+        ok: false,
+        error: `A ${invoice.invoice_type === 'SALE' ? 'sale is paid by money coming in' : 'purchase is paid by money going out'}.`,
+      };
+    }
+    if (metadata.invoice_id && metadata.invoice_id !== invoice.invoice_number) {
+      return { ok: false, error: 'That transaction is already matched to another invoice.' };
+    }
+    metadata.invoice_id = invoice.invoice_number;
+  } else {
+    if (metadata.invoice_id !== invoice.invoice_number) {
+      return { ok: false, error: 'That transaction is not matched to this invoice.' };
+    }
+    delete metadata.invoice_id;
+  }
+  const { error: updateError } = await getServerSupabaseClient()
+    .from('financial_transactions')
+    .update({ metadata })
+    .eq('id', txn.id);
+  if (updateError) return { ok: false, error: updateError.message };
+  return { ok: true, message: match ? 'Payment matched' : 'Match removed' };
 }
 
 /** The minimum a write needs to know about an invoice the user may touch. */

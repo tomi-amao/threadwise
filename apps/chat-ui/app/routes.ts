@@ -41,7 +41,6 @@ export default [
     route('customers', 'routes/app.customers.tsx'),
     route('integrations', 'routes/app.integrations.tsx'),
     route('account', 'routes/app.account.tsx'),
-    route('reclassification', 'routes/app.reclassification.tsx'),
     route('journals', 'routes/app.journals.tsx'),
     route('tax', 'routes/app.tax.tsx'),
     // Design-system gallery: development and tests only, never shipped.
@@ -53,7 +52,6 @@ export default [
   route('api/orders', 'routes/api.orders.tsx'),
   route('api/customers', 'routes/api.customers.tsx'),
   route('api/products', 'routes/api.products.tsx'),
-  route('api/reclassification', 'routes/api.reclassification.tsx'),
   route('api/inventory', 'routes/api.inventory.tsx'),
   route('api/reports/account-drilldown', 'routes/api.reports.account-drilldown.tsx'),
   route('api/reports/cash-flow-pack', 'routes/api.reports.cash-flow-pack.tsx'),

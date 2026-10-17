@@ -8,6 +8,7 @@
  * POST intent=update            notes, direction (drafts only) and the GL account of each line
  * POST intent=stock             decide, per purchase line, how it is tracked as stock
  * POST intent=delete            remove a draft, cancelled or void invoice
+ * POST intent=matchPayment      link a bank transaction as the invoice's payment (unmatchPayment undoes it)
  *
  * Every invoice is first fetched as the signed-in user (row-level security), so one user can
  * never read or change another's by guessing an id. Rules about *what* may change (lifecycle,
@@ -25,6 +26,7 @@ import {
   getOwnedInvoice,
   getUserEntity,
   jsonInit,
+  setPaymentMatch,
   type OwnedInvoice,
 } from '~/lib/api/invoices.server';
 import { getServerSupabaseClient } from '~/lib/supabase';
@@ -96,6 +98,16 @@ export async function action({ request }: ActionFunctionArgs) {
         return await stock(invoice, form);
       case 'delete':
         return await remove(invoice);
+      case 'matchPayment':
+      case 'unmatchPayment': {
+        const result = await setPaymentMatch(
+          getRequestSupabaseClient(request),
+          invoice,
+          String(form.get('transactionId') ?? ''),
+          intent === 'matchPayment'
+        );
+        return result.ok ? json(result) : fail(result.error, 400);
+      }
       default:
         return fail('Unknown action', 400);
     }

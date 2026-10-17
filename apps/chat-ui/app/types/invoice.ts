@@ -13,7 +13,13 @@
 export type InvoiceType = 'SALE' | 'PURCHASE';
 
 export type InvoiceStatus =
-  'DRAFT' | 'OPEN' | 'PAID' | 'PARTIALLY_PAID' | 'OVERDUE' | 'CANCELLED' | 'VOID';
+  | 'DRAFT'
+  | 'OPEN'
+  | 'PAID'
+  | 'PARTIALLY_PAID'
+  | 'OVERDUE'
+  | 'CANCELLED'
+  | 'VOID';
 
 export interface InvoiceContact {
   id: string;
@@ -70,6 +76,16 @@ export interface ProductOption {
   name: string;
 }
 
+/** A bank transaction that might be the payment for an invoice. */
+export interface PaymentCandidate {
+  id: string;
+  occurred_at: string;
+  description: string | null;
+  counterparty: string | null;
+  amount: number;
+  currency: string;
+}
+
 /** Everything the drawer shows for one invoice. */
 export interface InvoiceDetail {
   invoice: InvoiceRow & { contacts: InvoiceContact | null };
@@ -78,6 +94,8 @@ export interface InvoiceDetail {
   journals: { id: string; journal_type: string; journal_date: string; status: string }[];
   /** A bank transaction already matched to this invoice, if any. */
   matched_transaction_id: string | null;
+  /** Bank transactions that could be this invoice's payment, nearest in amount first. */
+  payment_candidates: PaymentCandidate[];
   /** Line items that already have a purchase movement recorded. */
   stocked_line_ids: string[];
   gl_accounts: GlAccountOption[];

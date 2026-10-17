@@ -145,7 +145,7 @@ distinct data paths, and it matters which one a given feature uses:
   Two layouts: `routes/auth.tsx` (login/signup) and `routes/app.tsx` (the
   authenticated app shell with sidebar: dashboard, chat, invoices, transactions,
   collections, reports, orders, products, inventory, customers, integrations,
-  account, reclassification, journals, tax).
+  account, journals, tax).
   `api.*.tsx` routes (no `.server` suffix — see below) are resource routes (no
   UI) that the frontend's own `fetch` calls hit as a thin proxy/aggregation
   layer in front of the AI agent or Supabase.

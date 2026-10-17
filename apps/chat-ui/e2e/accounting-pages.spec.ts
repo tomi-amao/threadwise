@@ -1,8 +1,7 @@
 /**
- * The accounting pages (Reports, Tax, Journals, Reclassification) read as the signed-in user.
- * They are due their own redesign (Phase 3), so these only prove what matters now: each one
- * loads for a seeded business and shows nothing from the other business (Reclassification used
- * to read one fixed business whoever was signed in).
+ * The accounting pages (Reports, Tax, Journals) read as the signed-in user.
+ * Each has its own spec; this one only proves each loads for a seeded business and shows nothing
+ * from the other business.
  */
 
 import { test, expect, readManifest } from './fixtures';
@@ -10,7 +9,7 @@ import { test, expect, readManifest } from './fixtures';
 const seed = readManifest();
 const rival = seed.rival;
 
-const PAGES = ['/reports', '/tax', '/journals', '/reclassification'];
+const PAGES = ['/reports', '/tax', '/journals'];
 
 test.describe('accounting pages', () => {
   for (const path of PAGES) {

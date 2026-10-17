@@ -7,7 +7,9 @@
 import type { Page } from '@playwright/test';
 import { test, expect, readManifest } from './fixtures';
 import {
+  borrowTransaction,
   readInvoice,
+  readTxnInvoiceId,
   readLineAccount,
   restoreInvoices,
   snapshotInvoices,
@@ -205,6 +207,33 @@ test.describe('moving an invoice through its lifecycle', () => {
       'matched to a bank transaction'
     );
     expect((await readInvoice(inv.matchedPurchase))?.status).toBe('PAID');
+  });
+
+  test('a bank payment can be matched to an invoice from the drawer, and unmatched again', async ({
+    page,
+  }) => {
+    // INV-PP-3001 is £180 with no payment matched: make one transaction look like its payment.
+    const borrowed = await borrowTransaction('out', 180, 'ParcelPost Ltd');
+    try {
+      const drawer = await openInvoice(page, inv.overduePurchase, 'open');
+      const match = drawer.getByRole('region', { name: 'Payment match' });
+      await expect(match).toContainText('Not matched yet');
+      await match.getByRole('button', { name: 'Match a payment' }).click();
+      await match.getByRole('button', { name: /^Match ParcelPost Ltd for £180/ }).click();
+      await expect(match).toContainText('Matched to a bank transaction');
+      expect(await readTxnInvoiceId(borrowed.id)).toBe(inv.overduePurchase);
+
+      // With a payment matched, marking paid no longer asks first.
+      await drawer.getByRole('button', { name: 'Mark as paid' }).click();
+      await expect(page.getByText('Marked as paid')).toBeVisible();
+      expect((await readInvoice(inv.overduePurchase))?.status).toBe('PAID');
+
+      await match.getByRole('button', { name: 'Remove match' }).click();
+      await expect(match).not.toContainText('Matched to a bank transaction');
+      expect(await readTxnInvoiceId(borrowed.id)).toBeUndefined();
+    } finally {
+      await borrowed.restore();
+    }
   });
 
   test('part paid is a step on the way', async ({ page }) => {

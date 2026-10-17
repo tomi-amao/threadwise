@@ -14,9 +14,10 @@ Follow-ups from the security pass (before Phase 3):
 
 - **Done:** migrations `20261017000000_row_level_security` and `20261017000001_lock_down_functions`
   (apply with `supabase db push`; they are idempotent to re-read but not to re-run). Dashboard,
-  Inventory, Invoices, Orders, Customers, Products, Reports, Tax, Journals and Reclassification now
-  read as the signed-in user. Reclassification used to read one hard-coded business's books
-  whoever was signed in. `e2e/rls.spec.ts` tests the boundary from outside.
+  Inventory, Invoices, Orders, Customers, Products, Reports, Tax and Journals now read as the
+  signed-in user. The old Reclassification page read one hard-coded business's books whoever was
+  signed in (it has since been retired, see Phase 3). `e2e/rls.spec.ts` tests the boundary from
+  outside.
 - **Found and fixed on the way:** the public `anon` key had ALL privileges on every table and view
   (and 14 tables had RLS off); views returned every business's rows; and every database function,
   including the SECURITY DEFINER ones that read and replace stored API keys and post journals, was
@@ -28,9 +29,10 @@ Follow-ups from the security pass (before Phase 3):
   your work in one commit.
 - **Not done:** the FastAPI agent trusts the `entity_id` the browser sends it (Transactions calls
   it straight from the browser). Fixing that means the agent verifying the user's Supabase JWT.
-- **Not done:** the app's own writes through the service key (`api.journals`, reports exclusion,
-  reclassification link) are gated on a user-session read of the same row, but the right end
-  state is the agent doing them behind an authenticated call.
+- **Not done:** the app's own writes through the service key (a manual journal, the reports
+  exclusion, tax adjustments and period status, the invoice payment match) are gated on a
+  user-session read of the same row, but the right end state is the agent doing them behind an
+  authenticated call.
 
 Follow-ups from Phase 2 (Orders, Customers, Products):
 
@@ -255,9 +257,26 @@ Products, Invoices) which all follow the same shape.
   Keep the item-type, link-to-product and unit-cost actions.
 - Exit: one shared list-page pattern, documented, that new pages copy.
 
-### Phase 3: Statement pages
+### Phase 3: Statement pages (done)
 
-Reports, Journals, Tax, Reclassification.
+Reports, Tax and Journals were redesigned; Reclassification was retired.
+
+- **Reports:** four tabs (revenue, profit and loss, balance sheet, cash) over one date range;
+  every figure drills to the entries behind it. Fixed reads that silently dropped rows past
+  PostgREST's 1,000-row cap.
+- **Tax:** computation per accounting period with a `Term` definition on each figure, review
+  queue, manual adjustments, mark filed / put back, company details, VAT, director's loan and
+  provision panels, CT600 working paper. Writes are validated in `lib/api/tax-actions.server.ts`.
+- **Journals:** ledger browser (search, status, source, type, date range) with a drawer showing
+  each journal's lines, a Needs review tab for drafts (choose the account, or ask the agent to
+  suggest one, then post), reversing a journal (the agent enforces period locks), and a manual
+  journal builder that cannot post until it balances. The old manual-only page and its
+  service-key `api/journals` route are gone.
+- **Reclassification retired.** It was a "temporary page" for two one-off clean-ups: setting unit
+  costs on products with sales but no costed stock (the Inventory page does this now) and linking
+  supplier bank payments to invoices. The second is now a general "Match a payment" section in the
+  Invoice drawer. Its route files are in git history if anything is wanted back.
+- Restore the ⓘ definitions as a first-class `Term` component, not inline notes (done).
 
 - Restore the ⓘ definitions as a first-class `Term` component, not inline notes.
 - Replace the preview's mock derivations with the real `getReportsData` shape;
