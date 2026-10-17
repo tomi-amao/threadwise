@@ -34,6 +34,8 @@ export const ENTITY_NAME = 'Atelier North (E2E)';
 // believable positive balance.
 const OPENING_BALANCE = 600_000;
 const SIZES = ['S', 'M'] as const;
+/** Transaction index -> the invoice number it pays. */
+const MATCHED_PAYMENTS: Record<number, string> = { 2: 'INV-ML-0900', 8: 'INV-ML-1004' };
 /** Extra purchase/sale movement pairs on one item, to prove movements are read past the 1,000-row cap. */
 const BULK_MOVEMENT_PAIRS = 550;
 
@@ -411,6 +413,9 @@ async function main() {
       transaction_type: t.type,
       source: 'revolut',
       direction: t.dir,
+      // Two payments already matched to invoices (the PayPal enrichment writes the invoice
+      // number here). Both are outbound, so they pair with purchase invoices below.
+      metadata: MATCHED_PAYMENTS[i] ? { invoice_id: MATCHED_PAYMENTS[i] } : {},
     };
   });
   await insertChunked('financial_transactions', 'financial_transactions', txnRows, 'id');
@@ -587,6 +592,300 @@ async function main() {
     sampleSku: 'E2E-SAMPLE',
   };
 
+  // 6c. Invoices: a chart of accounts, contacts, and invoices at every stage. Due dates are
+  //     relative to the seed run, so "overdue" is true for as long as the data is fresh.
+  //     Amounts are chosen so the headline numbers are easy to check by hand:
+  //       owed to you  = 2,400 + 960 + 1,500 (part paid)   = 4,860 across 3 invoices
+  //       you owe      = 180 + 3,600                       = 3,780 across 2 invoices
+  //       overdue      = 960 + 1,500 (owed) and 180 (owe)  = 3 invoices
+  //       to review    = 2 drafts; 1 open invoice is in EUR and left out of the sums
+  const accounts = [
+    ['1033', 'Inventory: finished goods', 'asset', 'debit'],
+    ['4000', 'Product sales', 'revenue', 'credit'],
+    ['5000', 'Product purchase cost', 'cogs', 'debit'],
+    ['6100', 'Materials and supplies', 'expense', 'debit'],
+    ['6300', 'Shipping and delivery', 'expense', 'debit'],
+    ['6500', 'Marketing', 'expense', 'debit'],
+  ] as const;
+  const glRows = (await must(
+    'chart_of_accounts',
+    supabase
+      .from('chart_of_accounts')
+      .insert(
+        accounts.map(([account_number, name, account_type, normal_balance]) => ({
+          account_number,
+          name,
+          account_type,
+          normal_balance,
+          is_header: false,
+          status: 'active',
+        }))
+      )
+      .select('id, account_number')
+  )) as { id: string; account_number: string }[];
+  const gl = Object.fromEntries(glRows.map(r => [r.account_number, r.id]));
+
+  const contactSpecs = [
+    ['customer', 'Harbour & Co'],
+    ['customer', 'Northgate Boutique'],
+    ['customer', 'Oakley Studio'],
+    ['supplier', 'Porto Knitwear'],
+    ['supplier', 'Mill Lane Textiles'],
+    ['supplier', 'ParcelPost Ltd'],
+  ] as const;
+  const contactRows = (await must(
+    'contacts',
+    supabase
+      .from('contacts')
+      .insert(
+        contactSpecs.map(([contact_type, name]) => ({
+          entity_id: entityId,
+          contact_type,
+          name,
+          company_name: name,
+          email: `accounts@${name.toLowerCase().replace(/[^a-z]+/g, '')}.example`,
+        }))
+      )
+      .select('id, name')
+  )) as { id: string; name: string }[];
+  const contactId = Object.fromEntries(contactRows.map(c => [c.name, c.id]));
+
+  // A real (tiny) PDF for the one invoice with a document, so "View document" has something to open.
+  const { error: bucketError } = await supabase.storage.createBucket('invoices', { public: false });
+  if (bucketError && !/already exists/i.test(bucketError.message)) {
+    throw new Error(`createBucket: ${bucketError.message}`);
+  }
+  const pdf = new TextEncoder().encode(
+    '%PDF-1.1\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n' +
+      '3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 200 100]>>endobj\ntrailer<</Root 1 0 R>>\n%%EOF'
+  );
+  const documentPath = `${entityId}/e2e-invoice-ML-1001.pdf`;
+  const { error: uploadError } = await supabase.storage
+    .from('invoices')
+    .upload(documentPath, pdf, { contentType: 'application/pdf', upsert: true });
+  if (uploadError) throw new Error(`invoice document: ${uploadError.message}`);
+
+  type InvLine = [description: string, qty: number, unit: number, vat: number, account?: string];
+  interface SeedInvoice {
+    number: string;
+    type: 'SALE' | 'PURCHASE';
+    status: string;
+    contact: string;
+    currency?: string;
+    issued: number; // days ago
+    due: number | null; // days from now (negative = in the past)
+    lines: InvLine[];
+    document?: boolean;
+    notes?: string;
+  }
+  const invoiceSpecs: SeedInvoice[] = [
+    {
+      number: 'INV-ML-1001',
+      type: 'PURCHASE',
+      status: 'DRAFT',
+      contact: 'Mill Lane Textiles',
+      issued: 3,
+      due: 27,
+      document: true,
+      lines: [
+        ['Merino yarn 4-ply', 40, 20, 0.2, '1033'],
+        ['Heavy knit swatches', 10, 15, 0.2, '1033'],
+        ['Delivery', 1, 50, 0.2], // left uncoded on purpose
+      ],
+    },
+    {
+      number: 'INV-ML-0800',
+      type: 'PURCHASE',
+      status: 'DRAFT',
+      contact: 'Mill Lane Textiles',
+      issued: 480,
+      due: -450,
+      lines: [['Legacy cotton order', 10, 30, 0, '1033']],
+    },
+    {
+      number: 'INV-OUT-2001',
+      type: 'SALE',
+      status: 'DRAFT',
+      contact: 'Harbour & Co',
+      issued: 2,
+      due: 28,
+      lines: [['Wholesale order: knitwear', 4, 100, 0.2, '4000']],
+    },
+    {
+      number: 'INV-OUT-2002',
+      type: 'SALE',
+      status: 'OPEN',
+      contact: 'Northgate Boutique',
+      issued: 15,
+      due: 45,
+      lines: [['Wholesale order: autumn range', 20, 100, 0.2, '4000']],
+    },
+    {
+      number: 'INV-OUT-2003',
+      type: 'SALE',
+      status: 'OPEN',
+      contact: 'Harbour & Co',
+      issued: 80,
+      due: -40,
+      lines: [['Wholesale order: summer range', 8, 100, 0.2, '4000']],
+    },
+    {
+      number: 'INV-OUT-2004',
+      type: 'SALE',
+      status: 'PARTIALLY_PAID',
+      contact: 'Oakley Studio',
+      issued: 60,
+      due: -5,
+      lines: [['Custom commission', 1, 1250, 0.2, '4000']],
+    },
+    {
+      number: 'INV-PP-3001',
+      type: 'PURCHASE',
+      status: 'OPEN',
+      contact: 'ParcelPost Ltd',
+      issued: 45,
+      due: -15,
+      lines: [['Courier charges: September', 1, 150, 0.2, '6300']],
+    },
+    {
+      number: 'INV-ML-1004',
+      type: 'PURCHASE',
+      status: 'OPEN',
+      contact: 'Mill Lane Textiles',
+      issued: 10,
+      due: 20,
+      lines: [['Wool blend yarn', 150, 20, 0.2, '1033']],
+    },
+    {
+      number: 'INV-PK-5001',
+      type: 'PURCHASE',
+      status: 'OPEN',
+      contact: 'Porto Knitwear',
+      currency: 'EUR',
+      issued: 12,
+      due: 30,
+      lines: [['Production run: cardigans', 40, 50, 0, '1033']],
+    },
+    {
+      number: 'INV-OUT-2000',
+      type: 'SALE',
+      status: 'PAID',
+      contact: 'Northgate Boutique',
+      issued: 120,
+      due: -90,
+      lines: [['Wholesale order: spring range', 8, 100, 0, '4000']],
+    },
+    {
+      number: 'INV-ML-0900',
+      type: 'PURCHASE',
+      status: 'PAID',
+      contact: 'Mill Lane Textiles',
+      issued: 100,
+      due: -70,
+      lines: [['Cotton jersey', 50, 22, 0, '1033']],
+    },
+    {
+      number: 'INV-PP-2999',
+      type: 'PURCHASE',
+      status: 'VOID',
+      contact: 'ParcelPost Ltd',
+      issued: 90,
+      due: -60,
+      lines: [['Duplicate courier charge', 1, 90, 0, '6300']],
+    },
+  ];
+  // Enough small paid invoices to push the total past the API's 1,000-row cap.
+  const BULK_INVOICES = 1020;
+  for (let i = 1; i <= BULK_INVOICES; i++) {
+    invoiceSpecs.push({
+      number: `INV-BULK-${String(i).padStart(4, '0')}`,
+      type: 'SALE',
+      status: 'PAID',
+      contact: 'Northgate Boutique',
+      issued: 150 + (i % 100),
+      due: -(120 + (i % 100)),
+      lines: [['Small wholesale order', 1, 10, 0, '4000']],
+    });
+  }
+
+  const totalsOf = (spec: SeedInvoice) => {
+    const net = money(spec.lines.reduce((s, [, q, u]) => s + q * u, 0));
+    const tax = money(spec.lines.reduce((s, [, q, u, v]) => s + q * u * v, 0));
+    return { net, tax, gross: money(net + tax) };
+  };
+  const invoiceRows = invoiceSpecs.map(spec => {
+    const t = totalsOf(spec);
+    return {
+      entity_id: entityId,
+      invoice_number: spec.number,
+      invoice_type: spec.type,
+      status: spec.status,
+      counterparty_id: contactId[spec.contact],
+      currency: spec.currency ?? 'GBP',
+      net_amount: t.net,
+      tax_amount: t.tax,
+      gross_amount: t.gross,
+      fx_rate: 1,
+      invoice_date: daysAgo(spec.issued),
+      due_date: spec.due === null ? null : daysAgo(-spec.due),
+      source: 'manual',
+      file_path: spec.document ? documentPath : null,
+      notes: spec.notes ?? null,
+    };
+  });
+  const insertedInvoices = await insertChunked<{ id: string; invoice_number: string }>(
+    'invoices',
+    'invoices',
+    invoiceRows,
+    'id, invoice_number'
+  );
+  const invoiceId = new Map(insertedInvoices.map(r => [r.invoice_number, r.id]));
+  const invoiceLineRows = invoiceSpecs.flatMap(spec =>
+    spec.lines.map(([description, quantity, unit_cost, vat_rate, account]) => ({
+      invoice_id: invoiceId.get(spec.number),
+      description,
+      quantity,
+      unit_cost,
+      vat_rate,
+      tax_code: vat_rate > 0 ? 'STANDARD' : 'ZERO',
+      gl_account_id: account ? gl[account] : null,
+    }))
+  );
+  await insertChunked('invoice_line_items', 'invoice_line_items', invoiceLineRows, 'id');
+
+  const base = invoiceSpecs.filter(s => !s.number.startsWith('INV-BULK'));
+  const unpaid = (s: SeedInvoice) => ['OPEN', 'PARTIALLY_PAID'].includes(s.status);
+  const late = (s: SeedInvoice) => unpaid(s) && s.due !== null && s.due < 0;
+  const gbpUnpaid = base.filter(s => unpaid(s) && (s.currency ?? 'GBP') === 'GBP');
+  const sum = (xs: SeedInvoice[]) => money(xs.reduce((n, s) => n + totalsOf(s).gross, 0));
+  const invoices = {
+    total: invoiceSpecs.length,
+    owedToYou: sum(gbpUnpaid.filter(s => s.type === 'SALE')),
+    owedToYouCount: gbpUnpaid.filter(s => s.type === 'SALE').length,
+    youOwe: sum(gbpUnpaid.filter(s => s.type === 'PURCHASE')),
+    youOweCount: gbpUnpaid.filter(s => s.type === 'PURCHASE').length,
+    overdueOwedToYou: sum(gbpUnpaid.filter(s => s.type === 'SALE' && late(s))),
+    overdueYouOwe: sum(gbpUnpaid.filter(s => s.type === 'PURCHASE' && late(s))),
+    overdueCount: gbpUnpaid.filter(late).length,
+    toReview: base.filter(s => s.status === 'DRAFT').length,
+    otherCurrency: base.filter(s => unpaid(s) && (s.currency ?? 'GBP') !== 'GBP').length,
+    openCount: base.filter(unpaid).length,
+    paidCount: invoiceSpecs.filter(s => s.status === 'PAID').length,
+    // Numbers of particular invoices, for tests that open them.
+    draftPurchase: 'INV-ML-1001',
+    draftSale: 'INV-OUT-2001',
+    priorPeriodDraft: 'INV-ML-0800', // dated before the 2026 accounting cutoff
+    openSale: 'INV-OUT-2002',
+    overdueSale: 'INV-OUT-2003',
+    overduePurchase: 'INV-PP-3001', // no matched payment
+    matchedPurchase: 'INV-ML-1004', // a bank payment is matched to it
+    paidMatched: 'INV-ML-0900',
+    foreign: 'INV-PK-5001',
+    voided: 'INV-PP-2999',
+    bulkPrefix: 'INV-BULK-',
+    counterparty: 'Mill Lane Textiles',
+  };
+
   // 7. Manifest: what the tests may assert on.
   const manifest = {
     entityName: ENTITY_NAME,
@@ -598,6 +897,7 @@ async function main() {
     transactionCount: TXN_COUNT,
     expectedBankBalance,
     inventory,
+    invoices,
     seededAt: new Date().toISOString(),
   };
   mkdirSync(path.dirname(MANIFEST_FILE), { recursive: true });

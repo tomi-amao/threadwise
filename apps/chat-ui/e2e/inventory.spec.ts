@@ -87,7 +87,7 @@ test.describe('inventory', () => {
     await expect(page).toHaveURL(/q=/);
     await page.getByRole('button', { name: 'Clear filters' }).click();
     await expect(page).not.toHaveURL(/q=/);
-    expect(await rows.count()).toBeGreaterThan(5);
+    await expect.poll(() => rows.count()).toBeGreaterThan(5);
   });
 
   test('items tab flags unlinked and uncosted items', async ({ page }) => {

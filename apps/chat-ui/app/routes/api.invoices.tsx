@@ -1,406 +1,228 @@
 /**
- * Invoice API Route
+ * Invoice API route
  *
- * Handles invoice operations:
- * - POST upload: forwards file to AI Agent for extraction and record creation
- * - POST updateStatus: patches invoice status
- * - POST delete: removes invoice record
- * - POST getUrl / download: signed URL from Supabase Storage
+ * GET  ?id=<invoice>            the invoice with its lines, journals, matched payment and pickers
+ * GET  ?id=<invoice>&document=1 a short-lived signed URL for the uploaded document
+ * POST intent=upload            store the file, have the agent extract it into a DRAFT invoice
+ * POST intent=setStatus         move the invoice through its lifecycle (the agent posts journals)
+ * POST intent=update            notes, direction (drafts only) and the GL account of each line
+ * POST intent=stock             decide, per purchase line, how it is tracked as stock
+ * POST intent=delete            remove a draft, cancelled or void invoice
+ *
+ * Every invoice is first fetched as the signed-in user (row-level security), so one user can
+ * never read or change another's by guessing an id. Rules about *what* may change (lifecycle,
+ * deletion, direction) are enforced by the agent, which owns the ledger; this route does not
+ * duplicate them, it only shows the agent's refusal.
  */
 
-import type { ActionFunctionArgs } from 'react-router';
-import { redirect } from 'react-router';
+import type { ActionFunctionArgs, LoaderFunctionArgs } from 'react-router';
 import {
-  deleteInvoice,
+  AgentError,
+  callAgent,
   findMatchingTransaction,
-  getInvoice,
-  getInvoiceUrl,
-  listInvoices,
-  getInvoiceStats,
+  getDocumentUrl,
+  getInvoiceDetail,
+  getOwnedInvoice,
+  getUserEntity,
+  jsonInit,
+  type OwnedInvoice,
 } from '~/lib/api/invoices.server';
 import { getServerSupabaseClient } from '~/lib/supabase';
-import { getApiBaseUrl } from '~/lib/api/base-url';
+import type { StockDecision } from '~/types/invoice';
 
-// AI Agent base URL
-const AI_AGENT_URL = getApiBaseUrl();
+const MAX_FILE_BYTES = 10 * 1024 * 1024;
+const STATUSES = ['DRAFT', 'OPEN', 'PAID', 'PARTIALLY_PAID', 'OVERDUE', 'CANCELLED', 'VOID'];
 
-// Helper to return JSON responses
-function json(data: unknown, init?: ResponseInit) {
+function json(data: unknown, status = 200) {
   return new Response(JSON.stringify(data), {
-    ...init,
-    headers: { 'Content-Type': 'application/json', ...init?.headers },
+    status,
+    headers: { 'Content-Type': 'application/json' },
   });
 }
 
-export async function action({ request }: ActionFunctionArgs) {
-  const formData = await request.formData();
-  const intent = formData.get('intent') as string;
+const fail = (error: string, status: number, extra: Record<string, unknown> = {}) =>
+  json({ ok: false, error, ...extra }, status);
+
+const parseJson = <T,>(value: FormDataEntryValue | null): T | null => {
+  if (typeof value !== 'string') return null;
+  try {
+    return JSON.parse(value) as T;
+  } catch {
+    return null;
+  }
+};
+
+export async function loader({ request }: LoaderFunctionArgs) {
+  const url = new URL(request.url);
+  const id = url.searchParams.get('id');
+  if (!id) return fail('An invoice id is required', 400);
 
   try {
-    switch (intent) {
-      case 'upload': {
-        const file = formData.get('file') as File;
-        if (!file || !(file instanceof File)) {
-          return json({ error: 'No file provided' }, { status: 400 });
-        }
-
-        if (file.type !== 'application/pdf' && !file.type.startsWith('image/')) {
-          return json({ error: 'Only PDF and image files are allowed' }, { status: 400 });
-        }
-
-        if (file.size > 10 * 1024 * 1024) {
-          return json({ error: 'File size exceeds 10MB limit' }, { status: 400 });
-        }
-
-        const entityId = (formData.get('entity_id') as string | null) ?? undefined;
-        if (!entityId) {
-          return json(
-            { error: 'entity_id is required. Ensure you are logged in.' },
-            { status: 400 }
-          );
-        }
-
-        // ---- 1. Store file in Supabase Storage for viewing/download ----
-        const supabase = getServerSupabaseClient();
-        const timestamp = Date.now();
-        const sanitizedName = file.name.replace(/[^a-zA-Z0-9.-]/g, '_');
-        const storagePath = `${entityId ?? 'general'}/${timestamp}-${sanitizedName}`;
-
-        const arrayBuffer = await file.arrayBuffer();
-        const uint8Array = new Uint8Array(arrayBuffer);
-
-        const { error: storageError } = await supabase.storage
-          .from('invoices')
-          .upload(storagePath, uint8Array, {
-            contentType: file.type,
-            upsert: false,
-          });
-
-        if (storageError) {
-          console.error('Storage upload failed:', storageError);
-          return json({ error: `File storage failed: ${storageError.message}` }, { status: 500 });
-        }
-
-        // ---- 2. Forward to AI Agent for extraction + record creation ----
-        const agentForm = new FormData();
-        agentForm.append('file', new Blob([uint8Array], { type: file.type }), file.name);
-        if (entityId) agentForm.append('entity_id', entityId);
-        agentForm.append('file_path', storagePath);
-        // TEMPORARY: journals disabled — invoices being uploaded purely for unit cost population
-        agentForm.append('create_journal', 'false');
-
-        const invoiceType = formData.get('invoice_type') as string | null;
-        if (invoiceType) agentForm.append('invoice_type', invoiceType);
-
-        const agentResponse = await fetch(`${AI_AGENT_URL}/accounting/invoices/process`, {
-          method: 'POST',
-          body: agentForm,
-        });
-
-        if (!agentResponse.ok) {
-          const errText = await agentResponse.text();
-          console.error('AI Agent error:', errText);
-          return json({ error: 'AI processing failed', detail: errText }, { status: 502 });
-        }
-
-        const result = await agentResponse.json();
-        return json({ success: true, ...result });
-      }
-
-      case 'updateStatus': {
-        const invoiceId = formData.get('invoiceId') as string;
-        const status = formData.get('status') as string;
-        if (!invoiceId || !status) {
-          return json({ error: 'invoiceId and status are required' }, { status: 400 });
-        }
-
-        const current = await getInvoice(invoiceId);
-        if (!current) {
-          return json({ error: 'Invoice not found' }, { status: 404 });
-        }
-        if (!current.entity_id) {
-          return json({ error: 'Invoice has no entity_id' }, { status: 422 });
-        }
-
-        // Before marking as PAID, verify a matching financial transaction exists.
-        // This prevents marking an invoice paid when the actual payment hasn't been imported.
-        if (status === 'PAID') {
-          const { found } = await findMatchingTransaction(
-            current.invoice_number ?? '',
-            current.entity_id
-          );
-
-          if (!found) {
-            return json(
-              {
-                error:
-                  'No matching financial transaction found for this invoice. ' +
-                  'Please ensure the payment has been imported and matched before marking as paid.',
-              },
-              { status: 422 }
-            );
-          }
-        }
-
-        // Status changes must go through the agent, not straight to Postgres.
-        // Leaving DRAFT is what capitalises a purchase (DEBIT the line items' GL
-        // accounts, CREDIT Accounts Payable) and being marked PAID is what clears
-        // that payable. Patching the row directly moved invoices through their
-        // lifecycle with no ledger entries at all — which is how 35 invoices came
-        // to have zero journals behind them.
-
-        const statusResponse = await fetch(
-          `${AI_AGENT_URL}/accounting/invoices/${invoiceId}/status`,
-          {
-            method: 'PATCH',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ entity_id: current.entity_id, status }),
-          }
-        );
-
-        if (!statusResponse.ok) {
-          const detail = await statusResponse.text();
-          return json(
-            { error: `Failed to update status: ${detail}` },
-            { status: statusResponse.status }
-          );
-        }
-
-        const statusResult = await statusResponse.json();
-        return json({
-          success: true,
-          invoice: statusResult.invoice,
-          purchaseJournal: statusResult.purchase_journal ?? null,
-          paymentJournal: statusResult.payment_journal ?? null,
-          warnings: statusResult.warnings ?? [],
-        });
-      }
-
-      case 'delete': {
-        const invoiceId = formData.get('invoiceId') as string;
-        if (!invoiceId) {
-          return json({ error: 'Invoice ID required' }, { status: 400 });
-        }
-
-        await deleteInvoice(invoiceId);
-        return json({ success: true });
-      }
-
-      case 'getUrl': {
-        const invoiceId = formData.get('invoiceId') as string;
-        if (!invoiceId) {
-          return json({ error: 'Invoice ID required' }, { status: 400 });
-        }
-
-        const invoice = await getInvoice(invoiceId);
-        if (!invoice) return json({ error: 'Not found' }, { status: 404 });
-
-        // file_path holds the Supabase storage path; source is now the platform label
-        const storagePath = invoice.file_path;
-        if (!storagePath)
-          return json({ error: 'No file attached to this invoice' }, { status: 404 });
-
-        const signedUrl = await getInvoiceUrl(storagePath);
-
-        return json({ success: true, signedUrl });
-      }
-
-      case 'download': {
-        const invoiceId = formData.get('invoiceId') as string;
-        if (!invoiceId) {
-          return json({ error: 'Invoice ID required' }, { status: 400 });
-        }
-
-        const invoice = await getInvoice(invoiceId);
-        if (!invoice) return json({ error: 'Not found' }, { status: 404 });
-
-        const storagePath = invoice.file_path;
-        if (!storagePath)
-          return json({ error: 'No file attached to this invoice' }, { status: 404 });
-
-        const signedUrl = await getInvoiceUrl(storagePath, 60);
-
-        return redirect(signedUrl);
-      }
-
-      case 'createProducts': {
-        const invoiceId = formData.get('invoiceId') as string;
-        const entityId = formData.get('entity_id') as string;
-        const lineItemIdsJson = formData.get('lineItemIds') as string;
-        const overridesJson = formData.get('overrides') as string | null;
-
-        if (!invoiceId || !entityId || !lineItemIdsJson) {
-          return json(
-            { error: 'invoiceId, entity_id, and lineItemIds are required' },
-            { status: 400 }
-          );
-        }
-
-        let lineItemIds: string[];
-        try {
-          lineItemIds = JSON.parse(lineItemIdsJson);
-        } catch {
-          return json({ error: 'lineItemIds must be valid JSON array' }, { status: 400 });
-        }
-
-        let overrides: Record<string, { name: string; sku: string }> | undefined;
-        if (overridesJson) {
-          try {
-            overrides = JSON.parse(overridesJson);
-          } catch {
-            // ignore malformed overrides — not fatal
-          }
-        }
-
-        const agentResp = await fetch(`${AI_AGENT_URL}/accounting/invoices/${invoiceId}/products`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ entity_id: entityId, line_item_ids: lineItemIds, overrides }),
-        });
-
-        if (!agentResp.ok) {
-          const errText = await agentResp.text();
-          return json({ error: 'Product creation failed', detail: errText }, { status: 502 });
-        }
-
-        const result = await agentResp.json();
-        return json({ success: true, ...result });
-      }
-
-      case 'linkLineItems': {
-        const invoiceId = formData.get('invoiceId') as string;
-        const entityId = formData.get('entity_id') as string;
-        const linksJson = formData.get('links') as string;
-
-        if (!invoiceId || !entityId || !linksJson) {
-          return json({ error: 'invoiceId, entity_id, and links are required' }, { status: 400 });
-        }
-
-        let links: { line_item_id: string; product_id: string }[];
-        try {
-          links = JSON.parse(linksJson);
-        } catch {
-          return json({ error: 'links must be a valid JSON array' }, { status: 400 });
-        }
-
-        const agentResp = await fetch(
-          `${AI_AGENT_URL}/accounting/invoices/${invoiceId}/link-to-products`,
-          {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ entity_id: entityId, links }),
-          }
-        );
-
-        if (!agentResp.ok) {
-          const errText = await agentResp.text();
-          return json({ error: 'Failed to link line items', detail: errText }, { status: 502 });
-        }
-
-        const result = await agentResp.json();
-        return json({ success: true, ...result });
-      }
-
-      case 'inventoryMovements': {
-        const invoiceId = formData.get('invoiceId') as string;
-        const entityId = formData.get('entity_id') as string;
-        const lineItemIdsJson = formData.get('lineItemIds') as string;
-        const overridesJson = formData.get('overrides') as string | null;
-
-        if (!invoiceId || !entityId || !lineItemIdsJson) {
-          return json(
-            { error: 'invoiceId, entity_id, and lineItemIds are required' },
-            { status: 400 }
-          );
-        }
-
-        let lineItemIds: string[];
-        try {
-          lineItemIds = JSON.parse(lineItemIdsJson);
-        } catch {
-          return json({ error: 'lineItemIds must be valid JSON array' }, { status: 400 });
-        }
-
-        let overrides: Record<string, Record<string, string>> | undefined;
-        if (overridesJson) {
-          try {
-            overrides = JSON.parse(overridesJson);
-          } catch {
-            // ignore malformed overrides — not fatal
-          }
-        }
-
-        const agentResp = await fetch(
-          `${AI_AGENT_URL}/accounting/invoices/${invoiceId}/inventory-movements`,
-          {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ entity_id: entityId, line_item_ids: lineItemIds, overrides }),
-          }
-        );
-
-        if (!agentResp.ok) {
-          const errText = await agentResp.text();
-          return json(
-            { error: 'Failed to record inventory movements', detail: errText },
-            { status: 502 }
-          );
-        }
-
-        const result = await agentResp.json();
-        return json({ success: true, ...result });
-      }
-
-      case 'updateInvoice': {
-        const invoiceId = formData.get('invoiceId') as string;
-        if (!invoiceId) {
-          return json({ error: 'invoiceId is required' }, { status: 400 });
-        }
-
-        const body: Record<string, unknown> = {};
-        const invoiceType = formData.get('invoice_type') as string | null;
-        const notes = formData.get('notes') as string | null;
-        const lineGlJson = formData.get('line_item_gl_accounts') as string | null;
-
-        if (invoiceType) body.invoice_type = invoiceType;
-        if (notes !== null && notes !== undefined) body.notes = notes;
-        if (lineGlJson) {
-          try {
-            body.line_item_gl_accounts = JSON.parse(lineGlJson);
-          } catch {
-            return json({ error: 'line_item_gl_accounts must be valid JSON' }, { status: 400 });
-          }
-        }
-
-        const agentResp = await fetch(`${AI_AGENT_URL}/accounting/invoices/${invoiceId}`, {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(body),
-        });
-
-        if (!agentResp.ok) {
-          const errText = await agentResp.text();
-          return json({ error: 'Invoice update failed', detail: errText }, { status: 502 });
-        }
-
-        const result = await agentResp.json();
-        return json({ success: true, invoice: result });
-      }
-
-      default:
-        return json({ error: 'Invalid intent' }, { status: 400 });
+    if (url.searchParams.get('document')) {
+      const invoice = await getOwnedInvoice(request, id);
+      if (!invoice) return fail('Invoice not found', 404);
+      if (!invoice.file_path) return fail('No document is attached to this invoice', 404);
+      return json({ ok: true, url: await getDocumentUrl(invoice.file_path) });
     }
+
+    const detail = await getInvoiceDetail(request, id);
+    if (!detail) return fail('Invoice not found', 404);
+    return json({ ok: true, detail });
   } catch (error) {
-    console.error('Invoice action error:', error);
-    return json(
-      { error: error instanceof Error ? error.message : 'Unknown error' },
-      { status: 500 }
-    );
+    console.error('Invoice loader error:', error);
+    return fail(error instanceof Error ? error.message : 'Could not load the invoice', 500);
   }
 }
 
-// Loader for fetching invoices list + stats
-export async function loader() {
-  const [invoices, stats] = await Promise.all([listInvoices(), getInvoiceStats()]);
-  return json({ invoices, stats });
+export async function action({ request }: ActionFunctionArgs) {
+  const form = await request.formData();
+  const intent = form.get('intent');
+
+  try {
+    if (intent === 'upload') return await upload(request, form);
+
+    const invoiceId = String(form.get('invoiceId') ?? '');
+    if (!invoiceId) return fail('An invoice id is required', 400);
+    const invoice = await getOwnedInvoice(request, invoiceId);
+    if (!invoice) return fail('Invoice not found', 404);
+
+    switch (intent) {
+      case 'setStatus':
+        return await setStatus(invoice, form);
+      case 'update':
+        return await update(invoice, form);
+      case 'stock':
+        return await stock(invoice, form);
+      case 'delete':
+        return await remove(invoice);
+      default:
+        return fail('Unknown action', 400);
+    }
+  } catch (error) {
+    if (error instanceof AgentError) return fail(error.message, error.status);
+    console.error('Invoice action error:', error);
+    return fail(error instanceof Error ? error.message : 'Something went wrong', 500);
+  }
+}
+
+// ─── Actions ──────────────────────────────────────────────────────────
+
+async function upload(request: Request, form: FormData) {
+  const file = form.get('file');
+  if (!(file instanceof File)) return fail('No file was provided', 400);
+  if (file.type !== 'application/pdf' && !file.type.startsWith('image/')) {
+    return fail('Only PDF and image files can be added', 400);
+  }
+  if (file.size > MAX_FILE_BYTES) return fail('That file is over the 10 MB limit', 400);
+
+  const entityId = (await getUserEntity(request))?.id;
+  if (!entityId) return fail('Sign in to add invoices', 401);
+
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  const storagePath = `${entityId}/${Date.now()}-${file.name.replace(/[^a-zA-Z0-9.-]/g, '_')}`;
+  const storage = getServerSupabaseClient().storage.from('invoices');
+
+  const { error: storageError } = await storage.upload(storagePath, bytes, {
+    contentType: file.type,
+    upsert: false,
+  });
+  if (storageError) return fail(`The file could not be stored: ${storageError.message}`, 500);
+
+  const agentForm = new FormData();
+  agentForm.append('file', new Blob([bytes], { type: file.type }), file.name);
+  agentForm.append('entity_id', entityId);
+  agentForm.append('file_path', storagePath);
+  const direction = form.get('direction');
+  if (direction === 'SALE' || direction === 'PURCHASE') agentForm.append('invoice_type', direction);
+
+  try {
+    const result = await callAgent<{
+      invoice: { id: string; invoice_number: string | null; invoice_type: string };
+      contact: { name: string; company_name: string | null } | null;
+      extraction: { confidence_score: number };
+    }>('/accounting/invoices/process', { method: 'POST', body: agentForm });
+    return json({
+      ok: true,
+      invoiceId: result.invoice.id,
+      invoiceNumber: result.invoice.invoice_number,
+      direction: result.invoice.invoice_type,
+      counterparty: result.contact?.company_name || result.contact?.name || null,
+      confidence: result.extraction?.confidence_score ?? null,
+    });
+  } catch (error) {
+    // Extraction failed, so no invoice points at the file: do not leave it orphaned.
+    await storage.remove([storagePath]);
+    throw error;
+  }
+}
+
+async function setStatus(invoice: OwnedInvoice, form: FormData) {
+  const status = String(form.get('status') ?? '').toUpperCase();
+  if (!STATUSES.includes(status)) return fail('Unknown status', 400);
+
+  // Marking paid clears the payable against the bank. Without an imported payment the agent
+  // cannot say which account the money left, so ask for a deliberate go-ahead.
+  if (status === 'PAID' && invoice.status !== 'PAID' && form.get('confirmUnmatched') !== '1') {
+    const matched = await findMatchingTransaction(invoice.invoice_number, invoice.entity_id);
+    if (!matched) {
+      return fail(
+        'No bank payment has been matched to this invoice yet. Import the payment first, or ' +
+          'mark it paid anyway.',
+        409,
+        { code: 'no_matching_payment' }
+      );
+    }
+  }
+
+  const result = await callAgent<{
+    warnings?: string[];
+    voided_journals?: unknown[];
+    purchase_journal?: unknown;
+  }>(
+    `/accounting/invoices/${invoice.id}/status`,
+    jsonInit('PATCH', { entity_id: invoice.entity_id, status })
+  );
+  return json({
+    ok: true,
+    status,
+    posted: !!result.purchase_journal,
+    voided: result.voided_journals?.length ?? 0,
+    warnings: result.warnings ?? [],
+  });
+}
+
+async function update(invoice: OwnedInvoice, form: FormData) {
+  const body: Record<string, unknown> = { entity_id: invoice.entity_id };
+  const notes = form.get('notes');
+  if (typeof notes === 'string') body.notes = notes;
+  const direction = form.get('direction');
+  if (direction === 'SALE' || direction === 'PURCHASE') body.invoice_type = direction;
+  const coding = parseJson<Record<string, string | null>>(form.get('lineAccounts'));
+  if (form.get('lineAccounts') !== null && !coding) {
+    return fail('The line accounts were not understood', 400);
+  }
+  if (coding) body.line_item_gl_accounts = coding;
+
+  await callAgent(`/accounting/invoices/${invoice.id}`, jsonInit('PATCH', body));
+  return json({ ok: true });
+}
+
+async function stock(invoice: OwnedInvoice, form: FormData) {
+  const decisions = parseJson<StockDecision[]>(form.get('decisions'));
+  if (!decisions || decisions.length === 0)
+    return fail('Choose how at least one line is handled', 400);
+
+  const result = await callAgent<{ recorded: number; not_recorded: string[] }>(
+    `/accounting/invoices/${invoice.id}/stock`,
+    jsonInit('POST', { entity_id: invoice.entity_id, decisions })
+  );
+  return json({ ok: true, recorded: result.recorded, notRecorded: result.not_recorded });
+}
+
+async function remove(invoice: OwnedInvoice) {
+  await callAgent(
+    `/accounting/invoices/${invoice.id}?entity_id=${encodeURIComponent(invoice.entity_id)}`,
+    { method: 'DELETE' }
+  );
+  return json({ ok: true });
 }

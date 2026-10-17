@@ -8,7 +8,33 @@ Status: decisions made, ready for Phase 0 · Branch: `feat/frontend-redesign` ·
 | ------------- | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | 0 Foundations | Done (Oct 17)                     | Tokens, self-hosted fonts, cookie theme, component kit, themed Nivo wrappers, re-themed shell, Playwright (width x theme) with contrast, axe and overflow gates. Gallery at `/ui-kit` (dev only).                                                                                                                                                                                                                                                                                                                        |
 | 1 Dashboard   | Done, layout revised after review | Full-width command-centre layout: compact header, six KPI tiles (two with sparklines), then a 12-column panel grid so the headline numbers, revenue trend and order breakdown share the first screen. Parity with the old page; tests in both themes. Cookie-based auth shipped with it, so loaders can identify the user. Typecheck baseline went from 30 to 6 errors (`module: ESNext` plus Vite client types). Shared `Panel`, `KpiTile`, `Sparkline` and dense `DataTable` are the pattern for the other tool pages. |
-| 2 Table pages | In progress                       | Transactions and Inventory done (previews deleted). Orders, Customers, Products and Invoices next.                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| 2 Table pages | In progress                       | Transactions, Inventory and Invoices done. Orders, Customers and Products next.                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+
+Follow-ups from Phase 2 (Invoices):
+
+- **Reimagined, not restyled.** The page is organised by the invoice's life (To review, Open,
+  Paid) rather than Sale/Purchase tabs: tiles say where the money stands (owed to you, you owe,
+  overdue, to review), Jump to goes to what is late or waiting, and one drawer replaces three
+  modals (review lines and accounts, decide stock, finalise, mark paid, void, delete). Overdue is
+  derived from the due date: the database only has OVERDUE if a person sets it.
+- **Backend refactor (ai_agent).** The lifecycle is now enforced (`services/invoice_rules.py`,
+  60 tests): an open invoice can no longer return to DRAFT with its journal posted, VOID and
+  CANCELLED reverse the journals they posted, PAID to OPEN voids the payment journal, only a
+  clean draft/void/cancelled invoice can be deleted, line edits are scoped to the invoice (any
+  line id could be re-coded before), and editing GL accounts no longer posts a journal for a
+  draft. Three stock endpoints became one (`POST /invoices/{id}/stock`). The upload default is
+  `create_journal=False`.
+- **Security.** The old `/api/invoices` loader returned every business's invoices to anyone, and
+  `delete` removed any invoice by id. Every read and write now starts from the invoice as the
+  signed-in user (RLS) and takes the entity from that row.
+- **Amounts only add invoices in the business's own currency.** The agent does not convert
+  foreign invoices when it journals, so a converted headline would disagree with the ledger.
+  Foreign-currency invoices are listed and counted but flagged as not included.
+- **Not done:** "mark paid" still keys on `metadata.invoice_id` to find the bank payment, so
+  invoices paid by Revolut (no invoice number in metadata) need the "mark paid anyway" path.
+  A picker that lets the user choose the matching transaction is the real fix.
+- **Same exposure elsewhere:** `orders`, `customers` and `payments` have no RLS policies, so
+  their pages read with the service role and must scope by the user's entity in code.
 
 Follow-ups from Phase 2 (Inventory):
 

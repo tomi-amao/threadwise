@@ -36,6 +36,33 @@ export interface SeedManifest {
     unlinkedSku: string;
     sampleSku: string;
   };
+  /** What the seed put into invoices; amounts are in GBP and add up as the page does. */
+  invoices: {
+    total: number;
+    owedToYou: number;
+    owedToYouCount: number;
+    youOwe: number;
+    youOweCount: number;
+    overdueOwedToYou: number;
+    overdueYouOwe: number;
+    overdueCount: number;
+    toReview: number;
+    otherCurrency: number;
+    openCount: number;
+    paidCount: number;
+    draftPurchase: string;
+    draftSale: string;
+    priorPeriodDraft: string;
+    openSale: string;
+    overdueSale: string;
+    overduePurchase: string;
+    matchedPurchase: string;
+    paidMatched: string;
+    foreign: string;
+    voided: string;
+    bulkPrefix: string;
+    counterparty: string;
+  };
 }
 
 export function readManifest(): SeedManifest {

@@ -15,6 +15,7 @@ import { Chip } from '~/components/ui/chip';
 import { DataTable } from '~/components/ui/data-table';
 import { EmptyState } from '~/components/ui/empty-state';
 import { Input } from '~/components/ui/input';
+import { JumpTo } from '~/components/ui/jump-to';
 import { KpiTile } from '~/components/ui/kpi-tile';
 import { CompactHeader } from '~/components/ui/page-header';
 import { Segmented } from '~/components/ui/segmented';
@@ -511,33 +512,15 @@ export function InventoryPage({ data }: { data: InventoryPageData }) {
           />
         </div>
 
-        {flags.length > 0 && (
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="eyebrow mr-1">Jump to</span>
-            {flags.map(f => (
-              <button
-                key={f.key}
-                type="button"
-                onClick={() => jump(f)}
-                className="group cursor-pointer rounded-full transition-all hover:-translate-y-px hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              >
-                <Chip
-                  tone={f.key === 'oversold' ? 'negative' : 'active'}
-                  dot
-                  className="border-current/40 pr-2 group-hover:border-current"
-                >
-                  {f.count} {f.label}
-                  <ArrowRight
-                    size={12}
-                    weight="bold"
-                    aria-hidden
-                    className="transition-transform group-hover:translate-x-0.5"
-                  />
-                </Chip>
-              </button>
-            ))}
-          </div>
-        )}
+        <JumpTo
+          items={flags.map(f => ({
+            key: f.key,
+            count: f.count,
+            label: f.label,
+            severe: f.key === 'oversold',
+            onSelect: () => jump(f),
+          }))}
+        />
 
         <Tabs
           tabs={TABS.map(t => ({

@@ -71,3 +71,80 @@ export async function restoreItem(row: ItemRow): Promise<void> {
 export async function deleteStandInMovements(): Promise<void> {
   await rest('DELETE', 'inventory_movements', `notes=eq.${encodeURIComponent(STAND_IN_NOTE)}`);
 }
+
+// ─── Invoices ─────────────────────────────────────────────────────────
+
+export interface InvoiceSnapshot {
+  invoices: { id: string; status: string; notes: string | null; invoice_type: string }[];
+  lines: { id: string; gl_account_id: string | null }[];
+}
+
+/** The seeded invoices a test may change (the 1,020 bulk ones are never touched). */
+export async function snapshotInvoices(): Promise<InvoiceSnapshot> {
+  const invoices = await rest<InvoiceSnapshot['invoices']>(
+    'GET',
+    'invoices',
+    'select=id,status,notes,invoice_type&invoice_number=not.like.INV-BULK-*'
+  );
+  const ids = invoices.map(i => i.id).join(',');
+  const lines = await rest<InvoiceSnapshot['lines']>(
+    'GET',
+    'invoice_line_items',
+    `select=id,gl_account_id&invoice_id=in.(${ids})`
+  );
+  return { invoices, lines };
+}
+
+/** Put every changed invoice and line back, and remove what a test created. */
+export async function restoreInvoices(before: InvoiceSnapshot): Promise<void> {
+  const now = await snapshotInvoices();
+  const was = new Map(before.invoices.map(i => [i.id, i]));
+  for (const row of now.invoices) {
+    const original = was.get(row.id);
+    if (original && JSON.stringify(original) !== JSON.stringify(row)) {
+      await rest('PATCH', 'invoices', `id=eq.${row.id}`, {
+        status: original.status,
+        notes: original.notes,
+        invoice_type: original.invoice_type,
+      });
+    }
+  }
+  const lineWas = new Map(before.lines.map(l => [l.id, l.gl_account_id]));
+  for (const line of now.lines) {
+    if (lineWas.has(line.id) && lineWas.get(line.id) !== line.gl_account_id) {
+      await rest('PATCH', 'invoice_line_items', `id=eq.${line.id}`, {
+        gl_account_id: lineWas.get(line.id),
+      });
+    }
+  }
+  // Invoices made by the stand-in agent when a test uploads a file, and what it created for
+  // them (stock items, movements, its two contacts).
+  await rest('DELETE', 'invoices', 'invoice_number=like.E2E-UP-*');
+  await deleteStandInMovements();
+  await rest('DELETE', 'inventory_items', 'sku=like.e2e-*');
+  await rest('DELETE', 'contacts', 'name=in.("Stand-in Supplier Ltd","Stand-in Customer Ltd")');
+}
+
+export async function readInvoice(
+  number: string
+): Promise<{ id: string; status: string; notes: string | null; invoice_type: string } | null> {
+  const rows = await rest<
+    { id: string; status: string; notes: string | null; invoice_type: string }[]
+  >(
+    'GET',
+    'invoices',
+    `select=id,status,notes,invoice_type&invoice_number=eq.${encodeURIComponent(number)}`
+  );
+  return rows[0] ?? null;
+}
+
+export async function readLineAccount(invoiceNumber: string, description: string) {
+  const invoice = await readInvoice(invoiceNumber);
+  if (!invoice) throw new Error(`No invoice ${invoiceNumber}`);
+  const rows = await rest<{ gl_account_id: string | null }[]>(
+    'GET',
+    'invoice_line_items',
+    `select=gl_account_id&invoice_id=eq.${invoice.id}&description=eq.${encodeURIComponent(description)}`
+  );
+  return rows[0]?.gl_account_id ?? null;
+}

@@ -22,6 +22,10 @@ import { FocusScope } from '@radix-ui/react-focus-scope';
 import { CaretDown, Check, MagnifyingGlass, X } from 'phosphor-react';
 import { cn } from '~/lib/utils';
 
+/** Trigger styling that matches the form fields (Input, NativeSelect shape="field"). */
+export const FIELD_TRIGGER_CLASS =
+  'h-10 w-full rounded-xl border-input bg-card px-3.5 text-[15px] hover:bg-card';
+
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 export interface SelectOption {
@@ -325,6 +329,15 @@ export function SearchableSelect({
     <span className="truncate text-muted-foreground">{placeholder}</span>
   );
 
+  // A bare aria-label replaces the button's own text, so a screen reader would never hear the
+  // chosen value (and WCAG 2.5.3 wants the visible text inside the name). Say both.
+  const visibleText = renderValue
+    ? null
+    : selectedOption && selectedOption.value !== ''
+      ? selectedOption.label
+      : placeholder;
+  const accessibleName = ariaLabel && visibleText ? `${ariaLabel}: ${visibleText}` : ariaLabel;
+
   // ── Dropdown via Radix Portal (escapes transforms + cooperates with focus trap) ──
   const dropdown = open
     ? createPortal(
@@ -439,7 +452,7 @@ export function SearchableSelect({
         type="button"
         disabled={disabled}
         onClick={openDropdown}
-        aria-label={ariaLabel}
+        aria-label={accessibleName}
         className={cn(
           'flex items-center gap-1.5 rounded-md border border-border bg-background text-sm focus:outline-none focus:ring-1 focus:ring-primary/60 disabled:opacity-50 disabled:cursor-not-allowed transition-colors hover:bg-muted/30',
           className

@@ -1,56 +1,31 @@
 /**
  * Invoices Route (Protected)
  *
- * Invoice management page with upload and list functionality.
+ * The loader reads the signed-in user's invoices (row-level security applies). The page does
+ * the rest; changes go through /api/invoices.
  */
 
-import type { MetaFunction, LoaderFunctionArgs } from 'react-router';
-import { useLoaderData, useRevalidator } from 'react-router';
-import { InvoicesSection } from '~/components/invoices';
-import { getInvoiceStats } from '~/lib/api/invoices.server';
-import type { Invoice, InvoiceStats } from '~/types/invoice';
+import type { LoaderFunctionArgs, MetaFunction } from 'react-router';
+import { useLoaderData } from 'react-router';
+import { InvoicesPage } from '~/components/invoices';
+import { getUserEntity, listInvoices } from '~/lib/api/invoices.server';
 
-export const meta: MetaFunction = () => {
-  return [
-    { title: 'Invoices - ThreadWise' },
-    { name: 'description', content: 'Manage your invoices' },
-  ];
-};
+export const meta: MetaFunction = () => [
+  { title: 'Invoices - ThreadWise' },
+  { name: 'description', content: 'Upload, review and track what you owe and what you are owed' },
+];
 
-export async function loader({ request: _request }: LoaderFunctionArgs): Promise<{
-  invoices: Invoice[];
-  stats: InvoiceStats;
-}> {
-  // Auth lives in localStorage, not cookies, so the server can't hold a user
-  // session. The InvoicesSection component fetches invoices client-side using
-  // the authenticated browser Supabase client (which satisfies RLS).
-  // We return empty initial data here so the page shell renders immediately.
-  const empty: InvoiceStats = {
-    total: 0,
-    sales: { total: 0, open: 0, paid: 0, overdue: 0, outstanding: 0 },
-    purchases: { total: 0, open: 0, paid: 0, overdue: 0, payable: 0 },
+export async function loader({ request }: LoaderFunctionArgs) {
+  const [invoices, entity] = await Promise.all([listInvoices(request), getUserEntity(request)]);
+  // "Today" comes from the server so overdue is the same on the server render and in the browser.
+  return {
+    invoices,
+    currency: entity?.currency ?? 'GBP',
+    today: new Date().toISOString().slice(0, 10),
   };
-  return { invoices: [], stats: empty };
 }
 
-export default function InvoicesPage() {
-  const { invoices, stats } = useLoaderData<typeof loader>();
-  const revalidator = useRevalidator();
-
-  const handleRefresh = () => {
-    revalidator.revalidate();
-  };
-
-  return (
-    <div className="min-h-screen bg-background p-6 lg:p-8">
-      <div className="mb-8">
-        <h1 className="text-3xl font-bold text-foreground">Invoices</h1>
-        <p className="text-muted-foreground mt-2">
-          Upload, manage, and track your invoices with AI-powered extraction.
-        </p>
-      </div>
-
-      <InvoicesSection invoices={invoices} stats={stats} onRefresh={handleRefresh} />
-    </div>
-  );
+export default function InvoicesRoute() {
+  const { invoices, today, currency } = useLoaderData<typeof loader>();
+  return <InvoicesPage invoices={invoices} today={today} currency={currency} />;
 }
