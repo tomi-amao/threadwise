@@ -15,6 +15,8 @@ const STAND_IN_URL = `http://127.0.0.1:${STAND_IN_PORT}`;
 
 /** Setup runs once; tests that change data run last, in their own project. */
 const PAGE_TEST_IGNORE = /auth\.setup\.ts|-edit\.spec\.ts/;
+/** The API-level security checks do not depend on width or theme: run them in one project. */
+const ONCE_ONLY = /rls\.spec\.ts/;
 
 const desktop = { ...devices['Desktop Chrome'], viewport: { width: 1280, height: 900 } };
 
@@ -40,19 +42,19 @@ export default defineConfig<{ theme: ThemeOption }>({
     ...(['light', 'dark'] as const).flatMap(theme => [
       {
         name: `desktop-${theme}`,
-        testIgnore: PAGE_TEST_IGNORE,
+        testIgnore: theme === 'light' ? PAGE_TEST_IGNORE : [PAGE_TEST_IGNORE, ONCE_ONLY],
         dependencies: ['setup'],
         use: { ...desktop, theme, storageState: AUTH_FILE },
       },
       {
         name: `tablet-${theme}`,
-        testIgnore: PAGE_TEST_IGNORE,
+        testIgnore: [PAGE_TEST_IGNORE, ONCE_ONLY],
         dependencies: ['setup'],
         use: { ...desktop, viewport: { width: 768, height: 1024 }, theme, storageState: AUTH_FILE },
       },
       {
         name: `mobile-${theme}`,
-        testIgnore: PAGE_TEST_IGNORE,
+        testIgnore: [PAGE_TEST_IGNORE, ONCE_ONLY],
         dependencies: ['setup'],
         use: {
           ...desktop,

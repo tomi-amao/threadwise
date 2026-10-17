@@ -13,6 +13,7 @@
  */
 
 import { createServerClient, parseCookieHeader } from '@supabase/ssr';
+import { data } from 'react-router';
 import { createClient, type SupabaseClient, type User } from '@supabase/supabase-js';
 import { getPublicSupabaseConfig } from './supabase-config';
 
@@ -47,4 +48,23 @@ export async function getRequestUser(request: Request): Promise<User | null> {
     error,
   } = await getRequestSupabaseClient(request).auth.getUser();
   return error ? null : user;
+}
+
+/**
+ * The signed-in user, or a 401 the route's error boundary shows.
+ *
+ * Loaders that read with the user's session must call this first. Without a valid session every
+ * row-level-security read quietly returns nothing, which a page would render as a business with
+ * no data: an empty dashboard is a worse answer than "your session has expired". (A token that
+ * has just expired is refreshed by the browser client on its own, so reloading works.)
+ */
+export async function requireUser(request: Request): Promise<User> {
+  const user = await getRequestUser(request);
+  if (!user) {
+    throw data(
+      { message: 'Your session has expired. Reload the page to sign back in.' },
+      { status: 401 }
+    );
+  }
+  return user;
 }

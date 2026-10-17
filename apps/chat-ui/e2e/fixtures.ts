@@ -50,6 +50,19 @@ export interface SeedManifest {
     refundedOrderNumber: string;
     sampleOrderNumber: string;
   };
+  /** A second business (and its user) that the first must never see. */
+  rival: {
+    email: string;
+    entityName: string;
+    orderNumbers: string[];
+    orderTotal: number;
+    customerNames: string[];
+    productName: string;
+    inventorySku: string;
+    invoiceNumber: string;
+    bankName: string;
+    bankBalance: number;
+  };
   /** What the seed put into products: line-item revenue, by the rules the Products page uses. */
   products: {
     total: number;

@@ -7,7 +7,6 @@
  * chart_of_accounts, journals, journal_line_items.
  */
 
-import { getServerSupabaseClient } from '~/lib/supabase';
 import { getRequestSupabaseClient } from '~/lib/supabase-server';
 import { fetchAllRows } from './paginate.server';
 import { getDerivedBankBalances } from './bank-balance.server';
@@ -25,8 +24,6 @@ import type {
   BankAccountSummary,
   RecentOrder,
 } from '~/types/dashboard';
-
-const getSupabase = getServerSupabaseClient;
 
 // Row shapes for the four queries below. The Supabase client is untyped here (no generated
 // database types), so these document what each select returns and keep the aggregation typed.
@@ -96,7 +93,9 @@ export async function getEntityInfo(request: Request): Promise<EntityInfo | null
 // ─── Main Dashboard Data ──────────────────────────────────────────────
 
 export async function getDashboardData(request: Request): Promise<DashboardData> {
-  const supabase = getSupabase();
+  // The signed-in user's own session: row-level security decides what it can read, so this
+  // cannot return another business's rows whatever the queries below ask for.
+  const supabase = getRequestSupabaseClient(request);
   const revenueDataPromise = getRevenueMetricsData(supabase);
 
   // Fetch all data in parallel

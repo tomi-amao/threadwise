@@ -5,9 +5,13 @@
  * enriched with variant selling price from the products.variants JSONB.
  * Also provides a flat inventory list view for the management section,
  * inventory movements history, and valuation data.
+ *
+ * Every function takes the Supabase client to read with. Callers pass the signed-in user's
+ * (see getRequestSupabaseClient), so row-level security limits each read to the user's own
+ * business; none of these queries filter by business themselves.
  */
 
-import { getServerSupabaseClient } from '~/lib/supabase';
+import type { SupabaseClient } from '@supabase/supabase-js';
 import { fetchAllRows } from './paginate.server';
 
 // Row shapes returned by the queries below. The Supabase client is untyped here (no generated
@@ -147,15 +151,13 @@ export interface InventoryProductRow {
 }
 
 /** Fetches all products with their linked inventory items. */
-export async function getInventoryProductList(): Promise<{
+export async function getInventoryProductList(supabase: SupabaseClient): Promise<{
   products: InventoryProductRow[];
   unlinkedItems: InventoryItemRow[];
   allItems: InventoryItemRow[];
   totalProducts: number;
   totalInventoryItems: number;
 }> {
-  const supabase = getServerSupabaseClient();
-
   // Both lists are read in full (paged): a plain select() stops at the API's 1,000-row cap.
   // Paging needs a unique order, so these order by id and are sorted below.
   const productsData = (
@@ -296,9 +298,9 @@ export interface InventoryMovementsData {
   totalInvested: number;
 }
 
-export async function getInventoryMovements(): Promise<InventoryMovementsData> {
-  const supabase = getServerSupabaseClient();
-
+export async function getInventoryMovements(
+  supabase: SupabaseClient
+): Promise<InventoryMovementsData> {
   // Recorded movements, in full (paged: a plain select stops at the API's 1,000-row cap).
   // Superseded rows were replaced by a later movement and are left out of on-hand by the
   // inventory_on_hand view, so they are left out of the history too.
@@ -420,14 +422,12 @@ export interface InventoryValuationItem {
   totalInvested: number;
 }
 
-export async function getInventoryValuation(): Promise<{
+export async function getInventoryValuation(supabase: SupabaseClient): Promise<{
   items: InventoryValuationItem[];
   totalInventoryValue: number;
   totalUnitsPurchased: number;
   uniqueProducts: number;
 }> {
-  const supabase = getServerSupabaseClient();
-
   const items = await fetchAllRows<ValuationItemDbRow>('inventory items', (from, to) =>
     supabase
       .from('inventory_items')
@@ -513,9 +513,7 @@ export interface StockData {
   sampleCount: number;
 }
 
-export async function getStockLevels(): Promise<StockData> {
-  const supabase = getServerSupabaseClient();
-
+export async function getStockLevels(supabase: SupabaseClient): Promise<StockData> {
   // On-hand comes from the `inventory_on_hand` view — the single canonical
   // definition, shared with the dashboard, reports and the chat agent. Do not
   // re-derive it here from available_quantity or inventory_movements.

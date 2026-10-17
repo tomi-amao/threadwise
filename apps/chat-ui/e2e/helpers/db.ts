@@ -148,3 +148,73 @@ export async function readLineAccount(invoiceNumber: string, description: string
   );
   return rows[0]?.gl_account_id ?? null;
 }
+
+// ─── Acting as a user (or nobody) ─────────────────────────────────────────────────────────────
+
+const anonKey = requireEnv('SUPABASE_ANON_KEY');
+
+/** The password every seeded user shares (local test database only). */
+export const TEST_PASSWORD = requireEnv('E2E_USER_PASSWORD');
+
+/** Sign in through Supabase Auth and return the access token, as the browser would. */
+export async function signIn(email: string, password = TEST_PASSWORD): Promise<string> {
+  const response = await fetch(`${url}/auth/v1/token?grant_type=password`, {
+    method: 'POST',
+    headers: { apikey: anonKey, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, password }),
+  });
+  if (!response.ok) throw new Error(`sign in ${email}: ${response.status}`);
+  return ((await response.json()) as { access_token: string }).access_token;
+}
+
+export interface Api {
+  status: number;
+  rows: Record<string, unknown>[];
+  /** Exact row count the server reports for the query (what RLS lets this caller see). */
+  count: number | null;
+}
+
+/**
+ * Call the REST API with the public key and, optionally, a user's token: exactly what any
+ * browser can do. `token` undefined means not signed in.
+ */
+export async function api(
+  method: 'GET' | 'PATCH' | 'POST' | 'DELETE',
+  table: string,
+  query = '',
+  token?: string,
+  body?: unknown
+): Promise<Api> {
+  const response = await fetch(`${url}/rest/v1/${table}?${query}`, {
+    method,
+    headers: {
+      apikey: anonKey,
+      Authorization: `Bearer ${token ?? anonKey}`,
+      'Content-Type': 'application/json',
+      Prefer: 'return=representation,count=exact',
+    },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  const text = await response.text();
+  let rows: Record<string, unknown>[] = [];
+  try {
+    const parsed = JSON.parse(text);
+    rows = Array.isArray(parsed) ? parsed : [];
+  } catch {
+    /* an error body is not a row */
+  }
+  const range = response.headers.get('content-range');
+  const count = range && /\/(\d+)$/.test(range) ? Number(range.split('/')[1]) : null;
+  return { status: response.status, rows, count };
+}
+
+/** An inventory item's id by SKU, read with the service role (for tests aiming at another business). */
+export async function readItemIdBySku(sku: string): Promise<string> {
+  const rows = await rest<{ id: string }[]>(
+    'GET',
+    'inventory_items',
+    `select=id&sku=eq.${encodeURIComponent(sku)}`
+  );
+  if (!rows[0]) throw new Error(`No inventory item with SKU ${sku}`);
+  return rows[0].id;
+}

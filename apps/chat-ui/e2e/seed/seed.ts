@@ -33,6 +33,7 @@ export const ENTITY_NAME = 'Atelier North (E2E)';
 // Snapshot balance of the main account. High enough that ~1,100 seeded transactions leave a
 // believable positive balance.
 const OPENING_BALANCE = 600_000;
+export const RIVAL_ENTITY_NAME = 'Rival Co (E2E)';
 const SIZES = ['S', 'M'] as const;
 /** [name, price, external id]: the first has one old sale, the other two never sold. */
 const EXTRA_PRODUCTS = [
@@ -1042,6 +1043,228 @@ async function main() {
     neverNames: ['Linen Apron', 'Waxed Cap'],
   };
 
+  // 6f. A second business with a user of its own, to prove the first cannot see it. Every kind of
+  //     row the dashboard and Inventory read exists for it, so a query that forgets to filter by
+  //     business (or a table without a row-level policy) shows up as extra numbers in the first
+  //     business's pages.
+  const rivalEmail = `rival.${email}`;
+  const { data: rivalUser, error: rivalUserError } = await supabase.auth.admin.createUser({
+    email: rivalEmail,
+    password,
+    email_confirm: true,
+    user_metadata: { full_name: 'Rival Tester' },
+  });
+  if (rivalUserError || !rivalUser.user) throw new Error(`rival user: ${rivalUserError?.message}`);
+  const rivalEntity = (await must(
+    'rival entity',
+    supabase
+      .from('entities')
+      .insert({
+        name: RIVAL_ENTITY_NAME,
+        legal_name: 'Rival Co Ltd',
+        country: 'GB',
+        currency: 'GBP',
+        industry: 'Fashion',
+        onboarding_completed: true,
+        owner_user_id: rivalUser.user.id,
+        year_end_day: 31,
+        year_end_month: 3,
+      })
+      .select('id')
+      .single()
+  )) as { id: string };
+  const rid = rivalEntity.id;
+  const rivalCustomers = (await must(
+    'rival customers',
+    supabase
+      .from('customers')
+      .insert(
+        ['Rhea', 'Rory'].map((f, i) => ({
+          entity_id: rid,
+          provider: 'shopify',
+          external_id: `rival-cust-${i + 1}`,
+          email: `${f}.rival@example.test`.toLowerCase(),
+          first_name: f,
+          last_name: 'Rival',
+          created_at: daysAgo(100),
+        }))
+      )
+      .select('id')
+  )) as { id: string }[];
+  const rivalProduct = (await must(
+    'rival product',
+    supabase
+      .from('products')
+      .insert({
+        entity_id: rid,
+        provider: 'shopify',
+        external_id: 'rival-prod-1',
+        name: 'Rival Parka',
+        product_type: 'apparel',
+        status: 'active',
+        created_at: daysAgo(100),
+      })
+      .select('id')
+      .single()
+  )) as { id: string };
+  const rivalOrders = (await must(
+    'rival orders',
+    supabase
+      .from('orders')
+      .insert(
+        [100, 200, 300].map((total, i) => ({
+          entity_id: rid,
+          customer_id: rivalCustomers[i % 2].id,
+          provider: 'shopify',
+          external_id: `rival-order-${i + 1}`,
+          order_number: `#R${i + 1}`,
+          status: 'delivered',
+          fulfillment_status: 'fulfilled',
+          customer_email: 'rhea.rival@example.test',
+          subtotal_amount: total,
+          grand_total_amount: total,
+          refunded_total_amount: 0,
+          currency: 'GBP',
+          created_at: daysAgo(10 + i),
+        }))
+      )
+      .select('id, grand_total_amount')
+  )) as { id: string; grand_total_amount: number }[];
+  await must(
+    'rival order lines',
+    supabase.from('order_line_items').insert(
+      rivalOrders.map((o, i) => ({
+        order_id: o.id,
+        external_id: `rival-line-${i + 1}`,
+        product_id: rivalProduct.id,
+        product_name: 'Rival Parka',
+        quantity: 1,
+        unit_price_amount: o.grand_total_amount,
+        total_price_amount: o.grand_total_amount,
+        created_at: daysAgo(10 + i),
+      }))
+    )
+  );
+  const rivalBank = (await must(
+    'rival bank',
+    supabase
+      .from('bank_accounts')
+      .insert({
+        entity_id: rid,
+        source: 'revolut',
+        external_account_id: 'rival-bank-1',
+        name: 'Rival Current',
+        currency: 'GBP',
+        balance: 9_000,
+        state: 'active',
+        updated_at: daysAgo(400),
+      })
+      .select('id')
+      .single()
+  )) as { id: string };
+  await must(
+    'rival transactions',
+    supabase.from('financial_transactions').insert(
+      [250, 125].map((amount, i) => ({
+        entity_id: rid,
+        bank_account_id: rivalBank.id,
+        external_transaction_id: `rival-txn-${i + 1}`,
+        amount,
+        base_amount: amount,
+        currency_code: 'GBP',
+        base_currency_code: 'GBP',
+        occurred_at: daysAgo(5 + i),
+        description: 'Rival income',
+        counterparty_name: 'Rival customer',
+        status: 'pending',
+        transaction_type: 'payment',
+        source: 'revolut',
+        direction: 'in',
+      }))
+    )
+  );
+  const rivalItem = (await must(
+    'rival inventory item',
+    supabase
+      .from('inventory_items')
+      .insert({
+        entity_id: rid,
+        product_id: rivalProduct.id,
+        provider: 'manual',
+        quantity_source: 'ledger',
+        variant_external_id: 'rival-var-1',
+        sku: 'RIVAL-SKU-1',
+        unit_cost: 40,
+        item_type: 'sellable',
+        created_at: daysAgo(100),
+      })
+      .select('id')
+      .single()
+  )) as { id: string };
+  await must(
+    'rival movements',
+    supabase.from('inventory_movements').insert([
+      {
+        inventory_item_id: rivalItem.id,
+        transaction_type: 'PURCHASE',
+        quantity: 10,
+        unit_cost: 40,
+        movement_date: daysAgo(90),
+        movement_date_source: 'backdated',
+      },
+      {
+        inventory_item_id: rivalItem.id,
+        transaction_type: 'SALE',
+        quantity: -2,
+        unit_cost: 40,
+        movement_date: daysAgo(30),
+        movement_date_source: 'backdated',
+      },
+    ])
+  );
+  const rivalContact = (await must(
+    'rival contact',
+    supabase
+      .from('contacts')
+      .insert({
+        entity_id: rid,
+        contact_type: 'customer',
+        name: 'Rival Buyer Ltd',
+        company_name: 'Rival Buyer Ltd',
+      })
+      .select('id')
+      .single()
+  )) as { id: string };
+  await must(
+    'rival invoice',
+    supabase.from('invoices').insert({
+      entity_id: rid,
+      invoice_number: 'RIVAL-INV-1',
+      invoice_type: 'SALE',
+      status: 'OPEN',
+      counterparty_id: rivalContact.id,
+      currency: 'GBP',
+      net_amount: 500,
+      tax_amount: 100,
+      gross_amount: 600,
+      invoice_date: daysAgo(20),
+      due_date: daysAgo(-10),
+      source: 'manual',
+    })
+  );
+  const rival = {
+    email: rivalEmail,
+    entityName: RIVAL_ENTITY_NAME,
+    orderNumbers: ['#R1', '#R2', '#R3'],
+    orderTotal: 600,
+    customerNames: ['Rhea Rival', 'Rory Rival'],
+    productName: 'Rival Parka',
+    inventorySku: 'RIVAL-SKU-1',
+    invoiceNumber: 'RIVAL-INV-1',
+    bankName: 'Rival Current',
+    bankBalance: 9_375,
+  };
+
   // 7. Manifest: what the tests may assert on.
   const manifest = {
     entityName: ENTITY_NAME,
@@ -1057,6 +1280,7 @@ async function main() {
     orders: orderSummary,
     customerStats: customerSummary,
     products: productSummary,
+    rival,
     seededAt: new Date().toISOString(),
   };
   mkdirSync(path.dirname(MANIFEST_FILE), { recursive: true });

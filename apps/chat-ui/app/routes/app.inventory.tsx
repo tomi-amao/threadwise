@@ -6,7 +6,7 @@
  * recording a gift or write-off goes through /api/inventory.
  */
 
-import type { ActionFunctionArgs, MetaFunction } from 'react-router';
+import type { ActionFunctionArgs, LoaderFunctionArgs, MetaFunction } from 'react-router';
 import { useLoaderData } from 'react-router';
 import { InventoryPage, type InventoryPageData } from '~/components/inventory';
 import {
@@ -15,7 +15,8 @@ import {
   getInventoryValuation,
   getStockLevels,
 } from '~/lib/api/inventory.server';
-import { getServerSupabaseClient } from '~/lib/supabase';
+import { RouteErrorBoundary } from '~/components/RouteErrorBoundary';
+import { getRequestSupabaseClient, requireUser } from '~/lib/supabase-server';
 
 export const meta: MetaFunction = () => [
   { title: 'Inventory - ThreadWise' },
@@ -38,12 +39,15 @@ function settledOr<T>(
   return fallback;
 }
 
-export async function loader(): Promise<InventoryPageData> {
+export async function loader({ request }: LoaderFunctionArgs): Promise<InventoryPageData> {
+  await requireUser(request);
+  // The signed-in user's own session: row-level security limits every read to their business.
+  const supabase = getRequestSupabaseClient(request);
   const [itemsResult, movementsResult, valuationResult, stockResult] = await Promise.allSettled([
-    getInventoryProductList(),
-    getInventoryMovements(),
-    getInventoryValuation(),
-    getStockLevels(),
+    getInventoryProductList(supabase),
+    getInventoryMovements(supabase),
+    getInventoryValuation(supabase),
+    getStockLevels(supabase),
   ]);
 
   const errors: string[] = [];
@@ -83,6 +87,7 @@ export async function loader(): Promise<InventoryPageData> {
 }
 
 export async function action({ request }: ActionFunctionArgs) {
+  await requireUser(request);
   const body = await request.formData();
   const intent = body.get('intent');
   if (intent !== 'update_item') return { ok: false, error: 'Unknown intent' };
@@ -107,13 +112,23 @@ export async function action({ request }: ActionFunctionArgs) {
       ? { unit_cost: unitCost, item_type: itemType, product_id: productId || null }
       : { unit_cost: unitCost, item_type: itemType, product_id: null };
 
-  const supabase = getServerSupabaseClient();
-  const { error } = await supabase.from('inventory_items').update(patch).eq('id', inventoryItemId);
+  // As the user: row-level security only lets this touch their own items. An item that is not
+  // theirs (or does not exist) matches no row, which is reported rather than treated as saved.
+  const { data, error } = await getRequestSupabaseClient(request)
+    .from('inventory_items')
+    .update(patch)
+    .eq('id', inventoryItemId)
+    .select('id');
   if (error) return { ok: false, error: error.message };
+  if (!data || data.length === 0) return { ok: false, error: 'That item was not found' };
   return { ok: true };
 }
 
 export default function InventoryRoute() {
   const data = useLoaderData<typeof loader>();
   return <InventoryPage data={data} />;
+}
+
+export function ErrorBoundary() {
+  return <RouteErrorBoundary what="inventory" />;
 }
