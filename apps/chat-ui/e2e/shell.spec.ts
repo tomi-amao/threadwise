@@ -25,7 +25,7 @@ test.describe('app shell', () => {
 
   test('has a single page h1 (the mobile bar is not a second one)', async ({ page }) => {
     await page.goto('/dashboard');
-    await expect(page.getByText('Total Orders', { exact: true })).toBeVisible();
+    await expect(page.getByRole('heading', { level: 1, name: /Where the business/ })).toBeVisible();
     await expect(page.getByRole('heading', { level: 1 })).toHaveCount(1);
   });
 

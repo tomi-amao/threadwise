@@ -48,7 +48,7 @@ export function BarChart({
         data={rows}
         keys={['value']}
         indexBy="label"
-        margin={{ top: 12, right: 8, bottom: 32, left: 48 }}
+        margin={{ top: 12, right: 8, bottom: data.length > 8 ? 48 : 32, left: 48 }}
         padding={0.35}
         borderRadius={4}
         colors={({ data: d }) =>
@@ -63,7 +63,7 @@ export function BarChart({
           tickValues: 4,
           format: v => axisFormat(Number(v)),
         }}
-        axisBottom={{ tickSize: 0, tickPadding: 8 }}
+        axisBottom={{ tickSize: 0, tickPadding: 8, tickRotation: data.length > 8 ? -45 : 0 }}
         theme={nivoTheme}
         animate={false}
         role="img"

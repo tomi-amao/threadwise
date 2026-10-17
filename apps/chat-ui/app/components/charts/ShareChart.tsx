@@ -14,11 +14,14 @@ export function ShareChart({
   ariaLabel,
   height = 200,
   format = fullMoney,
+  stacked = false,
 }: {
   data: ShareDatum[];
   ariaLabel: string;
   height?: number;
   format?: (value: number) => string;
+  /** Put the legend under the donut. Use inside narrow cards, where side by side is cramped. */
+  stacked?: boolean;
 }) {
   const total = data.reduce((s, d) => s + d.value, 0);
   if (data.length === 0 || total <= 0) {
@@ -29,8 +32,16 @@ export function ShareChart({
   const color = (i: number) => CHART_COLORS[i % CHART_COLORS.length];
 
   return (
-    <div className="grid items-center gap-6 sm:grid-cols-[minmax(0,200px)_1fr]">
-      <div style={{ height }} className="w-full" aria-hidden>
+    <div
+      className={
+        stacked ? 'grid gap-5' : 'grid items-center gap-6 sm:grid-cols-[minmax(0,200px)_1fr]'
+      }
+    >
+      <div
+        style={{ height }}
+        className={stacked ? 'mx-auto w-full max-w-[220px]' : 'w-full'}
+        aria-hidden
+      >
         <ResponsivePie
           data={data}
           margin={{ top: 8, right: 8, bottom: 8, left: 8 }}

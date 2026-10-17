@@ -29,7 +29,6 @@ export default [
   // Protected app routes - use app layout with sidebar
   layout('routes/app.tsx', [
     route('dashboard', 'routes/app.dashboard.tsx'),
-    route('dashboard-v2', 'routes/app.dashboard-v2.tsx'),
     route('chat', 'routes/app.chat.tsx'),
     route('invoices', 'routes/app.invoices.tsx'),
     route('transactions', 'routes/app.transactions.tsx'),

@@ -36,7 +36,10 @@ export function compactMoney(value: number, currency = 'GBP'): string {
   const sign = value < 0 ? '−' : '';
   if (abs >= 1_000_000)
     return `${sign}${symbol}${(abs / 1_000_000).toFixed(abs >= 10_000_000 ? 0 : 1)}m`;
-  if (abs >= 1_000) return `${sign}${symbol}${Math.round(abs / 1_000)}k`;
+  if (abs >= 10_000) return `${sign}${symbol}${Math.round(abs / 1_000)}k`;
+  // Under 10k a whole-thousand label makes neighbouring ticks identical (£2k, £2k, £1k): keep
+  // one decimal, dropping a trailing .0.
+  if (abs >= 1_000) return `${sign}${symbol}${(abs / 1_000).toFixed(1).replace(/\.0$/, '')}k`;
   return `${sign}${symbol}${Math.round(abs)}`;
 }
 

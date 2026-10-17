@@ -77,7 +77,7 @@ test.describe('cookie session', () => {
     await page.goto('/dashboard');
 
     // Still signed in (the app did not bounce us to /login), now via a cookie...
-    await expect(page.getByText('Total Orders', { exact: true })).toBeVisible();
+    await expect(page.getByRole('heading', { level: 1, name: /Where the business/ })).toBeVisible();
     await expect
       .poll(async () => (await context.cookies()).some(c => /^sb-.+-auth-token/.test(c.name)))
       .toBe(true);

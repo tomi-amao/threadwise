@@ -12,7 +12,8 @@ import { Eyebrow } from './eyebrow';
  *
  * Wrap part of the title in <em> to colour it with the accent text colour.
  */
-const EM = '[&_em]:not-italic [&_em]:text-accent-text';
+export const EM_ACCENT = '[&_em]:not-italic [&_em]:text-accent-text';
+const EM = EM_ACCENT;
 
 export function Hero({
   eyebrow,
