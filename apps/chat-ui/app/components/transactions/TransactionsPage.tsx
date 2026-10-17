@@ -459,7 +459,7 @@ export function TransactionsPage() {
               )}
               {groups.map(([key, dayRows]) => (
                 <div key={key}>
-                  <h2 className="eyebrow flex items-baseline justify-between border-b bg-muted px-5 py-2.5 [&:not(:first-child)]:border-t">
+                  <h2 className="eyebrow flex items-baseline justify-between border-b bg-card bg-[linear-gradient(var(--accent-tint),var(--accent-tint))] px-5 py-2.5 text-accent-text! [&:not(:first-child)]:border-t">
                     <span>{dayLabel(key)}</span>
                     <span className="shrink-0 whitespace-nowrap pl-4 font-mono text-[11px] tracking-[0.06em]">
                       {dayRows.length}
