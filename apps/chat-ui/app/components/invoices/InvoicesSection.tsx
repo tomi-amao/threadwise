@@ -1,6 +1,6 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { useAuth } from '~/providers/AuthProvider';
-import { getSupabaseBrowserClient } from '~/lib/supabase';
+import { getSupabaseBrowserClient } from '~/lib/supabase-browser';
 import { fetchChartOfAccounts } from '~/lib/api/accounting';
 import {
   Receipt,
@@ -53,12 +53,9 @@ function formatMoney(n: number, currency = 'EUR') {
   }).format(n);
 }
 
-export function InvoicesSection({
-  invoices: _initialInvoices,
-  contacts: _initialContacts = [],
-  stats: _initialStats,
-  onRefresh,
-}: InvoicesSectionProps) {
+// `invoices`, `contacts` and `stats` are accepted for the route's initial render but unused: the
+// section fetches its own data client-side with the authenticated browser client.
+export function InvoicesSection({ onRefresh }: InvoicesSectionProps) {
   const { entity } = useAuth();
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [contacts, setContacts] = useState<Contact[]>([]);
@@ -325,7 +322,7 @@ export function InvoicesSection({
           return;
         }
         toast.success('Status updated');
-      } catch (err) {
+      } catch {
         toast.error('Failed to update status');
         await fetchData();
       }
@@ -357,7 +354,7 @@ export function InvoicesSection({
           return;
         }
         toast.success('Invoice deleted');
-      } catch (err) {
+      } catch {
         toast.error('Failed to delete invoice');
         await fetchData();
       }
@@ -385,7 +382,7 @@ export function InvoicesSection({
       if (result.signedUrl) {
         window.open(result.signedUrl, '_blank', 'noopener,noreferrer');
       }
-    } catch (err) {
+    } catch {
       toast.error('Failed to load document');
     }
   }, []);
@@ -414,7 +411,7 @@ export function InvoicesSection({
         a.click();
         document.body.removeChild(a);
       }
-    } catch (err) {
+    } catch {
       toast.error('Failed to download');
     }
   }, []);

@@ -7,7 +7,8 @@
  * chart_of_accounts, journals, journal_line_items.
  */
 
-import { getServerSupabaseClient, getAuthenticatedServerClient } from '~/lib/supabase';
+import { getServerSupabaseClient } from '~/lib/supabase';
+import { getRequestSupabaseClient } from '~/lib/supabase-server';
 import { getDerivedBankBalances } from './bank-balance.server';
 import { getRevenueMetricsData } from './revenue-metrics.server';
 import type {
@@ -26,11 +27,51 @@ import type {
 
 const getSupabase = getServerSupabaseClient;
 
+// Row shapes for the four queries below. The Supabase client is untyped here (no generated
+// database types), so these document what each select returns and keep the aggregation typed.
+interface OrderRow {
+  id: string;
+  grand_total_amount: number | null;
+  status: string | null;
+  created_at: string | null;
+  customer_id: string | null;
+  customer_email: string | null;
+  customers: {
+    id: string;
+    first_name: string | null;
+    last_name: string | null;
+    email: string | null;
+  } | null;
+}
+interface LineItemRow {
+  product_id: string | null;
+  product_name: string | null;
+  quantity: number | null;
+  total_price_amount: number | null;
+  order_id: string;
+}
+interface PaymentRow {
+  gateway: string | null;
+  payment_method: string | null;
+  net_amount: number | null;
+  status: string;
+}
+interface RecentOrderRow {
+  id: string;
+  order_number: string;
+  status: string;
+  grand_total_amount: number | null;
+  currency: string | null;
+  created_at: string;
+  customer_email: string | null;
+  customers: { first_name: string | null; last_name: string | null } | null;
+}
+
 // ─── Entity Info ──────────────────────────────────────────────────────
 
 export async function getEntityInfo(request: Request): Promise<EntityInfo | null> {
   try {
-    const supabase = getAuthenticatedServerClient(request);
+    const supabase = getRequestSupabaseClient(request);
     const {
       data: { user },
       error: authError,
@@ -99,16 +140,16 @@ export async function getDashboardData(request: Request): Promise<DashboardData>
   if (customerCountRaw.error)
     throw new Error(`Failed to load customer count: ${customerCountRaw.error.message}`);
 
-  const orders = ordersRaw.data || [];
-  const lineItems = lineItemsRaw.data || [];
-  const payments = paymentsRaw.data || [];
-  const recentOrdersData = recentOrdersRaw.data || [];
+  const orders = (ordersRaw.data || []) as unknown as OrderRow[];
+  const lineItems = (lineItemsRaw.data || []) as LineItemRow[];
+  const payments = (paymentsRaw.data || []) as PaymentRow[];
+  const recentOrdersData = (recentOrdersRaw.data || []) as unknown as RecentOrderRow[];
   const totalCustomerCount = customerCountRaw.count || 0;
   const revenueMetrics = revenueData.snapshot;
 
   // Compute KPIs
-  const activeOrders = orders.filter((o: any) => o.status !== 'cancelled');
-  const capturedPayments = payments.filter((p: any) => p.status === 'captured');
+  const activeOrders = orders.filter(o => o.status !== 'cancelled');
+  const capturedPayments = payments.filter(p => p.status === 'captured');
   const totalBankBalance = derivedBankBalances.totalBalance;
 
   const kpis: KPIData = {
@@ -126,7 +167,7 @@ export async function getDashboardData(request: Request): Promise<DashboardData>
   const monthMap = new Map<string, { revenue: number; count: number }>();
   for (const order of activeOrders) {
     if (!order.created_at) continue;
-    const month = (order.created_at as string).substring(0, 7);
+    const month = order.created_at.substring(0, 7);
     const existing = monthMap.get(month) || { revenue: 0, count: 0 };
     existing.revenue += Number(order.grand_total_amount || 0);
     existing.count += 1;
@@ -144,7 +185,7 @@ export async function getDashboardData(request: Request): Promise<DashboardData>
   // Orders by status
   const statusMap = new Map<string, number>();
   for (const order of orders) {
-    const s = (order as any).status || 'unknown';
+    const s = order.status || 'unknown';
     statusMap.set(s, (statusMap.get(s) || 0) + 1);
   }
   const ordersByStatus: OrderStatusBreakdown[] = Array.from(statusMap.entries())
@@ -157,17 +198,17 @@ export async function getDashboardData(request: Request): Promise<DashboardData>
     { id: string | null; name: string; qty: number; revenue: number; orders: Set<string> }
   >();
   for (const item of lineItems) {
-    const key = (item as any).product_name || 'Unknown';
+    const key = item.product_name || 'Unknown';
     const existing = productMap.get(key) || {
-      id: (item as any).product_id,
+      id: item.product_id,
       name: key,
       qty: 0,
       revenue: 0,
       orders: new Set<string>(),
     };
-    existing.qty += Number((item as any).quantity || 0);
-    existing.revenue += Number((item as any).total_price_amount || 0);
-    existing.orders.add((item as any).order_id);
+    existing.qty += Number(item.quantity || 0);
+    existing.revenue += Number(item.total_price_amount || 0);
+    existing.orders.add(item.order_id);
     productMap.set(key, existing);
   }
   const topProducts: ProductPerformance[] = Array.from(productMap.values())
@@ -194,27 +235,27 @@ export async function getDashboardData(request: Request): Promise<DashboardData>
     }
   >();
   for (const order of activeOrders) {
-    const cust = (order as any).customers;
-    const custId = (order as any).customer_id;
+    const cust = order.customers;
+    const custId = order.customer_id;
     if (!custId) continue;
 
     const existing = customerMap.get(custId) || {
       id: custId,
       name: cust
         ? [cust.first_name, cust.last_name].filter(Boolean).join(' ')
-        : (order as any).customer_email || 'Unknown',
-      email: cust?.email || (order as any).customer_email || null,
+        : order.customer_email || 'Unknown',
+      email: cust?.email || order.customer_email || null,
       orderCount: 0,
       totalSpent: 0,
       lastOrderDate: null,
     };
     existing.orderCount += 1;
-    existing.totalSpent += Number((order as any).grand_total_amount || 0);
+    existing.totalSpent += Number(order.grand_total_amount || 0);
     if (
       !existing.lastOrderDate ||
       (order.created_at && order.created_at > existing.lastOrderDate)
     ) {
-      existing.lastOrderDate = order.created_at as string;
+      existing.lastOrderDate = order.created_at;
     }
     customerMap.set(custId, existing);
   }
@@ -223,7 +264,7 @@ export async function getDashboardData(request: Request): Promise<DashboardData>
     .slice(0, 10);
 
   // Customer stats
-  const uniqueOrderCustomers = new Set(activeOrders.map((o: any) => o.customer_id).filter(Boolean));
+  const uniqueOrderCustomers = new Set(activeOrders.map(o => o.customer_id).filter(Boolean));
   const repeatCustomers = Array.from(customerMap.values()).filter(c => c.orderCount > 1);
   const customerStats: CustomerStats = {
     total: totalCustomerCount,
@@ -238,10 +279,10 @@ export async function getDashboardData(request: Request): Promise<DashboardData>
   // Payment methods
   const pmMap = new Map<string, { count: number; total: number }>();
   for (const p of capturedPayments) {
-    const key = `${(p as any).gateway || 'Unknown'}|${(p as any).payment_method || 'Unknown'}`;
+    const key = `${p.gateway || 'Unknown'}|${p.payment_method || 'Unknown'}`;
     const existing = pmMap.get(key) || { count: 0, total: 0 };
     existing.count += 1;
-    existing.total += Number((p as any).net_amount || 0);
+    existing.total += Number(p.net_amount || 0);
     pmMap.set(key, existing);
   }
   const paymentMethods: PaymentMethodBreakdown[] = Array.from(pmMap.entries())
@@ -261,7 +302,7 @@ export async function getDashboardData(request: Request): Promise<DashboardData>
   }));
 
   // Recent orders
-  const recentOrders: RecentOrder[] = recentOrdersData.map((o: any) => {
+  const recentOrders: RecentOrder[] = recentOrdersData.map(o => {
     const cust = o.customers;
     const name = cust ? [cust.first_name, cust.last_name].filter(Boolean).join(' ') : null;
     return {

@@ -50,8 +50,10 @@ let supabaseClient: SupabaseClient | null = null;
 async function getSupabase(): Promise<SupabaseClient> {
   if (supabaseClient) return supabaseClient;
 
-  const { getSupabaseBrowserClient } = await import('~/lib/supabase');
+  const { getSupabaseBrowserClient, migrateLegacySession } = await import('~/lib/supabase-browser');
   supabaseClient = getSupabaseBrowserClient();
+  // People signed in before the move to cookie sessions keep their session.
+  await migrateLegacySession(supabaseClient);
   return supabaseClient;
 }
 
@@ -191,7 +193,8 @@ export function AuthProvider({ children }: AuthProviderProps) {
       });
 
       if (entityError) {
-        return { error: entityError as any };
+        // The caller only reads `.message`; the entity insert failure is surfaced the same way.
+        return { error: entityError as unknown as AuthError };
       }
 
       return { error: null };
