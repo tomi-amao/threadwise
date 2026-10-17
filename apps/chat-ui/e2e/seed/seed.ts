@@ -33,6 +33,9 @@ export const ENTITY_NAME = 'Atelier North (E2E)';
 // Snapshot balance of the main account. High enough that ~1,100 seeded transactions leave a
 // believable positive balance.
 const OPENING_BALANCE = 600_000;
+const SIZES = ['S', 'M'] as const;
+/** Extra purchase/sale movement pairs on one item, to prove movements are read past the 1,000-row cap. */
+const BULK_MOVEMENT_PAIRS = 550;
 
 // ─── Deterministic helpers ───────────────────────────────────────────────────
 
@@ -130,7 +133,7 @@ async function main() {
   );
   const entityId = (entity as { id: string }).id;
 
-  // 3. Products. Variants stay empty here; the Inventory page work will extend this.
+  // 3. Products, each with two size variants.
   const productNames = [
     'Heavy Knit Cardigan',
     'Wool Overshirt',
@@ -155,6 +158,13 @@ async function main() {
           product_type: 'apparel',
           status: 'active',
           created_at: daysAgo(330),
+          // Two sizes each, so every product has variants for inventory items to point at.
+          variants: SIZES.map(size => ({
+            external_id: `e2e-var-${i + 1}-${size}`,
+            sku: `E2E-${i + 1}-${size}`,
+            price: { amount: prices[i], currency: 'GBP' },
+            attributes: { SIZE: size },
+          })),
         }))
       )
       .select('id, name')
@@ -414,6 +424,169 @@ async function main() {
       txnRows.reduce((sum, t) => sum + (t.direction === 'in' ? t.base_amount : -t.base_amount), 0)
   );
 
+  // 6b. Inventory: 16 linked variants (2 per product) in every stock state, one unlinked
+  //     sellable variant, one sample and one material. Every item has recorded sales, so the
+  //     on_hand view is simply the sum of its movements (no product-level fallback).
+  //
+  //   index  on hand   note
+  //     0      -3      oversold
+  //     1       0      out of stock
+  //     2       4      low
+  //     3       9      low
+  //    4-13    20-120  in stock (4 carries the bulk movements)
+  //    14      70      in stock but no unit cost
+  //    15       0      unlimited (not tracked); still has recorded purchases and sales
+  const onHandTargets = [-3, 0, 4, 9, 40, 55, 80, 120, 30, 45, 64, 22, 90, 35, 70, 0];
+  const giftedBy: Record<number, number> = { 7: 2 };
+  const writtenOffBy: Record<number, number> = { 9: 3 };
+  const itemSpecs = onHandTargets.map((onHand, i) => {
+    const productIdx = Math.floor(i / SIZES.length);
+    const size = SIZES[i % SIZES.length];
+    const cost = i === 14 ? 0 : money(prices[productIdx] * 0.4);
+    const sold = 5 + Math.floor(rand() * 35);
+    const gifted = giftedBy[i] ?? 0;
+    const writtenOff = writtenOffBy[i] ?? 0;
+    const purchased = Math.max(0, onHand + sold + gifted + writtenOff);
+    return { i, productIdx, size, cost, sold, gifted, writtenOff, purchased, onHand };
+  });
+
+  const itemRows: Record<string, unknown>[] = itemSpecs.map(spec => ({
+    entity_id: entityId,
+    product_id: products[spec.productIdx].id,
+    provider: 'manual',
+    quantity_source: 'ledger',
+    variant_external_id: `e2e-var-${spec.productIdx + 1}-${spec.size}`,
+    sku: `E2E-${spec.productIdx + 1}-${spec.size}`,
+    unit_cost: spec.cost,
+    is_unlimited: spec.i === 15,
+    item_type: 'sellable',
+    created_at: daysAgo(320),
+  }));
+  itemRows.push(
+    {
+      entity_id: entityId,
+      product_id: null,
+      provider: 'manual',
+      quantity_source: 'ledger',
+      variant_external_id: 'e2e-var-unlinked',
+      sku: 'E2E-UNLINKED',
+      unit_cost: 12,
+      item_type: 'sellable',
+      created_at: daysAgo(100),
+    },
+    {
+      entity_id: entityId,
+      product_id: null,
+      provider: 'manual',
+      quantity_source: 'ledger',
+      variant_external_id: 'e2e-var-sample',
+      sku: 'E2E-SAMPLE',
+      unit_cost: 18,
+      item_type: 'sample',
+      created_at: daysAgo(100),
+    },
+    {
+      entity_id: entityId,
+      product_id: null,
+      provider: 'manual',
+      quantity_source: 'ledger',
+      variant_external_id: 'e2e-var-material',
+      sku: 'E2E-MATERIAL',
+      unit_cost: 6,
+      item_type: 'material',
+      created_at: daysAgo(100),
+    }
+  );
+  const inventoryItems = await insertChunked<{ id: string; sku: string }>(
+    'inventory_items',
+    'inventory_items',
+    itemRows,
+    'id, sku'
+  );
+  const itemIdBySku = new Map(inventoryItems.map(r => [r.sku, r.id]));
+
+  const movementRows: Record<string, unknown>[] = [];
+  const addMovement = (
+    sku: string,
+    type: 'PURCHASE' | 'SALE' | 'GIFT' | 'WRITE_OFF',
+    quantity: number,
+    unitCost: number,
+    daysBack: number
+  ) =>
+    movementRows.push({
+      inventory_item_id: itemIdBySku.get(sku),
+      transaction_type: type,
+      quantity,
+      unit_cost: unitCost,
+      movement_date: daysAgo(daysBack),
+      movement_date_source: 'backdated',
+      notes: `E2E ${type.toLowerCase()}`,
+    });
+  let investedTotal = 0;
+  let unitsPurchasedTotal = 0;
+  for (const spec of itemSpecs) {
+    const sku = `E2E-${spec.productIdx + 1}-${spec.size}`;
+    if (spec.purchased > 0) {
+      const first = Math.ceil(spec.purchased / 2);
+      addMovement(sku, 'PURCHASE', first, spec.cost, 300);
+      if (spec.purchased - first > 0) {
+        addMovement(sku, 'PURCHASE', spec.purchased - first, spec.cost, 150);
+      }
+      investedTotal += spec.purchased * spec.cost;
+      unitsPurchasedTotal += spec.purchased;
+    }
+    if (spec.sold > 0) {
+      const first = Math.ceil(spec.sold / 2);
+      addMovement(sku, 'SALE', -first, spec.cost, 120);
+      if (spec.sold - first > 0) addMovement(sku, 'SALE', -(spec.sold - first), spec.cost, 40);
+    }
+    if (spec.gifted > 0) addMovement(sku, 'GIFT', -spec.gifted, spec.cost, 30);
+    if (spec.writtenOff > 0) addMovement(sku, 'WRITE_OFF', -spec.writtenOff, spec.cost, 20);
+  }
+  // Bulk: pairs of +1 / -1 on item 4 (net zero, so its on-hand is unchanged), spread over a year.
+  const bulk = itemSpecs[4];
+  const bulkSku = `E2E-${bulk.productIdx + 1}-${bulk.size}`;
+  for (let n = 0; n < BULK_MOVEMENT_PAIRS; n++) {
+    addMovement(bulkSku, 'PURCHASE', 1, bulk.cost, 200 + (n % 120));
+    addMovement(bulkSku, 'SALE', -1, bulk.cost, 60 + (n % 120));
+  }
+  investedTotal += BULK_MOVEMENT_PAIRS * bulk.cost;
+  unitsPurchasedTotal += BULK_MOVEMENT_PAIRS;
+  // The sample and the material each have one purchase (outside the sellable headline numbers).
+  addMovement('E2E-SAMPLE', 'PURCHASE', 3, 18, 90);
+  addMovement('E2E-MATERIAL', 'PURCHASE', 40, 6, 90);
+  investedTotal += 3 * 18 + 40 * 6;
+  unitsPurchasedTotal += 43;
+  await insertChunked('inventory_movements', 'inventory_movements', movementRows, 'id', 500);
+
+  const sellableLinked = itemSpecs;
+  const stockValue = money(
+    sellableLinked.reduce((sum, s) => sum + Math.max(0, s.onHand) * s.cost, 0)
+  );
+  const inventory = {
+    itemCount: itemRows.length,
+    linkedSellableCount: sellableLinked.length,
+    movementCount: movementRows.length,
+    bulkItemSku: bulkSku,
+    stockValue,
+    unitsOnHand: sellableLinked.reduce((sum, s) => sum + Math.max(0, s.onHand), 0),
+    oversold: onHandTargets.filter(n => n < 0).length,
+    outOfStock: onHandTargets.filter((n, i) => n === 0 && i !== 15).length,
+    low: onHandTargets.filter(n => n > 0 && n < 10).length,
+    unlinked: 1,
+    uncosted: 1,
+    invested: money(investedTotal),
+    unitsPurchased: unitsPurchasedTotal,
+    oversoldSku: 'E2E-1-S',
+    outSku: 'E2E-1-M',
+    lowSku: 'E2E-2-S',
+    healthySku: 'E2E-4-M',
+    uncostedSku: 'E2E-8-S',
+    unlimitedSku: 'E2E-8-M',
+    unlinkedSku: 'E2E-UNLINKED',
+    sampleSku: 'E2E-SAMPLE',
+  };
+
   // 7. Manifest: what the tests may assert on.
   const manifest = {
     entityName: ENTITY_NAME,
@@ -424,6 +597,7 @@ async function main() {
     bankAccountCount: banks.length,
     transactionCount: TXN_COUNT,
     expectedBankBalance,
+    inventory,
     seededAt: new Date().toISOString(),
   };
   mkdirSync(path.dirname(MANIFEST_FILE), { recursive: true });

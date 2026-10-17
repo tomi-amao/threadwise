@@ -10,6 +10,11 @@ const serviceKey = requireEnv('SUPABASE_SERVICE_ROLE_KEY');
 
 const PORT = 5180; // not 5174, so a normal dev server (which may point at the hosted DB) is never reused
 const BASE_URL = `http://localhost:${PORT}`;
+const STAND_IN_PORT = 8099;
+const STAND_IN_URL = `http://127.0.0.1:${STAND_IN_PORT}`;
+
+/** Setup runs once; tests that change data run last, in their own project. */
+const PAGE_TEST_IGNORE = /auth\.setup\.ts|-edit\.spec\.ts/;
 
 const desktop = { ...devices['Desktop Chrome'], viewport: { width: 1280, height: 900 } };
 
@@ -35,19 +40,19 @@ export default defineConfig<{ theme: ThemeOption }>({
     ...(['light', 'dark'] as const).flatMap(theme => [
       {
         name: `desktop-${theme}`,
-        testIgnore: /auth\.setup\.ts/,
+        testIgnore: PAGE_TEST_IGNORE,
         dependencies: ['setup'],
         use: { ...desktop, theme, storageState: AUTH_FILE },
       },
       {
         name: `tablet-${theme}`,
-        testIgnore: /auth\.setup\.ts/,
+        testIgnore: PAGE_TEST_IGNORE,
         dependencies: ['setup'],
         use: { ...desktop, viewport: { width: 768, height: 1024 }, theme, storageState: AUTH_FILE },
       },
       {
         name: `mobile-${theme}`,
-        testIgnore: /auth\.setup\.ts/,
+        testIgnore: PAGE_TEST_IGNORE,
         dependencies: ['setup'],
         use: {
           ...desktop,
@@ -59,25 +64,57 @@ export default defineConfig<{ theme: ThemeOption }>({
         },
       },
     ]),
+    {
+      // Tests that change data (and restore it). They run after every read-only test, so a
+      // changed cost or an extra movement can never skew a total another test is checking.
+      name: 'mutations',
+      testMatch: /-edit\.spec\.ts/,
+      dependencies: [
+        'desktop-light',
+        'desktop-dark',
+        'tablet-light',
+        'tablet-dark',
+        'mobile-light',
+        'mobile-dark',
+      ],
+      fullyParallel: false,
+      workers: 1,
+      use: { ...desktop, theme: 'light', storageState: AUTH_FILE },
+    },
   ],
 
-  webServer: {
-    command: `pnpm exec react-router dev --port ${PORT} --strictPort`,
-    url: `${BASE_URL}/login`,
-    // Never attach to an already-running server: it could be configured for another database.
-    reuseExistingServer: false,
-    timeout: 120_000,
-    // Explicit env wins over any .env / .env.local file, so the hosted keys in
-    // .env.local can never leak into a test run.
-    env: {
-      SUPABASE_URL: supabaseUrl,
-      SUPABASE_ANON_KEY: anonKey,
-      SUPABASE_SERVICE_ROLE_KEY: serviceKey,
-      SUPABASE_SECRET_KEY: serviceKey,
-      SUPABASE_PUBLISHABLE_KEY: anonKey,
-      VITE_SUPABASE_URL: supabaseUrl,
-      VITE_SUPABASE_ANON_KEY: anonKey,
-      VITE_SUPABASE_PUBLISHABLE_KEY: anonKey,
+  webServer: [
+    {
+      command: `pnpm exec react-router dev --port ${PORT} --strictPort`,
+      url: `${BASE_URL}/login`,
+      // Never attach to an already-running server: it could be configured for another database.
+      reuseExistingServer: false,
+      timeout: 120_000,
+      // Explicit env wins over any .env / .env.local file, so the hosted keys in
+      // .env.local can never leak into a test run.
+      env: {
+        SUPABASE_URL: supabaseUrl,
+        SUPABASE_ANON_KEY: anonKey,
+        SUPABASE_SERVICE_ROLE_KEY: serviceKey,
+        SUPABASE_SECRET_KEY: serviceKey,
+        SUPABASE_PUBLISHABLE_KEY: anonKey,
+        VITE_SUPABASE_URL: supabaseUrl,
+        VITE_SUPABASE_ANON_KEY: anonKey,
+        VITE_SUPABASE_PUBLISHABLE_KEY: anonKey,
+        // Server-side calls to the agent go to the stand-in below, never a real agent.
+        AI_AGENT_URL: STAND_IN_URL,
+      },
     },
-  },
+    {
+      command: 'pnpm exec tsx e2e/stand-in-agent.ts',
+      url: `${STAND_IN_URL}/health`,
+      reuseExistingServer: false,
+      timeout: 30_000,
+      env: {
+        SUPABASE_URL: supabaseUrl,
+        SUPABASE_SERVICE_ROLE_KEY: serviceKey,
+        STAND_IN_AGENT_PORT: String(STAND_IN_PORT),
+      },
+    },
+  ],
 });

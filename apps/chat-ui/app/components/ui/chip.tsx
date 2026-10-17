@@ -10,7 +10,10 @@ const TONES = {
   planned: 'border-transparent bg-plum-tint text-text-2',
   done: 'border-border text-text-2',
   draft: 'border-dashed border-border-strong text-muted-foreground',
-  negative: 'border-transparent bg-destructive/15 text-destructive',
+  // Solid mix rather than a transparent tint: on a hovered table row a translucent fill picks up
+  // the row's amber and drops below 4.5:1 (found by the Inventory axe scan).
+  negative:
+    'border-transparent bg-[color-mix(in_srgb,var(--destructive)_15%,var(--card))] text-destructive',
   income: 'border-transparent bg-plum-tint text-income',
   plain: 'border-border text-text-2',
 } as const;

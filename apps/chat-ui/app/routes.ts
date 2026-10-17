@@ -39,7 +39,6 @@ export default [
     route('orders', 'routes/app.orders.tsx'),
     route('products', 'routes/app.products.tsx'),
     route('inventory', 'routes/app.inventory.tsx'),
-    route('inventory-v2', 'routes/app.inventory-v2.tsx'),
     route('customers', 'routes/app.customers.tsx'),
     route('integrations', 'routes/app.integrations.tsx'),
     route('account', 'routes/app.account.tsx'),

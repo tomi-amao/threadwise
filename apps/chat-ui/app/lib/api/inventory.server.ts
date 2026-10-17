@@ -8,6 +8,94 @@
  */
 
 import { getServerSupabaseClient } from '~/lib/supabase';
+import { fetchAllRows } from './paginate.server';
+
+// Row shapes returned by the queries below. The Supabase client is untyped here (no generated
+// database types), so these document each select and keep the shaping code typed. PostgREST
+// returns a to-one embed as an object and a to-many embed as an array.
+type Num = number | string;
+interface RawVariant {
+  external_id?: string | null;
+  sku?: string | null;
+  price?: { amount?: Num | null } | null;
+  attributes?: Record<string, string> | null;
+}
+interface ProductDbRow {
+  id: string;
+  entity_id: string;
+  name: string | null;
+  provider: string | null;
+  status: string;
+  product_type: string | null;
+  variants: unknown;
+  created_at: string;
+}
+interface ItemDbRow {
+  id: string;
+  entity_id: string;
+  product_id: string | null;
+  variant_external_id: string;
+  sku: string | null;
+  description: string | null;
+  category: string | null;
+  unit_cost: Num | null;
+  is_unlimited: boolean | null;
+  provider: string | null;
+  item_type: string | null;
+  created_at: string;
+}
+interface MovementDbRow {
+  id: string;
+  inventory_item_id: string;
+  transaction_type: string;
+  quantity: Num;
+  unit_cost: Num;
+  notes: string | null;
+  created_at: string;
+  movement_date: string | null;
+  inventory_items: {
+    sku: string | null;
+    product_id: string | null;
+    products: { name: string | null } | null;
+  } | null;
+}
+interface SaleLineDbRow {
+  id: string;
+  quantity: Num;
+  orders: { order_number: string | null; created_at: string; status: string } | null;
+  products: {
+    id: string;
+    name: string | null;
+    inventory_items: { id: string; sku: string | null; unit_cost: Num | null }[] | null;
+  } | null;
+}
+interface PurchaseDbRow {
+  inventory_item_id: string;
+  quantity: Num;
+  unit_cost: Num;
+}
+interface ValuationItemDbRow {
+  id: string;
+  sku: string | null;
+  unit_cost: Num | null;
+  product_id: string | null;
+  products: { name: string | null } | null;
+}
+interface StockViewDbRow {
+  inventory_item_id: string;
+  product_id: string | null;
+  sku: string | null;
+  item_type: string | null;
+  unit_cost: Num | null;
+  is_unlimited: boolean | null;
+  units_purchased: Num | null;
+  units_sold: Num | null;
+  units_refunded: Num | null;
+  units_gifted: Num | null;
+  units_written_off: Num | null;
+  on_hand: Num | null;
+  products: { id: string; name: string | null; status: string } | null;
+}
 
 // ─── Inventory List (for management panel) ───────────────────────────────────
 
@@ -68,26 +156,28 @@ export async function getInventoryProductList(): Promise<{
 }> {
   const supabase = getServerSupabaseClient();
 
-  // Fetch products
-  const { data: productsData, error: productsError } = await supabase
-    .from('products')
-    .select('id, entity_id, name, provider, status, product_type, variants, created_at')
-    .neq('status', 'archived')
-    .order('name', { ascending: true });
-
-  if (productsError) throw new Error(`Failed to load products: ${productsError.message}`);
-
-  // Fetch inventory items (may be empty)
-  const { data: itemsData, error: itemsError } = await supabase
-    .from('inventory_items')
-    .select(
-      'id, entity_id, product_id, variant_external_id, sku, description, category, unit_cost, is_unlimited, provider, item_type, created_at'
+  // Both lists are read in full (paged): a plain select() stops at the API's 1,000-row cap.
+  // Paging needs a unique order, so these order by id and are sorted below.
+  const productsData = (
+    await fetchAllRows<ProductDbRow>('products', (from, to) =>
+      supabase
+        .from('products')
+        .select('id, entity_id, name, provider, status, product_type, variants, created_at')
+        .neq('status', 'archived')
+        .order('id')
+        .range(from, to)
     )
-    .order('created_at', { ascending: false });
+  ).sort((a, b) => String(a.name ?? '').localeCompare(String(b.name ?? '')));
 
-  if (itemsError) throw new Error(`Failed to load inventory items: ${itemsError.message}`);
-
-  const items = itemsData || [];
+  const items = await fetchAllRows<ItemDbRow>('inventory items', (from, to) =>
+    supabase
+      .from('inventory_items')
+      .select(
+        'id, entity_id, product_id, variant_external_id, sku, description, category, unit_cost, is_unlimited, provider, item_type, created_at'
+      )
+      .order('id')
+      .range(from, to)
+  );
 
   // Build a map of productId → inventory items
   const itemsByProduct = new Map<string, typeof items>();
@@ -104,9 +194,9 @@ export async function getInventoryProductList(): Promise<{
     }
   }
 
-  function parseVariants(raw: any): ProductVariant[] {
+  function parseVariants(raw: unknown): ProductVariant[] {
     if (!Array.isArray(raw)) return [];
-    return raw.map((v: any) => ({
+    return (raw as RawVariant[]).map(v => ({
       externalId: v.external_id ?? '',
       sku: v.sku ?? null,
       price: v.price?.amount != null ? Number(v.price.amount) : null,
@@ -139,7 +229,7 @@ export async function getInventoryProductList(): Promise<{
     };
   }
 
-  const products: InventoryProductRow[] = (productsData || []).map(p => {
+  const products: InventoryProductRow[] = productsData.map(p => {
     const variants = parseVariants(p.variants);
     const linkedItems = (itemsByProduct.get(p.id) ?? []).map(item => {
       const row = rawItemToRow(item, variants);
@@ -186,13 +276,15 @@ export interface InventoryMovementRow {
   id: string;
   inventoryItemId: string;
   transactionType: string;
+  /** Signed, as stored: purchases are positive; sales, gifts and write-offs are negative. */
   quantity: number;
   unitCost: number;
   totalCost: number;
   notes: string | null;
-  /** Order number for SALE records */
+  /** Order number for sales derived from order lines */
   reference: string | null;
-  createdAt: string;
+  /** When the movement happened (movement_date), not when the row was written */
+  occurredAt: string;
   sku: string | null;
   productName: string | null;
 }
@@ -207,104 +299,113 @@ export interface InventoryMovementsData {
 export async function getInventoryMovements(): Promise<InventoryMovementsData> {
   const supabase = getServerSupabaseClient();
 
-  // ── PURCHASE movements ──────────────────────────────────────────────
-  const { data: purchaseData, error } = await supabase
-    .from('inventory_movements')
-    .select(
-      `
-      id,
-      inventory_item_id,
-      transaction_type,
-      quantity,
-      unit_cost,
-      notes,
-      created_at,
-      inventory_items!inner (
-        sku,
-        product_id,
-        products (
-          name
+  // Recorded movements, in full (paged: a plain select stops at the API's 1,000-row cap).
+  // Superseded rows were replaced by a later movement and are left out of on-hand by the
+  // inventory_on_hand view, so they are left out of the history too.
+  const recorded = await fetchAllRows<MovementDbRow>('inventory movements', (from, to) =>
+    supabase
+      .from('inventory_movements')
+      .select(
+        `
+        id,
+        inventory_item_id,
+        transaction_type,
+        quantity,
+        unit_cost,
+        notes,
+        created_at,
+        movement_date,
+        inventory_items!inner (
+          sku,
+          product_id,
+          products (
+            name
+          )
         )
+        `
       )
-      `
-    )
-    .order('created_at', { ascending: false });
+      .is('superseded_at', null)
+      .order('id')
+      .range(from, to)
+  );
 
-  if (error) throw new Error(`Failed to load inventory movements: ${error.message}`);
-
-  const purchaseMovements: InventoryMovementRow[] = (purchaseData || []).map((row: any) => ({
+  const movements: InventoryMovementRow[] = recorded.map(row => ({
     id: row.id,
     inventoryItemId: row.inventory_item_id,
     transactionType: row.transaction_type,
     quantity: Number(row.quantity),
     unitCost: Number(row.unit_cost),
-    totalCost: Number(row.quantity) * Number(row.unit_cost),
+    totalCost: Math.abs(Number(row.quantity)) * Number(row.unit_cost),
     notes: row.notes,
     reference: null,
-    createdAt: row.created_at,
+    occurredAt: row.movement_date ?? row.created_at,
     sku: row.inventory_items?.sku ?? null,
     productName: row.inventory_items?.products?.name ?? null,
   }));
 
-  // ── SALE movements from orders ───────────────────────────────────────
-  // NOTE: PostgREST default limit is 1000; explicit limit avoids silent truncation.
-  const { data: saleData } = await supabase
-    .from('order_line_items')
-    .select(
-      `
-      id,
-      quantity,
-      orders!inner (
-        order_number,
-        created_at,
-        status
-      ),
-      products!inner (
+  // Sales for items that have no recorded SALE movements. The inventory_on_hand view falls back
+  // to order lines for those items, so the history does too. Items that DO have recorded sales
+  // are skipped, otherwise each sale would be listed twice (once recorded, once derived).
+  const itemsWithRecordedSales = new Set(
+    recorded.filter(r => r.transaction_type === 'SALE').map(r => r.inventory_item_id)
+  );
+  const saleLines = await fetchAllRows<SaleLineDbRow>('order line items', (from, to) =>
+    supabase
+      .from('order_line_items')
+      .select(
+        `
         id,
-        name,
-        inventory_items ( id, sku, unit_cost )
+        quantity,
+        orders!inner (
+          order_number,
+          created_at,
+          status
+        ),
+        products!inner (
+          id,
+          name,
+          inventory_items ( id, sku, unit_cost )
+        )
+        `
       )
-      `
-    )
-    .order('created_at', { ascending: false })
-    .limit(10000);
+      .order('id')
+      .range(from, to)
+  );
 
-  const saleMovements: InventoryMovementRow[] = [];
-  for (const row of saleData || []) {
-    const order = (row as any).orders;
+  for (const row of saleLines) {
+    const order = row.orders;
     if (!order || order.status === 'cancelled') continue;
-    const product = (row as any).products;
-    const invItems: any[] = Array.isArray(product?.inventory_items) ? product.inventory_items : [];
+    const product = row.products;
+    const invItems = Array.isArray(product?.inventory_items) ? product.inventory_items : [];
     const invItem = invItems[0];
-    if (!invItem || Number(invItem.unit_cost) <= 0) continue;
-
-    saleMovements.push({
+    if (!invItem || Number(invItem.unit_cost) <= 0 || itemsWithRecordedSales.has(invItem.id)) {
+      continue;
+    }
+    movements.push({
       id: row.id,
       inventoryItemId: invItem.id,
       transactionType: 'SALE',
-      quantity: Number(row.quantity),
+      quantity: -Number(row.quantity),
       unitCost: Number(invItem.unit_cost),
       totalCost: Number(row.quantity) * Number(invItem.unit_cost),
       notes: null,
       reference: order.order_number ? `Order #${order.order_number}` : null,
-      createdAt: order.created_at,
+      occurredAt: order.created_at,
       sku: invItem.sku,
       productName: product?.name ?? null,
     });
   }
 
-  const allMovements = [...purchaseMovements, ...saleMovements].sort(
-    (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
-  );
+  movements.sort((a, b) => new Date(b.occurredAt).getTime() - new Date(a.occurredAt).getTime());
 
-  const totalQuantityPurchased = purchaseMovements.reduce((s, m) => s + m.quantity, 0);
-  const totalInvested = purchaseMovements.reduce((s, m) => s + m.totalCost, 0);
-
+  // Totals describe purchases only. (They used to sum every movement, so once sales were
+  // recorded "units purchased" became net stock and "invested" became net cost.)
+  const purchases = movements.filter(m => m.transactionType === 'PURCHASE');
   return {
-    movements: allMovements,
-    totalMovements: allMovements.length,
-    totalQuantityPurchased,
-    totalInvested,
+    movements,
+    totalMovements: movements.length,
+    totalQuantityPurchased: purchases.reduce((sum, m) => sum + m.quantity, 0),
+    totalInvested: purchases.reduce((sum, m) => sum + m.totalCost, 0),
   };
 }
 
@@ -327,38 +428,44 @@ export async function getInventoryValuation(): Promise<{
 }> {
   const supabase = getServerSupabaseClient();
 
-  const { data: items, error: itemsErr } = await supabase
-    .from('inventory_items')
-    .select('id, sku, unit_cost, product_id, products(name)');
+  const items = await fetchAllRows<ValuationItemDbRow>('inventory items', (from, to) =>
+    supabase
+      .from('inventory_items')
+      .select('id, sku, unit_cost, product_id, products(name)')
+      .order('id')
+      .range(from, to)
+  );
 
-  if (itemsErr) throw new Error(`Failed to load items: ${itemsErr.message}`);
+  // Money spent on stock = purchases only. Sales, gifts and write-offs are movements too, but
+  // they take stock out; they are not investment. Superseded purchases were replaced, so skipped.
+  const purchases = await fetchAllRows<PurchaseDbRow>('inventory purchases', (from, to) =>
+    supabase
+      .from('inventory_movements')
+      .select('inventory_item_id, quantity, unit_cost')
+      .eq('transaction_type', 'PURCHASE')
+      .is('superseded_at', null)
+      .order('id')
+      .range(from, to)
+  );
 
-  const { data: movements, error: movErr } = await supabase
-    .from('inventory_movements')
-    .select('inventory_item_id, quantity, unit_cost');
-
-  if (movErr) throw new Error(`Failed to load movements: ${movErr.message}`);
-
-  // Sum movements per item
-  const movementsByItem = new Map<string, { qty: number; cost: number }>();
-  for (const m of movements || []) {
-    const key = m.inventory_item_id;
-    const existing = movementsByItem.get(key) || { qty: 0, cost: 0 };
+  const purchasesByItem = new Map<string, { qty: number; cost: number }>();
+  for (const m of purchases) {
+    const existing = purchasesByItem.get(m.inventory_item_id) || { qty: 0, cost: 0 };
     existing.qty += Number(m.quantity);
     existing.cost += Number(m.quantity) * Number(m.unit_cost);
-    movementsByItem.set(key, existing);
+    purchasesByItem.set(m.inventory_item_id, existing);
   }
 
-  const valuationItems: InventoryValuationItem[] = (items || [])
-    .map((item: any) => {
-      const mov = movementsByItem.get(item.id) || { qty: 0, cost: 0 };
+  const valuationItems: InventoryValuationItem[] = items
+    .map(item => {
+      const bought = purchasesByItem.get(item.id) || { qty: 0, cost: 0 };
       return {
         id: item.id,
         sku: item.sku,
         productName: item.products?.name ?? null,
         unitCost: Number(item.unit_cost ?? 0),
-        totalPurchased: mov.qty,
-        totalInvested: mov.cost,
+        totalPurchased: bought.qty,
+        totalInvested: bought.cost,
       };
     })
     .sort(
@@ -412,34 +519,36 @@ export async function getStockLevels(): Promise<StockData> {
   // On-hand comes from the `inventory_on_hand` view — the single canonical
   // definition, shared with the dashboard, reports and the chat agent. Do not
   // re-derive it here from available_quantity or inventory_movements.
-  const { data: rows, error } = await supabase
-    .from('inventory_on_hand')
-    .select(
-      'inventory_item_id, product_id, sku, item_type, unit_cost, is_unlimited, ' +
-        'units_purchased, units_sold, units_refunded, units_gifted, units_written_off, ' +
-        'on_hand, products(id, name, status)'
-    );
+  const rows = await fetchAllRows<StockViewDbRow>('stock levels', (from, to) =>
+    supabase
+      .from('inventory_on_hand')
+      .select(
+        'inventory_item_id, product_id, sku, item_type, unit_cost, is_unlimited, ' +
+          'units_purchased, units_sold, units_refunded, units_gifted, units_written_off, ' +
+          'on_hand, products(id, name, status)'
+      )
+      .order('inventory_item_id')
+      .range(from, to)
+  );
 
-  if (error) throw new Error(`Failed to load stock levels: ${error.message}`);
-
-  const items: StockLevelRow[] = (rows || [])
-    .filter((row: any) => {
+  const items: StockLevelRow[] = rows
+    .filter(row => {
       // Samples/materials legitimately have no product — always keep them.
       // Note this is deliberately keyed on item_type, NOT on "product_id is null":
       // an unlinked *sellable* row is a data-quality problem, not stock to display.
       if (row.item_type === 'sample' || row.item_type === 'material') return true;
       if (!row.product_id) return false;
-      const status = (row.products as any)?.status;
+      const status = row.products?.status;
       return row.products && status !== 'archived' && status !== 'draft';
     })
-    .map((row: any) => {
+    .map(row => {
       const onHand = Number(row.on_hand ?? 0);
       const unitCost = Number(row.unit_cost || 0);
       return {
         inventoryItemId: row.inventory_item_id,
         productId: row.product_id ?? null,
         // Product-less rows (samples) fall back to their SKU for a display name
-        productName: (row.products as any)?.name ?? row.sku ?? 'Untitled item',
+        productName: row.products?.name ?? row.sku ?? 'Untitled item',
         sku: row.sku,
         itemType: (row.item_type ?? 'sellable') as StockLevelRow['itemType'],
         unitCost,

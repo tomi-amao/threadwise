@@ -8,7 +8,23 @@ Status: decisions made, ready for Phase 0 · Branch: `feat/frontend-redesign` ·
 | ------------- | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | 0 Foundations | Done (Oct 17)                     | Tokens, self-hosted fonts, cookie theme, component kit, themed Nivo wrappers, re-themed shell, Playwright (width x theme) with contrast, axe and overflow gates. Gallery at `/ui-kit` (dev only).                                                                                                                                                                                                                                                                                                                        |
 | 1 Dashboard   | Done, layout revised after review | Full-width command-centre layout: compact header, six KPI tiles (two with sparklines), then a 12-column panel grid so the headline numbers, revenue trend and order breakdown share the first screen. Parity with the old page; tests in both themes. Cookie-based auth shipped with it, so loaders can identify the user. Typecheck baseline went from 30 to 6 errors (`module: ESNext` plus Vite client types). Shared `Panel`, `KpiTile`, `Sparkline` and dense `DataTable` are the pattern for the other tool pages. |
-| 2 Table pages | Next                              | Transactions and Inventory first.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| 2 Table pages | In progress                       | Transactions and Inventory done (previews deleted). Orders, Customers, Products and Invoices next.                                                                                                                                                                                                                                                                                                                                                                                                                       |
+
+Follow-ups from Phase 2 (Inventory):
+
+- **Numbers changed, on purpose.** The old page read products, items, movements, stock and order
+  lines through a plain `select()`, so past 1,000 rows it silently dropped data; all are now paged
+  (`fetchAllRows`). Two definitions were also corrected: sales synthesised from order lines are
+  only added for items with no recorded SALE movements (they were double-counted), and valuation
+  counts purchases only. Movements are dated by `movement_date`, not the row's `created_at`.
+  Expect "Invested" and the movements list to differ from the old page.
+- **Not done:** the inline gift/write-off fast path in the table. Disposals are recorded from the
+  item drawer only. Add it if the drawer proves too slow for bulk entry.
+- **Inventory has no stand-in-free path to the real agent in tests.** Recording a disposal calls the
+  FastAPI agent server-side; the e2e suite runs `e2e/stand-in-agent.ts`, which writes only the
+  movement (no journal). The journal side is covered by the agent's own tests, not here.
+- Tests that change data live in `e2e/*-edit.spec.ts`, run in the `mutations` project after every
+  read-only test, and restore what they touched.
 
 Follow-ups from Phase 1:
 

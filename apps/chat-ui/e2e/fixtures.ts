@@ -12,6 +12,30 @@ export interface SeedManifest {
   transactionCount: number;
   /** Stored balances plus every seeded transaction, as the dashboard derives it. */
   expectedBankBalance: number;
+  /** What the seed put into inventory, computed by the same rules the page uses. */
+  inventory: {
+    itemCount: number;
+    linkedSellableCount: number;
+    movementCount: number;
+    bulkItemSku: string;
+    stockValue: number;
+    unitsOnHand: number;
+    oversold: number;
+    outOfStock: number;
+    low: number;
+    unlinked: number;
+    uncosted: number;
+    invested: number;
+    unitsPurchased: number;
+    oversoldSku: string;
+    outSku: string;
+    lowSku: string;
+    healthySku: string;
+    uncostedSku: string;
+    unlimitedSku: string;
+    unlinkedSku: string;
+    sampleSku: string;
+  };
 }
 
 export function readManifest(): SeedManifest {
