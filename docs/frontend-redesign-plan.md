@@ -8,7 +8,24 @@ Status: decisions made, ready for Phase 0 · Branch: `feat/frontend-redesign` ·
 | ------------- | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | 0 Foundations | Done (Oct 17)                     | Tokens, self-hosted fonts, cookie theme, component kit, themed Nivo wrappers, re-themed shell, Playwright (width x theme) with contrast, axe and overflow gates. Gallery at `/ui-kit` (dev only).                                                                                                                                                                                                                                                                                                                        |
 | 1 Dashboard   | Done, layout revised after review | Full-width command-centre layout: compact header, six KPI tiles (two with sparklines), then a 12-column panel grid so the headline numbers, revenue trend and order breakdown share the first screen. Parity with the old page; tests in both themes. Cookie-based auth shipped with it, so loaders can identify the user. Typecheck baseline went from 30 to 6 errors (`module: ESNext` plus Vite client types). Shared `Panel`, `KpiTile`, `Sparkline` and dense `DataTable` are the pattern for the other tool pages. |
-| 2 Table pages | In progress                       | Transactions, Inventory and Invoices done. Orders, Customers and Products next.                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| 2 Table pages | Done                              | All six pages done: Transactions, Inventory, Invoices, Orders, Customers, Products. Next: Phase 3.                                                                                                                                                                                                                                                                                                                                                                                                                       |
+
+Follow-ups from Phase 2 (Orders, Customers, Products):
+
+- **Silent truncation, gone.** The old Orders page showed the first 100 of 1,200 orders; Customers
+  computed lifetime value from a read capped at 1,000 rows; Products read line items the same
+  way. All three now read everything. Products also lists products that have never sold, which the
+  old page hid (it only listed what appeared on an order).
+- **Shared list pattern:** `Pager`, `useListUrlState` (search, page, param changes), `JumpTo`,
+  `DataTable surface="page"` and `getUserEntity` are used by Inventory, Invoices, Orders,
+  Customers and Products. A new list page is a model file, a page, a drawer and a loader.
+- **Product revenue is before refunds** (refunds sit on the order, not the line) and excludes
+  cancelled orders. The customer and order pages take refunds off.
+- **Still service-role reads:** these pages scope every query to the user's entity in code
+  because `orders`, `customers` and `payments` have no RLS. Adding policies is the real fix and
+  needs a migration. The dashboard has the same exposure.
+- **The AI insights on a product** call the LangGraph server from the browser, as before. They are
+  tested against a stand-in for its two endpoints.
 
 Follow-ups from Phase 2 (Invoices):
 

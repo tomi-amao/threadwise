@@ -50,6 +50,21 @@ export interface SeedManifest {
     refundedOrderNumber: string;
     sampleOrderNumber: string;
   };
+  /** What the seed put into products: line-item revenue, by the rules the Products page uses. */
+  products: {
+    total: number;
+    selling: number;
+    slowing: number;
+    never: number;
+    units: number;
+    revenue: number;
+    topName: string;
+    topRevenue: number;
+    topUnits: number;
+    topOrders: number;
+    slowingName: string;
+    neverNames: string[];
+  };
   /** What the seed put into customers; the rules are the Customers page's. */
   customerStats: {
     total: number;

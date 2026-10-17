@@ -53,6 +53,7 @@ export default [
   route('api/invoices', 'routes/api.invoices.tsx'),
   route('api/orders', 'routes/api.orders.tsx'),
   route('api/customers', 'routes/api.customers.tsx'),
+  route('api/products', 'routes/api.products.tsx'),
   route('api/reclassification', 'routes/api.reclassification.tsx'),
   route('api/journals', 'routes/api.journals.tsx'),
   route('api/inventory', 'routes/api.inventory.tsx'),

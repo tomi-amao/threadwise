@@ -34,6 +34,12 @@ export const ENTITY_NAME = 'Atelier North (E2E)';
 // believable positive balance.
 const OPENING_BALANCE = 600_000;
 const SIZES = ['S', 'M'] as const;
+/** [name, price, external id]: the first has one old sale, the other two never sold. */
+const EXTRA_PRODUCTS = [
+  ['Heritage Gilet', 150, 'e2e-prod-gilet'],
+  ['Linen Apron', 48, 'e2e-prod-apron'],
+  ['Waxed Cap', 34, 'e2e-prod-cap'],
+] as const;
 /**
  * Customers who are not ordinary regulars, so every customer segment has someone in it:
  * one order only, orders but none for 90+ days, and two who never ordered.
@@ -184,6 +190,26 @@ async function main() {
       .select('id, name')
   )) as { id: string; name: string }[];
 
+  // Three more products so every stage of "what sells" has one: one that sold only long ago
+  // (a line on the oldest order, below) and two that never sold.
+  const extraProducts = (await must(
+    'extra products',
+    supabase
+      .from('products')
+      .insert(
+        EXTRA_PRODUCTS.map(([name, , external]) => ({
+          entity_id: entityId,
+          provider: 'shopify',
+          external_id: external,
+          name,
+          product_type: 'apparel',
+          status: 'active',
+          created_at: daysAgo(330),
+        }))
+      )
+      .select('id, name')
+  )) as { id: string; name: string }[];
+
   // 4. Customers.
   const first = [
     'Amara',
@@ -319,7 +345,19 @@ async function main() {
       created_at: order.created_at,
     }));
   });
-  await insertChunked('order_line_items', 'order_line_items', lineRows, 'id');
+  const oldestOrder = orderByExternal.get('e2e-order-1001')!;
+  const gilet = extraProducts.find(p => p.name === 'Heritage Gilet')!;
+  const giletLine = {
+    order_id: oldestOrder.id,
+    external_id: 'e2e-line-1001-gilet',
+    product_id: gilet.id,
+    product_name: gilet.name,
+    quantity: 1,
+    unit_price_amount: 150,
+    total_price_amount: 150,
+    created_at: oldestOrder.created_at,
+  };
+  await insertChunked('order_line_items', 'order_line_items', [...lineRows, giletLine], 'id');
 
   const feeFor = (amount: number) => money(amount * 0.029 + 0.2);
   const paymentRows = orders.map((o, i) => {
@@ -963,6 +1001,47 @@ async function main() {
     neverName: 'Ola Neverordered',
   };
 
+  // 6e. What the Products page should show: line-item revenue for orders that were not cancelled.
+  const productStats = new Map<
+    string,
+    { units: number; revenue: number; orders: Set<number>; youngest: number }
+  >();
+  const addSale = (name: string, units: number, revenue: number, order: number, age: number) => {
+    const e = productStats.get(name) ?? {
+      units: 0,
+      revenue: 0,
+      orders: new Set<number>(),
+      youngest: Infinity,
+    };
+    e.units += units;
+    e.revenue = money(e.revenue + revenue);
+    e.orders.add(order);
+    e.youngest = Math.min(e.youngest, age);
+    productStats.set(name, e);
+  };
+  for (const o of plan) {
+    if ((o.status as string) === 'cancelled') continue;
+    for (const l of o.lines) {
+      addSale(products[l.productIdx].name, l.qty, prices[l.productIdx] * l.qty, o.n, o.age);
+    }
+  }
+  addSale('Heritage Gilet', 1, 150, plan[0].n, plan[0].age);
+  const ranked = [...productStats.entries()].sort((a, b) => b[1].revenue - a[1].revenue);
+  const productSummary = {
+    total: products.length + extraProducts.length,
+    selling: [...productStats.values()].filter(e => e.youngest <= 90).length,
+    slowing: [...productStats.values()].filter(e => e.youngest > 90).length,
+    never: EXTRA_PRODUCTS.length - 1,
+    units: [...productStats.values()].reduce((sum, e) => sum + e.units, 0),
+    revenue: money([...productStats.values()].reduce((sum, e) => sum + e.revenue, 0)),
+    topName: ranked[0][0],
+    topRevenue: ranked[0][1].revenue,
+    topUnits: ranked[0][1].units,
+    topOrders: ranked[0][1].orders.size,
+    slowingName: 'Heritage Gilet',
+    neverNames: ['Linen Apron', 'Waxed Cap'],
+  };
+
   // 7. Manifest: what the tests may assert on.
   const manifest = {
     entityName: ENTITY_NAME,
@@ -977,6 +1056,7 @@ async function main() {
     invoices,
     orders: orderSummary,
     customerStats: customerSummary,
+    products: productSummary,
     seededAt: new Date().toISOString(),
   };
   mkdirSync(path.dirname(MANIFEST_FILE), { recursive: true });
