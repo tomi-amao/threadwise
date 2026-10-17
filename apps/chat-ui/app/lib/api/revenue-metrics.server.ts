@@ -1,3 +1,22 @@
+import type { SupabaseClient } from '@supabase/supabase-js';
+import { fetchAllRows } from './paginate.server';
+
+// The slice of Shopify's raw order payload this file reads. The payload is external JSON, so
+// every field is optional and the readers below still check shapes at runtime.
+interface ShopifyMoney {
+  amount?: number | string | null;
+  amount_set?: { shop_money?: { amount?: number | string | null } | null } | null;
+}
+interface ShopifyPayload {
+  shipping_lines?: { discount_allocations?: ShopifyMoney[] | null }[] | null;
+  refunds?:
+    | {
+        created_at?: string | null;
+        order_adjustments?: (ShopifyMoney & { kind?: string | null })[] | null;
+      }[]
+    | null;
+}
+
 export interface RevenueMetricOrder {
   id: string;
   raw_event_id: string | null;
@@ -13,7 +32,7 @@ export interface RevenueMetricOrder {
   // instead of a second query batched by ID, which used to build a
   // .in('id', [...]) filter with 1000+ UUIDs and blow past PostgREST's
   // request-URL length limit (400 Bad Request).
-  external_raw_events: { payload: any } | null;
+  external_raw_events: { payload: ShopifyPayload | null } | null;
 }
 
 interface PaymentFeeRow {
@@ -90,7 +109,7 @@ function toNumber(value: unknown): number {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
-function getShippingDiscountFromPayload(payload: any): number {
+function getShippingDiscountFromPayload(payload: ShopifyPayload | null | undefined): number {
   const shippingLines = Array.isArray(payload?.shipping_lines) ? payload.shipping_lines : [];
   let total = 0;
 
@@ -106,7 +125,7 @@ function getShippingDiscountFromPayload(payload: any): number {
   return total;
 }
 
-function getShippingRefundFromPayload(payload: any): number {
+function getShippingRefundFromPayload(payload: ShopifyPayload | null | undefined): number {
   const refunds = Array.isArray(payload?.refunds) ? payload.refunds : [];
   let total = 0;
 
@@ -135,7 +154,9 @@ function addAmountToMonthMap(
   monthMap.set(month, (monthMap.get(month) || 0) + amount);
 }
 
-function getShippingRefundsByMonthFromPayload(payload: any): Map<string, number> {
+function getShippingRefundsByMonthFromPayload(
+  payload: ShopifyPayload | null | undefined
+): Map<string, number> {
   const refunds = Array.isArray(payload?.refunds) ? payload.refunds : [];
   const monthMap = new Map<string, number>();
 
@@ -155,36 +176,36 @@ function getShippingRefundsByMonthFromPayload(payload: any): Map<string, number>
 }
 
 export async function getRevenueMetricsData(
-  supabase: any,
+  supabase: SupabaseClient,
   { from = null, to = null }: RevenueMetricsOptions = {}
 ): Promise<RevenueMetricsData> {
-  let ordersQ = supabase
-    .from('orders')
-    .select(
-      'id, raw_event_id, subtotal_amount, discount_total_amount, shipping_total_amount, tax_total_amount, grand_total_amount, refunded_total_amount, status, created_at, external_raw_events(payload)'
-    )
-    .neq('status', 'cancelled')
-    .limit(10000);
-  if (from) ordersQ = ordersQ.gte('created_at', dateGte(from));
-  if (to) ordersQ = ordersQ.lte('created_at', dateLte(to));
-
-  let paymentsQ = supabase
-    .from('payments')
-    .select(
-      'id, order_id, provider, gateway, payment_method, amount, base_amount, net_amount, status, paid_on, payment_fees(net_fee)'
-    )
-    .limit(10000);
-  if (from) paymentsQ = paymentsQ.gte('paid_on', dateGte(from));
-  if (to) paymentsQ = paymentsQ.lte('paid_on', dateLte(to));
-
-  const [{ data: ordersData, error: ordersError }, { data: paymentsData, error: paymentsError }] =
-    await Promise.all([ordersQ, paymentsQ]);
-
-  if (ordersError) throw new Error(`Failed to load orders: ${ordersError.message}`);
-  if (paymentsError) throw new Error(`Failed to load payments: ${paymentsError.message}`);
-
-  const orders = (ordersData || []) as RevenueMetricOrder[];
-  const payments = (paymentsData || []) as RevenueMetricPayment[];
+  // Page through everything: the API caps a response at 1,000 rows and `.limit(10000)` cannot
+  // raise that, so these totals were silently computed from the first 1,000 orders and payments.
+  const [orders, payments] = await Promise.all([
+    fetchAllRows<RevenueMetricOrder>('orders', (rangeFrom, rangeTo) => {
+      let query = supabase
+        .from('orders')
+        .select(
+          'id, raw_event_id, subtotal_amount, discount_total_amount, shipping_total_amount, tax_total_amount, grand_total_amount, refunded_total_amount, status, created_at, external_raw_events(payload)'
+        )
+        .neq('status', 'cancelled')
+        .order('id');
+      if (from) query = query.gte('created_at', dateGte(from));
+      if (to) query = query.lte('created_at', dateLte(to));
+      return query.range(rangeFrom, rangeTo);
+    }),
+    fetchAllRows<RevenueMetricPayment>('payments', (rangeFrom, rangeTo) => {
+      let query = supabase
+        .from('payments')
+        .select(
+          'id, order_id, provider, gateway, payment_method, amount, base_amount, net_amount, status, paid_on, payment_fees(net_fee)'
+        )
+        .order('id');
+      if (from) query = query.gte('paid_on', dateGte(from));
+      if (to) query = query.lte('paid_on', dateLte(to));
+      return query.range(rangeFrom, rangeTo);
+    }),
+  ]);
 
   let subtotalAmount = 0;
   let totalDiscountAmount = 0;

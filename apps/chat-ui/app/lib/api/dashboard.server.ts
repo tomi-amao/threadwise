@@ -9,6 +9,7 @@
 
 import { getServerSupabaseClient } from '~/lib/supabase';
 import { getRequestSupabaseClient } from '~/lib/supabase-server';
+import { fetchAllRows } from './paginate.server';
 import { getDerivedBankBalances } from './bank-balance.server';
 import { getRevenueMetricsData } from './revenue-metrics.server';
 import type {
@@ -99,26 +100,42 @@ export async function getDashboardData(request: Request): Promise<DashboardData>
   const revenueDataPromise = getRevenueMetricsData(supabase);
 
   // Fetch all data in parallel
+  // orders, line items and payments are read in full (paged): a plain select() would stop at the
+  // API's 1,000-row cap and silently drop the rest (see paginate.server.ts).
   const [
     revenueData,
-    ordersRaw,
-    lineItemsRaw,
-    paymentsRaw,
+    orders,
+    lineItems,
+    payments,
     derivedBankBalances,
     recentOrdersRaw,
     customerCountRaw,
     entity,
   ] = await Promise.all([
     revenueDataPromise,
-    supabase
-      .from('orders')
-      .select(
-        'id, grand_total_amount, refunded_total_amount, shipping_total_amount, discount_total_amount, status, created_at, customer_id, customer_email, customers(id, first_name, last_name, email)'
-      ),
-    supabase
-      .from('order_line_items')
-      .select('product_id, product_name, quantity, total_price_amount, order_id'),
-    supabase.from('payments').select('gateway, payment_method, net_amount, status'),
+    fetchAllRows<OrderRow>('orders', (from, to) =>
+      supabase
+        .from('orders')
+        .select(
+          'id, grand_total_amount, refunded_total_amount, shipping_total_amount, discount_total_amount, status, created_at, customer_id, customer_email, customers(id, first_name, last_name, email)'
+        )
+        .order('id')
+        .range(from, to)
+    ),
+    fetchAllRows<LineItemRow>('order line items', (from, to) =>
+      supabase
+        .from('order_line_items')
+        .select('product_id, product_name, quantity, total_price_amount, order_id')
+        .order('id')
+        .range(from, to)
+    ),
+    fetchAllRows<PaymentRow>('payments', (from, to) =>
+      supabase
+        .from('payments')
+        .select('gateway, payment_method, net_amount, status')
+        .order('id')
+        .range(from, to)
+    ),
     getDerivedBankBalances(supabase),
     supabase
       .from('orders')
@@ -131,18 +148,11 @@ export async function getDashboardData(request: Request): Promise<DashboardData>
     getEntityInfo(request),
   ]);
 
-  if (ordersRaw.error) throw new Error(`Failed to load orders: ${ordersRaw.error.message}`);
-  if (lineItemsRaw.error)
-    throw new Error(`Failed to load order line items: ${lineItemsRaw.error.message}`);
-  if (paymentsRaw.error) throw new Error(`Failed to load payments: ${paymentsRaw.error.message}`);
   if (recentOrdersRaw.error)
     throw new Error(`Failed to load recent orders: ${recentOrdersRaw.error.message}`);
   if (customerCountRaw.error)
     throw new Error(`Failed to load customer count: ${customerCountRaw.error.message}`);
 
-  const orders = (ordersRaw.data || []) as unknown as OrderRow[];
-  const lineItems = (lineItemsRaw.data || []) as LineItemRow[];
-  const payments = (paymentsRaw.data || []) as PaymentRow[];
   const recentOrdersData = (recentOrdersRaw.data || []) as unknown as RecentOrderRow[];
   const totalCustomerCount = customerCountRaw.count || 0;
   const revenueMetrics = revenueData.snapshot;

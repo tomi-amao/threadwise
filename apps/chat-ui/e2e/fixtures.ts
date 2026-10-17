@@ -10,6 +10,8 @@ export interface SeedManifest {
   productCount: number;
   bankAccountCount: number;
   transactionCount: number;
+  /** Stored balances plus every seeded transaction, as the dashboard derives it. */
+  expectedBankBalance: number;
 }
 
 export function readManifest(): SeedManifest {

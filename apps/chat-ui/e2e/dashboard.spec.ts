@@ -30,11 +30,36 @@ test.describe('dashboard', () => {
       // 'Customers' is both a stat label and a section eyebrow; the stat strip comes first.
       await expect(main.getByText(label, { exact: true }).first()).toBeVisible();
     }
-    await expect(main.getByText(`${seed.orderCount} orders ·`)).toBeVisible();
+    await expect(
+      main.getByText(`${seed.orderCount.toLocaleString('en-GB')} orders ·`)
+    ).toBeVisible();
     await expect(
       main.getByText(`${seed.bankAccountCount} accounts`, { exact: true })
     ).toBeVisible();
     await expect(main.getByText(String(seed.customerCount), { exact: true }).first()).toBeVisible();
+  });
+
+  // Regression: the API caps every read at 1,000 rows (max_rows), and the dashboard's `.limit(10000)`
+  // could not raise it, so a store with more than 1,000 orders or bank transactions silently
+  // got wrong totals. The seed deliberately exceeds both.
+  test('counts every order, not just the first 1,000', async ({ page }) => {
+    expect(seed.orderCount).toBeGreaterThan(1000);
+    await expect(
+      page
+        .getByRole('main')
+        .getByText(`${seed.orderCount.toLocaleString('en-GB')} orders`)
+        .first()
+    ).toBeVisible();
+  });
+
+  test('bank balance includes every transaction, not just the first 1,000', async ({ page }) => {
+    expect(seed.transactionCount).toBeGreaterThan(1000);
+    const expected = new Intl.NumberFormat('en-GB', {
+      style: 'currency',
+      currency: 'GBP',
+      maximumFractionDigits: 0,
+    }).format(seed.expectedBankBalance);
+    await expect(page.getByRole('main').getByText(expected, { exact: true }).first()).toBeVisible();
   });
 
   test('order statuses add up to the total number of orders', async ({ page }) => {

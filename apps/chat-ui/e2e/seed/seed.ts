@@ -30,6 +30,10 @@ const supabase = createClient(url, requireEnv('SUPABASE_SERVICE_ROLE_KEY'), {
 
 export const ENTITY_NAME = 'Atelier North (E2E)';
 
+// Snapshot balance of the main account. High enough that ~1,100 seeded transactions leave a
+// believable positive balance.
+const OPENING_BALANCE = 600_000;
+
 // ─── Deterministic helpers ───────────────────────────────────────────────────
 
 function mulberry32(seed: number) {
@@ -59,6 +63,28 @@ async function must<T>(
   const { data, error } = await p;
   if (error) throw new Error(`${label}: ${error.message}`);
   return data;
+}
+
+/** Insert in chunks so a large seed stays within request-size limits. Returns every returned row. */
+async function insertChunked<T>(
+  label: string,
+  table: string,
+  rows: Record<string, unknown>[],
+  columns: string,
+  size = 400
+): Promise<T[]> {
+  const out: T[] = [];
+  for (let i = 0; i < rows.length; i += size) {
+    const data = await must(
+      `${label} [${i}..${i + size}]`,
+      supabase
+        .from(table)
+        .insert(rows.slice(i, i + size))
+        .select(columns)
+    );
+    out.push(...((data ?? []) as T[]));
+  }
+  return out;
 }
 
 // ─── Seed ────────────────────────────────────────────────────────────────────
@@ -196,7 +222,9 @@ async function main() {
     'confirmed',
     'pending',
   ] as const;
-  const ORDER_COUNT = 60;
+  // Deliberately above the API's 1,000-row max_rows: an unpaginated read silently loses rows,
+  // and the dashboard tests compare against these totals.
+  const ORDER_COUNT = 1200;
   type Line = { productIdx: number; qty: number };
   const plan = Array.from({ length: ORDER_COUNT }, (_, i) => {
     const lines: Line[] = Array.from({ length: 1 + Math.floor(rand() * 3) }, () => ({
@@ -238,13 +266,12 @@ async function main() {
       created_at: daysAgo(o.age),
     };
   });
-  const orders = (await must(
-    'orders',
-    supabase
-      .from('orders')
-      .insert(orderRows)
-      .select('id, external_id, grand_total_amount, created_at')
-  )) as { id: string; external_id: string; grand_total_amount: number; created_at: string }[];
+  const orders = await insertChunked<{
+    id: string;
+    external_id: string;
+    grand_total_amount: number;
+    created_at: string;
+  }>('orders', 'orders', orderRows, 'id, external_id, grand_total_amount, created_at');
   const orderByExternal = new Map(orders.map(o => [o.external_id, o]));
 
   const lineRows = plan.flatMap(o => {
@@ -260,7 +287,7 @@ async function main() {
       created_at: order.created_at,
     }));
   });
-  await must('order_line_items', supabase.from('order_line_items').insert(lineRows).select('id'));
+  await insertChunked('order_line_items', 'order_line_items', lineRows, 'id');
 
   const feeFor = (amount: number) => money(amount * 0.029 + 0.2);
   const paymentRows = orders.map((o, i) => {
@@ -283,25 +310,24 @@ async function main() {
       created_at: o.created_at,
     };
   });
-  const payments = (await must(
+  const payments = await insertChunked<{ id: string; external_id: string }>(
     'payments',
-    supabase.from('payments').insert(paymentRows).select('id, external_id')
-  )) as { id: string; external_id: string }[];
+    'payments',
+    paymentRows,
+    'id, external_id'
+  );
   const feeByExternal = new Map(paymentRows.map(p => [p.external_id, feeFor(p.amount)]));
-  await must(
+  await insertChunked(
     'payment_fees',
-    supabase
-      .from('payment_fees')
-      .insert(
-        payments.map(p => ({
-          payment_id: p.id,
-          gross_fee: feeByExternal.get(p.external_id),
-          net_fee: feeByExternal.get(p.external_id),
-          base_fee_amount: feeByExternal.get(p.external_id),
-          currency: 'GBP',
-        }))
-      )
-      .select('id')
+    'payment_fees',
+    payments.map(p => ({
+      payment_id: p.id,
+      gross_fee: feeByExternal.get(p.external_id),
+      net_fee: feeByExternal.get(p.external_id),
+      base_fee_amount: feeByExternal.get(p.external_id),
+      currency: 'GBP',
+    })),
+    'id'
   );
 
   // 6. Bank accounts and a few bank transactions.
@@ -316,7 +342,7 @@ async function main() {
           external_account_id: 'e2e-bank-1',
           name: 'Revolut Business',
           currency: 'GBP',
-          balance: 41236.52,
+          balance: OPENING_BALANCE,
           state: 'active',
           updated_at: daysAgo(400),
         },
@@ -356,7 +382,7 @@ async function main() {
     { cp: 'Meta Ads', desc: 'Ad spend', type: 'payment', dir: 'out', lo: 150, hi: 1500 },
     { cp: 'Shopify', desc: 'Monthly plan', type: 'fee', dir: 'out', lo: 79, hi: 79 },
   ] as const;
-  const TXN_COUNT = 36;
+  const TXN_COUNT = 1100;
   const txnRows = Array.from({ length: TXN_COUNT }, (_, i) => {
     const t = txnTemplates[i % txnTemplates.length];
     const amount = money(between(t.lo, t.hi));
@@ -377,9 +403,15 @@ async function main() {
       direction: t.dir,
     };
   });
-  await must(
-    'financial_transactions',
-    supabase.from('financial_transactions').insert(txnRows).select('id')
+  await insertChunked('financial_transactions', 'financial_transactions', txnRows, 'id');
+
+  // The dashboard derives each account's balance as its stored balance plus every transaction
+  // after the snapshot. All seeded transactions are newer than the snapshot, so the expected
+  // total is knowable here and tests can compare against it exactly.
+  const snapshotTotal = OPENING_BALANCE + 4580;
+  const expectedBankBalance = money(
+    snapshotTotal +
+      txnRows.reduce((sum, t) => sum + (t.direction === 'in' ? t.base_amount : -t.base_amount), 0)
   );
 
   // 7. Manifest: what the tests may assert on.
@@ -391,6 +423,7 @@ async function main() {
     productCount: products.length,
     bankAccountCount: banks.length,
     transactionCount: TXN_COUNT,
+    expectedBankBalance,
     seededAt: new Date().toISOString(),
   };
   mkdirSync(path.dirname(MANIFEST_FILE), { recursive: true });
