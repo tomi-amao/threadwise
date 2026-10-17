@@ -2,6 +2,24 @@
 
 Status: decisions made, ready for Phase 0 · Branch: `feat/frontend-redesign` · Oct 13, 2026
 
+## Progress
+
+| Phase         | State         | Notes                                                                                                                                                                                                                                   |
+| ------------- | ------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 0 Foundations | Done (Oct 17) | Tokens, self-hosted fonts, cookie theme, component kit, themed Nivo wrappers, re-themed shell, Playwright (width x theme) with contrast, axe and overflow gates. Gallery at `/ui-kit` (dev only).                                       |
+| 1 Dashboard   | Done (Oct 18) | New page on the shared kit, parity with the old one, tests in both themes. Cookie-based auth shipped with it: loaders can now identify the user. Typecheck baseline went from 30 to 6 errors (`module: ESNext` plus Vite client types). |
+| 2 Table pages | Next          | Transactions and Inventory first.                                                                                                                                                                                                       |
+
+Follow-ups noted while doing Phase 1:
+
+- `lib/supabase.ts` still holds the old localStorage browser client and `getAuthenticatedServerClient`;
+  both are unused now. It has uncommitted key-name work, so remove them once that lands.
+- Only the dashboard's entity lookup is user-scoped. Its other queries (and most other loaders) use the
+  service-role key, which bypasses row-level security. Fine for one business per database, wrong for more.
+- Dashboard queries have no `.range()`, so Supabase's default 1,000-row cap would silently truncate a
+  large store. Aggregate in SQL (a view or RPC) when this matters.
+- `app.invoices.tsx` has a stale comment saying auth lives in localStorage.
+
 ## Goal
 
 Move the whole chat-ui application onto the design language in
