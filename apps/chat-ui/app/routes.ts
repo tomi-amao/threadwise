@@ -33,7 +33,7 @@ export default [
     route('invoices', 'routes/app.invoices.tsx'),
     route('transactions', 'routes/app.transactions.tsx'),
     route('collections', 'routes/app.collections.tsx'),
-    route('collections-v2', 'routes/app.collections-v2.tsx'),
+    route('collections/:collectionId', 'routes/app.collection-detail.tsx'),
     route('reports', 'routes/app.reports.tsx'),
     route('orders', 'routes/app.orders.tsx'),
     route('products', 'routes/app.products.tsx'),
@@ -57,4 +57,5 @@ export default [
   route('api/reports/cash-flow-pack', 'routes/api.reports.cash-flow-pack.tsx'),
   route('api/tax/ct600-pack', 'routes/api.tax.ct600-pack.tsx'),
   route('api/collections/plan-pack', 'routes/api.collections.plan-pack.tsx'),
+  route('api/collections/transactions', 'routes/api.collections.transactions.tsx'),
 ] satisfies RouteConfig;

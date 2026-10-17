@@ -17,6 +17,7 @@
 import { writeFileSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { createClient } from '@supabase/supabase-js';
+import { computePlanProjections } from '../../app/lib/collection-plans';
 import { MANIFEST_FILE, assertLocalSupabase, loadTestEnv, requireEnv } from '../env';
 import {
   ACCOUNTS,
@@ -1414,6 +1415,228 @@ async function main() {
     },
   };
 
+  // 6h. Collections: three for the business (one with sales, linked costs and a co-branded
+  // plan; one planned and empty; one finished) and one for the rival, which must stay unseen.
+  const day = (n: number) => daysAgo(n).slice(0, 10);
+  const collectionRows = (await must(
+    'collections',
+    supabase
+      .from('collections')
+      .insert([
+        {
+          entity_id: entityId,
+          name: 'Autumn Layers',
+          slug: 'autumn-layers',
+          status: 'active',
+          collection_type: 'Seasonal',
+          launch_date: day(120),
+          planned_budget_amount: 8000,
+          budget_currency: 'GBP',
+          external_ref: 'AL-26',
+        },
+        {
+          entity_id: entityId,
+          name: 'Winter Capsule',
+          slug: 'winter-capsule',
+          status: 'planned',
+          collection_type: 'Capsule',
+          budget_currency: 'GBP',
+        },
+        {
+          entity_id: entityId,
+          name: 'Summer Linens',
+          slug: 'summer-linens',
+          status: 'completed',
+          collection_type: 'Seasonal',
+          launch_date: day(260),
+          budget_currency: 'GBP',
+        },
+        {
+          entity_id: rid,
+          name: 'Rival Drop',
+          slug: 'rival-drop',
+          status: 'active',
+          collection_type: 'Seasonal',
+          budget_currency: 'GBP',
+        },
+      ])
+      .select('id, name')
+  )) as { id: string; name: string }[];
+  const colId = (name: string) => collectionRows.find(c => c.name === name)!.id;
+  const AUTUMN = [0, 1, 4]; // Cardigan, Overshirt, Merino Scarf
+  const SUMMER = [3, 6]; // Linen Camp Shirt, Canvas Tote
+  await must(
+    'collection_products',
+    supabase.from('collection_products').insert([
+      ...AUTUMN.map((idx, i) => ({
+        collection_id: colId('Autumn Layers'),
+        product_id: products[idx].id,
+        display_order: i + 1,
+        inclusion_reason: i === 0 ? 'The hero piece' : null,
+      })),
+      ...SUMMER.map(idx => ({
+        collection_id: colId('Summer Linens'),
+        product_id: products[idx].id,
+      })),
+      { collection_id: colId('Rival Drop'), product_id: rivalProduct.id },
+    ])
+  );
+  // Costs: the production run, postage and ad spend among the first transactions.
+  const costTxns = [2, 3, 4];
+  const costTypes = ['manufacturing', 'shipping', 'marketing'];
+  await must(
+    'collection_costs',
+    supabase.from('collection_costs').insert(
+      costTxns.map((t, i) => ({
+        entity_id: entityId,
+        collection_id: colId('Autumn Layers'),
+        financial_transaction_id: txnInserted[t].id,
+        cost_type: costTypes[i],
+        notes: `Linked for the seed: ${txnTemplates[t % txnTemplates.length].desc}`,
+      }))
+    )
+  );
+  const autumnCost = money(costTxns.reduce((s, t) => s + Number(txnRows[t].base_amount), 0));
+
+  // What the sales rule (a product's own lines; cancelled orders excluded) gives, worked out here.
+  const salesOf = (idxs: number[]) => {
+    const set = new Set(idxs);
+    let units = 0;
+    let revenue = 0;
+    let orderCount = 0;
+    for (const o of plan) {
+      const hit = o.lines.filter(l => set.has(l.productIdx));
+      if (hit.length === 0) continue;
+      orderCount += 1;
+      for (const l of hit) {
+        units += l.qty;
+        revenue += prices[l.productIdx] * l.qty;
+      }
+    }
+    return { units, revenue: money(revenue), orders: orderCount };
+  };
+  const autumnSales = salesOf(AUTUMN);
+  const summerSales = salesOf(SUMMER);
+
+  // A co-branded plan with two lines, a firm and an estimated cost, and two still to be decided.
+  const planMetadata = {
+    revenue_split_pct: 60,
+    cost_split_pct: 60,
+    costs_paid_upfront: true,
+    custom_terms: [{ label: 'Exclusivity', value: 'UK only' }],
+  };
+  const planRow = (await must(
+    'collection_plans',
+    supabase
+      .from('collection_plans')
+      .insert({
+        collection_id: colId('Autumn Layers'),
+        entity_id: entityId,
+        collaboration_type: 'co_branded',
+        partner_name: 'Maison Test',
+        currency: 'GBP',
+        notes: 'Seeded plan',
+        metadata: planMetadata,
+      })
+      .select('id')
+      .single()
+  )) as { id: string };
+  const planLines = [
+    { product: 0, qty: 100, gifted: 10, cost: 40, price: 98, sell: 80 },
+    { product: 1, qty: 60, gifted: 0, cost: 55, price: 124, sell: 70 },
+  ];
+  await must(
+    'collection_plan_lines',
+    supabase.from('collection_plan_lines').insert(
+      planLines.map((l, i) => ({
+        plan_id: planRow.id,
+        product_id: products[l.product].id,
+        planned_quantity: l.qty,
+        gifted_units: l.gifted,
+        unit_cost: l.cost,
+        unit_selling_price: l.price,
+        expected_sell_through_pct: l.sell,
+        display_order: i + 1,
+      }))
+    )
+  );
+  const planCosts = [
+    { category: 'freight_in', amount: null, estimated: false },
+    { category: 'outbound_shipping', amount: null, estimated: false },
+    { category: 'marketing', amount: 1500, estimated: true },
+    { category: 'packaging', amount: 600, estimated: false },
+  ];
+  await must(
+    'collection_plan_costs',
+    supabase.from('collection_plan_costs').insert(
+      planCosts.map(c => ({
+        plan_id: planRow.id,
+        cost_category: c.category,
+        planned_amount: c.amount,
+        is_estimated: c.estimated,
+      }))
+    )
+  );
+  const projections = computePlanProjections(
+    'co_branded',
+    ENTITY_NAME,
+    'Maison Test',
+    planMetadata,
+    planLines.map((l, i) => ({
+      id: String(i),
+      planId: planRow.id,
+      productId: products[l.product].id,
+      productName: null,
+      linkedProductName: null,
+      plannedQuantity: l.qty,
+      giftedUnits: l.gifted,
+      unitCost: l.cost,
+      unitSellingPrice: l.price,
+      expectedSellThroughPct: l.sell,
+      notes: null,
+      displayOrder: i + 1,
+      unitCostCurrency: null,
+      unitCostOriginal: null,
+    })),
+    planCosts.map((c, i) => ({
+      id: String(i),
+      planId: planRow.id,
+      costCategory: c.category,
+      description: null,
+      plannedAmount: c.amount,
+      isEstimated: c.estimated,
+      notes: null,
+    }))
+  );
+  const collections = {
+    count: 3,
+    active: 1,
+    autumn: {
+      name: 'Autumn Layers',
+      id: colId('Autumn Layers'),
+      productNames: AUTUMN.map(i => productNames[i]),
+      ...autumnSales,
+      cost: autumnCost,
+      costCount: costTxns.length,
+    },
+    winter: { name: 'Winter Capsule', id: colId('Winter Capsule') },
+    summer: { name: 'Summer Linens', id: colId('Summer Linens'), ...summerSales },
+    totalRevenue: money(autumnSales.revenue + summerSales.revenue),
+    totalCost: autumnCost,
+    plan: {
+      partner: 'Maison Test',
+      revenue: Math.round(projections.projectedRevenue),
+      netProfit: Math.round(projections.projectedNetProfit),
+      partnerDue: Math.round(projections.partnerPaymentDue?.amount ?? 0),
+      pending: projections.costsPendingCount,
+      estimated: projections.costsEstimatedCount,
+      lineCount: planLines.length,
+      costCount: planCosts.length,
+    },
+    rivalName: 'Rival Drop',
+    rivalId: colId('Rival Drop'),
+  };
+
   // 7. Manifest: what the tests may assert on.
   const manifest = {
     entityName: ENTITY_NAME,
@@ -1431,6 +1654,7 @@ async function main() {
     products: productSummary,
     rival,
     ledger,
+    collections,
     seededAt: new Date().toISOString(),
   };
   mkdirSync(path.dirname(MANIFEST_FILE), { recursive: true });

@@ -30,6 +30,12 @@ const TABLES: [table: string, owned: () => number][] = [
   ['inventory_on_hand', () => seed.inventory.itemCount],
   ['invoices', () => seed.invoices.total],
   ['products', () => seed.productCount + 3],
+  ['collections', () => seed.collections.count],
+  ['collection_products', () => 5],
+  ['collection_costs', () => seed.collections.autumn.costCount],
+  ['collection_plans', () => 1],
+  ['collection_plan_lines', () => seed.collections.plan.lineCount],
+  ['collection_plan_costs', () => seed.collections.plan.costCount],
 ];
 
 test.describe('without signing in', () => {
@@ -45,6 +51,8 @@ test.describe('without signing in', () => {
       'accounting_periods',
       '_backup_phase1_items',
       'tax_adjustments',
+      'collections',
+      'collection_costs',
     ]) {
       const result = await api('GET', table, 'limit=5');
       expect(result.rows, table).toEqual([]);
@@ -84,6 +92,25 @@ test.describe('database functions', () => {
       const result = await rpc(fn, args, mine);
       expect([401, 403, 404], fn).toContain(result.status);
     }
+  });
+
+  test('what a collection sold is counted for the caller only', async () => {
+    const own = await rpc('collection_sales_rollup', { p_collection_id: null }, mine);
+    expect(own.status).toBe(200);
+    const totals = (own.body as { level: string; revenue: number }[]).filter(
+      r => r.level === 'total'
+    );
+    expect(totals.reduce((t, r) => t + Number(r.revenue), 0)).toBe(seed.collections.totalRevenue);
+    // The other business's collection is invisible to this caller, even when asked for by id.
+    const cross = await rpc(
+      'collection_sales_rollup',
+      { p_collection_id: seed.collections.rivalId },
+      mine
+    );
+    expect(cross.body).toEqual([]);
+    expect(
+      (await rpc('collection_sales_rollup', { p_collection_id: null })).status
+    ).toBeGreaterThanOrEqual(401);
   });
 
   test('a user can run the ordinary ones, but only over their own business', async () => {

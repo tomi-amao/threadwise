@@ -22,11 +22,10 @@ Follow-ups from the security pass (before Phase 3):
   (and 14 tables had RLS off); views returned every business's rows; and every database function,
   including the SECURITY DEFINER ones that read and replace stored API keys and post journals, was
   callable with the public key.
-- **Not done, needs your call:** Collections (`app.collections.tsx`, `collection-plans.server.ts`,
-  the plan-pack route) still read with the service key and pick "the first entity in the database".
-  They have uncommitted edits of yours in the working tree, so I left them alone: the change is
-  small (user client + `requireUser`; their tables already have ALL policies) but would mix with
-  your work in one commit.
+- **Done in Phase 4:** Collections and its print pack now read and write as the signed-in user
+  (their tables already had owner policies for every operation). The old page also summed every
+  business's order lines into each collection's revenue; the sales rollup is now a database
+  function that runs as the caller (`20261018000000_collection_sales`).
 - **Not done:** the FastAPI agent trusts the `entity_id` the browser sends it (Transactions calls
   it straight from the browser). Fixing that means the agent verifying the user's Supabase JWT.
 - **Not done:** the app's own writes through the service key (a manual journal, the reports
@@ -119,7 +118,7 @@ This plan turns what they taught us into a rollout.
 | #   | Question       | Decision                                                                                                                                                                                                                                                                                                                                                    |
 | --- | -------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 1   | Sidebar        | Follows the theme. **Light by default.**                                                                                                                                                                                                                                                                                                                    |
-| 2   | Header density | **Compact header** on dense pages (Transactions, Inventory, Orders, Customers, Products, Invoices, Journals, Reclassification). **Hero only where strictly necessary:** Reports, Collections index, Landing. (The Dashboard began with a hero and was reworked: it is a tool you glance at, so it uses a compact header and a dense full-width panel grid.) |
+| 2   | Header density | **Compact header** on dense pages (Transactions, Inventory, Orders, Customers, Products, Invoices, Journals). **Hero only where strictly necessary:** Reports, Collections index, Landing. (The Dashboard began with a hero and was reworked: it is a tool you glance at, so it uses a compact header and a dense full-width panel grid.) |
 | 3   | Charts         | **Keep Nivo, theme it, and improve it** (shared wrappers, tokens, real tooltips, keyboard and text alternatives). No custom-SVG rewrite.                                                                                                                                                                                                                    |
 | 4   | Testing        | **Add Playwright** in Phase 0 and **write tests as each page changes**.                                                                                                                                                                                                                                                                                     |
 | 5   | Legacy pages   | **Delete each old page as its replacement ships and is verified**, not in a final sweep.                                                                                                                                                                                                                                                                    |
@@ -284,18 +283,29 @@ Reports, Tax and Journals were redesigned; Reclassification was retired.
 - Keep export packs and the account drilldown.
 - Charts move to the shared chart components.
 
-### Phase 4: Collections
+### Phase 4: Collections (done)
 
-Last of the core pages because it is the largest (2,881 lines plus the plan panel)
-and the preview is the least complete. Parity gaps to close first:
+Rebuilt from the `/collections-v2` preview on the shared kit (so it sits in the app shell, follows
+the theme switch and is centred like every other page), with every feature of the old page.
 
-- Collaboration terms (custom terms, partner payout labels).
-- Supplier-currency / live-FX handling on plan lines.
-- Scenario presets.
-- Export pack.
-- The cost-linking flow with inferred expense account.
-  Do this one as several small PRs (index, detail overview, products/costs, plan) rather
-  than one.
+- **Index** (`/collections`): hero, four portfolio numbers, search, status filter and sort in the
+  URL, one row per collection with revenue, costs, trend and margin.
+- **Collection** (`/collections/:id`): Overview (profit, weekly revenue, budget, where the money
+  went, best sellers, plan against actual), Plan, Products, Costs. Edits happen in drawers.
+- **Plan** keeps all the old behaviour: five collaboration types and their terms, custom terms,
+  partner currency with a live rate, supplier cost in another currency converted once at entry,
+  gifted units, estimated and to-be-determined costs, who-gets-paid, partner payment due, upfront
+  outlay, Conservative/Base/Optimistic scenarios, and the printable pack. New: lines and costs can
+  be edited (they could only be deleted and re-added), and a collection's details can be edited.
+- **Backend:** reads in `lib/api/collections.server.ts`, writes in `collections-actions.server.ts`
+  (validated, and every child row is looked up under the collection in the URL). Sales come from
+  `collection_sales_rollup` instead of downloading every order line. Cost-linking searches
+  transactions on demand (with the category inferred from the journal) instead of loading them
+  all. The old page's debug panel and its "what this collection answers" filler are gone.
+- **Fixed on the way:** `planned` was offered as a status but the database refused it
+  (`20261018000001_collection_status_planned`); cancelled and refunded orders no longer count as
+  sales.
+- The `/collections-v2` preview and its mock data are deleted.
 
 ### Phase 5: Product surfaces outside the data pages
 

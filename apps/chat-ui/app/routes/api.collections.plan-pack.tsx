@@ -9,7 +9,9 @@
  */
 
 import type { LoaderFunctionArgs } from 'react-router';
-import { fetchFxRate, getCollectionPlanPackData } from '~/lib/api/collection-plans.server';
+import { fetchFxRate } from '~/lib/api/collection-plans.server';
+import { getPackData } from '~/lib/api/collections.server';
+import { getRequestSupabaseClient, requireUser } from '~/lib/supabase-server';
 import { collaborationTypeLabel, computeScenarios, getCustomTerms } from '~/lib/collection-plans';
 
 const formatMoney = (value: number, currency: string) =>
@@ -43,6 +45,7 @@ const escapeHtml = (value: string) =>
   value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
 export async function loader({ request }: LoaderFunctionArgs) {
+  await requireUser(request);
   const url = new URL(request.url);
   const collectionId = url.searchParams.get('collection');
   const showScenarios = url.searchParams.get('scenarios') === '1';
@@ -51,7 +54,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
     return new Response('Missing ?collection= parameter', { status: 400 });
   }
 
-  const data = await getCollectionPlanPackData(collectionId);
+  const data = await getPackData(getRequestSupabaseClient(request), collectionId);
   if (!data) {
     return new Response('Collection not found', { status: 404 });
   }
@@ -120,7 +123,11 @@ export async function loader({ request }: LoaderFunctionArgs) {
       <tr>
         <td class="cap">${escapeHtml(cost.costCategory.replace(/_/g, ' '))}</td>
         <td>${escapeHtml(cost.description || '—')}</td>
-        <td class="num">${cost.plannedAmount != null ? GBP(cost.plannedAmount) : '<span class="muted">To be determined</span>'}</td>
+        <td class="num">${
+          cost.plannedAmount != null
+            ? `${GBP(cost.plannedAmount)}${cost.isEstimated ? ' <span class="muted">(estimated)</span>' : ''}`
+            : '<span class="muted">To be determined</span>'
+        }</td>
       </tr>`
     )
     .join('');
@@ -404,6 +411,11 @@ ${
 ${
   projections.costsPendingCount > 0
     ? `<p style="font-size:11px;color:#777;margin-top:6px;">${projections.costsPendingCount} cost${projections.costsPendingCount === 1 ? '' : 's'} above ${projections.costsPendingCount === 1 ? 'is' : 'are'} still to be determined and not yet included in these totals — see Other planned costs.</p>`
+    : ''
+}
+${
+  projections.costsEstimatedCount > 0
+    ? `<p style="font-size:11px;color:#777;margin-top:6px;">${projections.costsEstimatedCount} cost${projections.costsEstimatedCount === 1 ? '' : 's'} above ${projections.costsEstimatedCount === 1 ? 'is a rough estimate' : 'are rough estimates'}, not a firm quote — included in these totals, but may change.</p>`
     : ''
 }
 

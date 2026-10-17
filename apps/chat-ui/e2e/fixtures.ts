@@ -79,6 +79,37 @@ export interface SeedManifest {
     manualDescription: string;
     tax: { previousProfit: number; previousTax: number };
   };
+  /** Collections: sales, linked costs and a plan, worked out by the seed. */
+  collections: {
+    count: number;
+    active: number;
+    autumn: {
+      name: string;
+      id: string;
+      productNames: string[];
+      units: number;
+      revenue: number;
+      orders: number;
+      cost: number;
+      costCount: number;
+    };
+    winter: { name: string; id: string };
+    summer: { name: string; id: string; units: number; revenue: number; orders: number };
+    totalRevenue: number;
+    totalCost: number;
+    plan: {
+      partner: string;
+      revenue: number;
+      netProfit: number;
+      partnerDue: number;
+      pending: number;
+      estimated: number;
+      lineCount: number;
+      costCount: number;
+    };
+    rivalName: string;
+    rivalId: string;
+  };
   /** A second business (and its user) that the first must never see. */
   rival: {
     email: string;

@@ -16,7 +16,7 @@ const key = requireEnv('SUPABASE_SERVICE_ROLE_KEY');
 export const STAND_IN_NOTE = 'E2E stand-in disposal';
 
 async function rest<T>(
-  method: 'GET' | 'PATCH' | 'DELETE',
+  method: 'GET' | 'PATCH' | 'DELETE' | 'POST',
   table: string,
   query: string,
   body?: unknown
@@ -460,4 +460,66 @@ export async function readTxnInvoiceId(id: string): Promise<unknown> {
     `select=metadata&id=eq.${id}`
   );
   return rows[0]?.metadata?.invoice_id;
+}
+
+// ─── Collections (for tests that create, edit and remove them) ─────────────────────────────────
+
+const COLLECTION_TABLES = [
+  // Children first, so deleting what a test added never trips a foreign key.
+  'collection_plan_lines',
+  'collection_plan_costs',
+  'collection_plans',
+  'collection_costs',
+  'collection_products',
+  'collections',
+] as const;
+
+type Row = Record<string, unknown> & { id: string };
+export type CollectionSnapshot = Record<(typeof COLLECTION_TABLES)[number], Row[]>;
+
+export async function snapshotCollections(): Promise<CollectionSnapshot> {
+  const entries = await Promise.all(
+    COLLECTION_TABLES.map(
+      async t => [t, await rest<Row[]>('GET', t, 'select=*&limit=5000')] as const
+    )
+  );
+  return Object.fromEntries(entries) as CollectionSnapshot;
+}
+
+/** Remove what a test added, put back anything it removed, and restore every row it changed. */
+export async function restoreCollections(before: CollectionSnapshot): Promise<void> {
+  // Delete additions children first, so a foreign key never trips.
+  for (const table of COLLECTION_TABLES) {
+    const now = await rest<Row[]>('GET', table, 'select=id&limit=5000');
+    const had = new Set(before[table].map(r => r.id));
+    for (const row of now) if (!had.has(row.id)) await rest('DELETE', table, `id=eq.${row.id}`);
+  }
+  // Re-insert removals and restore changes, parents first.
+  for (const table of [...COLLECTION_TABLES].reverse()) {
+    const now = new Map(
+      (await rest<Row[]>('GET', table, 'select=*&limit=5000')).map(r => [r.id, r])
+    );
+    for (const original of before[table]) {
+      const row = now.get(original.id);
+      if (!row) {
+        await rest('POST', table, '', original);
+      } else if (JSON.stringify(original) !== JSON.stringify(row)) {
+        const { id, ...fields } = original;
+        await rest('PATCH', table, `id=eq.${id}`, fields);
+      }
+    }
+  }
+}
+
+export async function readCollectionByName(name: string) {
+  const rows = await rest<{ id: string; name: string; status: string; slug: string }[]>(
+    'GET',
+    'collections',
+    `select=id,name,status,slug&name=eq.${encodeURIComponent(name)}`
+  );
+  return rows[0];
+}
+
+export async function countRows(table: string, query: string): Promise<number> {
+  return (await rest<unknown[]>('GET', table, `select=id&${query}`)).length;
 }
