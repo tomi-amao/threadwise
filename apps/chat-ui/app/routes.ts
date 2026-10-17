@@ -48,6 +48,8 @@ export default [
     route('reclassification', 'routes/app.reclassification.tsx'),
     route('journals', 'routes/app.journals.tsx'),
     route('tax', 'routes/app.tax.tsx'),
+    // Design-system gallery: development and tests only, never shipped.
+    ...(process.env.NODE_ENV === 'production' ? [] : [route('ui-kit', 'routes/app.ui-kit.tsx')]),
   ]),
 
   // API routes
