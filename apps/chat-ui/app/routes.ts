@@ -35,7 +35,6 @@ export default [
     route('collections', 'routes/app.collections.tsx'),
     route('collections-v2', 'routes/app.collections-v2.tsx'),
     route('reports', 'routes/app.reports.tsx'),
-    route('reports-v2', 'routes/app.reports-v2.tsx'),
     route('orders', 'routes/app.orders.tsx'),
     route('products', 'routes/app.products.tsx'),
     route('inventory', 'routes/app.inventory.tsx'),

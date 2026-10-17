@@ -50,6 +50,35 @@ export interface SeedManifest {
     refundedOrderNumber: string;
     sampleOrderNumber: string;
   };
+  /** The books: periods, journals and the figures the statements should show. */
+  ledger: {
+    currentLabel: string;
+    previousLabel: string;
+    currentFrom: string;
+    currentTo: string;
+    previousFrom: string;
+    previousTo: string;
+    current: { revenue: number; cogs: number; expenses: number; profit: number };
+    previous: { revenue: number; cogs: number; expenses: number; profit: number };
+    all: { revenue: number; cogs: number; expenses: number; profit: number };
+    balanceSheet: {
+      assets: number;
+      liabilities: number;
+      equity: number;
+      retainedEarnings: number;
+      balance: number;
+    };
+    journalCount: number;
+    posted: number;
+    drafts: number;
+    reversed: number;
+    manual: number;
+    bankFeedJournals: number;
+    draftDescriptions: string[];
+    reversedDescription: string;
+    manualDescription: string;
+    tax: { previousProfit: number; previousTax: number };
+  };
   /** A second business (and its user) that the first must never see. */
   rival: {
     email: string;

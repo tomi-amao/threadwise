@@ -51,7 +51,8 @@ export function Statement({
               </tr>
             );
           }
-          const shown = row.deduct ? -Math.abs(row.amount) : row.amount;
+          // `+ 0` turns -0 into 0, so a zero deduction reads £0 rather than -£0.
+          const shown = (row.deduct ? -Math.abs(row.amount) : row.amount) + 0;
           return (
             <tr
               key={i}

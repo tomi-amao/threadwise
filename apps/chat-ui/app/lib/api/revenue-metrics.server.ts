@@ -19,6 +19,7 @@ interface ShopifyPayload {
 
 export interface RevenueMetricOrder {
   id: string;
+  order_number?: string | null;
   raw_event_id: string | null;
   subtotal_amount: number | null;
   discount_total_amount: number | null;
@@ -186,7 +187,7 @@ export async function getRevenueMetricsData(
       let query = supabase
         .from('orders')
         .select(
-          'id, raw_event_id, subtotal_amount, discount_total_amount, shipping_total_amount, tax_total_amount, grand_total_amount, refunded_total_amount, status, created_at, external_raw_events(payload)'
+          'id, order_number, raw_event_id, subtotal_amount, discount_total_amount, shipping_total_amount, tax_total_amount, grand_total_amount, refunded_total_amount, status, created_at, external_raw_events(payload)'
         )
         .neq('status', 'cancelled')
         .order('id');

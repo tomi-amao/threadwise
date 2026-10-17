@@ -243,3 +243,40 @@ export async function rpc(
   }
   return { status: response.status, body };
 }
+
+// ─── Transactions (for tests that leave one out of the reports and put it back) ─────────────────
+
+export interface TxnState {
+  id: string;
+  status: string;
+  excluded_reason: string | null;
+  metadata: Record<string, unknown>;
+}
+
+export async function readTxn(id: string): Promise<TxnState> {
+  const rows = await rest<TxnState[]>(
+    'GET',
+    'financial_transactions',
+    `select=id,status,excluded_reason,metadata&id=eq.${id}`
+  );
+  if (!rows[0]) throw new Error(`No transaction ${id}`);
+  return rows[0];
+}
+
+export async function restoreTxn(state: TxnState): Promise<void> {
+  await rest('PATCH', 'financial_transactions', `id=eq.${state.id}`, {
+    status: state.status,
+    excluded_reason: state.excluded_reason,
+    metadata: state.metadata,
+  });
+}
+
+/** Ids of transactions (newest first) whose description matches, read with the service role. */
+export async function findTxnIds(description: string, limit = 5): Promise<string[]> {
+  const rows = await rest<{ id: string }[]>(
+    'GET',
+    'financial_transactions',
+    `select=id&description=eq.${encodeURIComponent(description)}&order=occurred_at.desc&limit=${limit}`
+  );
+  return rows.map(r => r.id);
+}

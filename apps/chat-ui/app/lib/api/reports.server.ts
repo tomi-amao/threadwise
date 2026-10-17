@@ -19,6 +19,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { getDerivedBankBalances } from './bank-balance.server';
+import { fetchAllRows } from './paginate.server';
 import { getRevenueMetricsData } from './revenue-metrics.server';
 
 // ─── Types ────────────────────────────────────────────────────────────
@@ -61,6 +62,10 @@ export interface MonthlyRow {
 export interface CogsDetailLine {
   month: string;
   orderId: string;
+  /** What the shop calls the order, e.g. #1001. */
+  orderNumber: string | null;
+  /** The product as named on the order line. */
+  productName: string | null;
   orderCreatedAt: string;
   lineItemId: string;
   productId: string | null;
@@ -465,40 +470,29 @@ export async function getReportsData(
   // ── Build date-filtered queries ──
   const revenueDataPromise = getRevenueMetricsData(supabase, { from, to });
 
-  // Financial transactions filtered by occurred_at
-  // Paginated: PostgREST caps rows at 1,000 per request whatever .limit() says,
-  // so a single call silently truncated the transaction set — under-reporting
-  // both cash flow and the monthly expense buckets.
-  // Fetched unfiltered, then narrowed to the reporting period in memory. The
-  // cash insights below always look at a trailing window regardless of which
-  // period the statement is showing, so both need the full set — and the table
-  // is small enough that one fetch is cheaper than two.
-  const fetchAllTransactions = async () => {
-    const PAGE = 1000;
-    const rows: any[] = [];
-    let offset = 0;
-    for (;;) {
-      const { data: page } = await supabase
-        .from('financial_transactions')
-        .select(
-          'id, amount, base_amount, direction, transaction_type, status, occurred_at, description, excluded_reason, bank_account_id'
-        )
-        .order('occurred_at', { ascending: true })
-        .range(offset, offset + PAGE - 1);
-      if (!page || page.length === 0) break;
-      rows.push(...page);
-      if (page.length < PAGE) break;
-      offset += PAGE;
-    }
-    return { data: rows };
-  };
-  const txnsQ = fetchAllTransactions();
+  // Financial transactions, all of them: fetched unfiltered, then narrowed to the reporting
+  // period in memory. The cash insights below always look at a trailing window regardless of
+  // which period the statement is showing, so both need the full set. Read in full (paged by id):
+  // PostgREST caps a response at 1,000 rows whatever .limit() says.
+  const txnsQ = fetchAllRows<any>('financial transactions', (from, to) =>
+    supabase
+      .from('financial_transactions')
+      .select(
+        'id, amount, base_amount, direction, transaction_type, status, occurred_at, description, excluded_reason, bank_account_id'
+      )
+      .order('id')
+      .range(from, to)
+  ).then(data => ({ data }));
 
-  // Order line items for order-driven monthly grouping
-  const orderLineItemsQ = supabase
-    .from('order_line_items')
-    .select('id, order_id, product_id, quantity, created_at')
-    .limit(50000);
+  // Order line items for order-driven monthly grouping. (This used `.limit(50000)`, which the API
+  // cuts to 1,000, so COGS was silently computed from the first 1,000 lines only.)
+  const orderLineItemsQ = fetchAllRows<any>('order line items', (from, to) =>
+    supabase
+      .from('order_line_items')
+      .select('id, order_id, product_id, product_name, quantity, created_at')
+      .order('id')
+      .range(from, to)
+  ).then(data => ({ data }));
 
   // Inventory movements carry the sale-time cost snapshots used for stable historical COGS.
   // superseded_at IS NULL excludes voided/duplicate movements (e.g. from order
@@ -506,14 +500,17 @@ export async function getReportsData(
   // RETURN carries a full-refund's stock coming back, at the same unit_cost as
   // the SALE it reverses, so netting SALE+RETURN per line naturally zeroes out
   // a refunded line's cost — no separate refund-handling logic needed here.
-  const inventoryMovementsQ = supabase
-    .from('inventory_movements')
-    .select(
-      'inventory_item_id, reference_id, reference_table, transaction_type, quantity, unit_cost, movement_date'
-    )
-    .in('transaction_type', ['PURCHASE', 'SALE', 'RETURN', 'GIFT'])
-    .is('superseded_at', null)
-    .limit(50000);
+  const inventoryMovementsQ = fetchAllRows<any>('inventory movements', (from, to) =>
+    supabase
+      .from('inventory_movements')
+      .select(
+        'id, inventory_item_id, reference_id, reference_table, transaction_type, quantity, unit_cost, movement_date'
+      )
+      .in('transaction_type', ['PURCHASE', 'SALE', 'RETURN', 'GIFT'])
+      .is('superseded_at', null)
+      .order('id')
+      .range(from, to)
+  ).then(data => ({ data }));
 
   // Fetch all data in parallel (except journals and journal_line_items which need pagination)
   const [revenueData, accountsRes, txnsRes, orderLineItemsRes, inventoryMovementsRes] =
@@ -529,22 +526,15 @@ export async function getReportsData(
       inventoryMovementsQ,
     ]);
 
-  // Paginate journals — Supabase PostgREST caps rows at 1,000 per request
-  // regardless of the .limit() value set on the client, so we must page through them.
-  const PAGE_SIZE = 1000;
-  const allPostedJournals: any[] = [];
-  let journalsOffset = 0;
-  while (true) {
-    const { data: journalPage } = await supabase
+  // Posted journals, all of them (paged by id: see above).
+  const allPostedJournals = await fetchAllRows<any>('journals', (from, to) =>
+    supabase
       .from('journals')
       .select('id, journal_date, status, source_type, source_id')
       .eq('status', 'posted')
-      .range(journalsOffset, journalsOffset + PAGE_SIZE - 1);
-    if (!journalPage || journalPage.length === 0) break;
-    allPostedJournals.push(...journalPage);
-    if (journalPage.length < PAGE_SIZE) break;
-    journalsOffset += PAGE_SIZE;
-  }
+      .order('id')
+      .range(from, to)
+  );
 
   // Draft journals stay out of every statement — posting is the act of
   // asserting the categorisation is right — but a cash movement that already
@@ -559,20 +549,14 @@ export async function getReportsData(
     (draftJournalRows || []).map((row: any) => String(row.source_id || '')).filter(Boolean)
   );
 
-  // Paginate journal_line_items — Supabase PostgREST caps rows at 1,000 per request
-  // regardless of the .limit() value set on the client, so we must page through them.
-  const allLineItems: any[] = [];
-  let offset = 0;
-  while (true) {
-    const { data: page } = await supabase
+  // Every journal line (paged by id: see above).
+  const allLineItems = await fetchAllRows<any>('journal lines', (from, to) =>
+    supabase
       .from('journal_line_items')
       .select('journal_id, account_id, debit, credit, currency, gbp_equivalent')
-      .range(offset, offset + PAGE_SIZE - 1);
-    if (!page || page.length === 0) break;
-    allLineItems.push(...page);
-    if (page.length < PAGE_SIZE) break;
-    offset += PAGE_SIZE;
-  }
+      .order('id')
+      .range(from, to)
+  );
   const orders = revenueData.orders;
   const accounts = accountsRes.data || [];
   const postedJournals = allPostedJournals;
@@ -705,7 +689,9 @@ export async function getReportsData(
   // Group orders by month
   const orderMonthById = new Map<string, string>();
   const orderCreatedAtById = new Map<string, string>();
+  const orderNumberById = new Map<string, string>();
   for (const o of orders) {
+    if ((o as any).order_number) orderNumberById.set((o as any).id, String((o as any).order_number));
     if (!(o as any).created_at) continue;
     const month = ((o as any).created_at as string).substring(0, 7);
     orderMonthById.set((o as any).id, month);
@@ -737,6 +723,8 @@ export async function getReportsData(
     existingMonthDetails.lines.push({
       month,
       orderId,
+      orderNumber: orderNumberById.get(orderId) ?? null,
+      productName: ((li as any).product_name as string | null) || null,
       orderCreatedAt: orderCreatedAtById.get(orderId) || '',
       lineItemId,
       productId: ((li as any).product_id as string | null) || null,
@@ -1658,65 +1646,33 @@ export async function getAccountDrilldown({
     throw new Error(accountError?.message ?? 'Account not found');
   }
 
-  const PAGE_SIZE = 1000;
-  const relevantJournals: any[] = [];
-  let journalsOffset = 0;
-
-  while (true) {
-    let journalsQuery = supabase
+  // Paged by id: an unordered range() can repeat or skip rows between pages.
+  const relevantJournals = await fetchAllRows<any>('journals', (rangeFrom, rangeTo) => {
+    let query = supabase
       .from('journals')
       .select(
         'id, journal_date, journal_type, description, source_type, source_id, status, posted_at, created_at'
       )
       .eq('status', 'posted');
-
     if (statement === 'pnl') {
-      if (from) journalsQuery = journalsQuery.gte('journal_date', dateGte(from));
-      if (to) journalsQuery = journalsQuery.lte('journal_date', dateLte(to));
+      if (from) query = query.gte('journal_date', dateGte(from));
+      if (to) query = query.lte('journal_date', dateLte(to));
     } else if (to) {
-      journalsQuery = journalsQuery.lte('journal_date', dateLte(to));
+      query = query.lte('journal_date', dateLte(to));
     }
-
-    const { data: journalPage, error: journalError } = await journalsQuery.range(
-      journalsOffset,
-      journalsOffset + PAGE_SIZE - 1
-    );
-
-    if (journalError) {
-      throw new Error(`Failed to load journals: ${journalError.message}`);
-    }
-
-    if (!journalPage || journalPage.length === 0) break;
-
-    relevantJournals.push(...journalPage);
-
-    if (journalPage.length < PAGE_SIZE) break;
-    journalsOffset += PAGE_SIZE;
-  }
+    return query.order('id').range(rangeFrom, rangeTo);
+  });
 
   const journalMap = new Map(relevantJournals.map((journal: any) => [journal.id, journal]));
 
-  const selectedAccountLines: any[] = [];
-  let lineOffset = 0;
-
-  while (true) {
-    const { data: linePage, error: lineError } = await supabase
+  const selectedAccountLines = await fetchAllRows<any>('account lines', (rangeFrom, rangeTo) =>
+    supabase
       .from('journal_line_items')
       .select('id, journal_id, account_id, debit, credit, currency, gbp_equivalent, description')
       .eq('account_id', accountId)
-      .range(lineOffset, lineOffset + PAGE_SIZE - 1);
-
-    if (lineError) {
-      throw new Error(`Failed to load account lines: ${lineError.message}`);
-    }
-
-    if (!linePage || linePage.length === 0) break;
-
-    selectedAccountLines.push(...linePage);
-
-    if (linePage.length < PAGE_SIZE) break;
-    lineOffset += PAGE_SIZE;
-  }
+      .order('id')
+      .range(rangeFrom, rangeTo)
+  );
 
   const relevantAccountLines = selectedAccountLines.filter((line: any) =>
     journalMap.has((line as any).journal_id)

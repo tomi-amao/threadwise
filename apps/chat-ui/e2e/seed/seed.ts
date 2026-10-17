@@ -18,6 +18,17 @@ import { writeFileSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { createClient } from '@supabase/supabase-js';
 import { MANIFEST_FILE, assertLocalSupabase, loadTestEnv, requireEnv } from '../env';
+import {
+  ACCOUNTS,
+  BANK_FEED_JOURNAL_COUNT,
+  DRAFT_COUNT,
+  FIXED_JOURNALS,
+  bankFeedJournal,
+  expectedBalanceSheet,
+  expectedFigures,
+  type Journalled,
+  type LedgerJournal,
+} from './ledger';
 
 loadTestEnv();
 const url = assertLocalSupabase(process.env.SUPABASE_URL);
@@ -477,7 +488,12 @@ async function main() {
       metadata: MATCHED_PAYMENTS[i] ? { invoice_id: MATCHED_PAYMENTS[i] } : {},
     };
   });
-  await insertChunked('financial_transactions', 'financial_transactions', txnRows, 'id');
+  const txnInserted = await insertChunked<{ id: string }>(
+    'financial_transactions',
+    'financial_transactions',
+    txnRows,
+    'id'
+  );
 
   // The dashboard derives each account's balance as its stored balance plus every transaction
   // after the snapshot. All seeded transactions are newer than the snapshot, so the expected
@@ -658,14 +674,7 @@ async function main() {
   //       you owe      = 180 + 3,600                       = 3,780 across 2 invoices
   //       overdue      = 960 + 1,500 (owed) and 180 (owe)  = 3 invoices
   //       to review    = 2 drafts; 1 open invoice is in EUR and left out of the sums
-  const accounts = [
-    ['1033', 'Inventory: finished goods', 'asset', 'debit'],
-    ['4000', 'Product sales', 'revenue', 'credit'],
-    ['5000', 'Product purchase cost', 'cogs', 'debit'],
-    ['6100', 'Materials and supplies', 'expense', 'debit'],
-    ['6300', 'Shipping and delivery', 'expense', 'debit'],
-    ['6500', 'Marketing', 'expense', 'debit'],
-  ] as const;
+  const accounts = ACCOUNTS;
   const glRows = (await must(
     'chart_of_accounts',
     supabase
@@ -1265,6 +1274,146 @@ async function main() {
     bankBalance: 9_375,
   };
 
+  // 6g. The books: accounting periods, tax rates and journals (see ledger.ts for the figures).
+  const now = new Date();
+  const fyYear = now.getUTCMonth() >= 3 ? now.getUTCFullYear() : now.getUTCFullYear() - 1;
+  const iso = (ms: number) => new Date(ms).toISOString().slice(0, 10);
+  const periodDates = {
+    previous: { start: Date.UTC(fyYear - 1, 3, 1), end: Date.UTC(fyYear, 2, 31) },
+    current: { start: Date.UTC(fyYear, 3, 1), end: Date.UTC(fyYear + 1, 2, 31) },
+  };
+  const yesterday = now.getTime() - 86_400_000;
+  const periodLabel = (end: number) => `Year to 31 March ${new Date(end).getUTCFullYear()}`;
+  await must(
+    'accounting_periods',
+    supabase.from('accounting_periods').insert(
+      (['previous', 'current'] as const).map(which => ({
+        entity_id: entityId,
+        start_date: iso(periodDates[which].start),
+        end_date: iso(periodDates[which].end),
+        label: periodLabel(periodDates[which].end),
+        status: which === 'previous' ? 'closed' : 'open',
+        ledger_basis: true,
+      }))
+    )
+  );
+  await must(
+    'corporation_tax_rates',
+    supabase.from('corporation_tax_rates').insert(
+      [fyYear - 1, fyYear].map(year => ({
+        financial_year: year,
+        starts_on: iso(Date.UTC(year, 3, 1)),
+        ends_on: iso(Date.UTC(year + 1, 2, 31)),
+        small_profits_rate: 0.19,
+        main_rate: 0.25,
+        lower_limit: 50000,
+        upper_limit: 250000,
+        marginal_relief_fraction: 0.015,
+      }))
+    )
+  );
+
+  const journals: LedgerJournal[] = [
+    ...FIXED_JOURNALS,
+    ...Array.from({ length: BANK_FEED_JOURNAL_COUNT }, (_, i) =>
+      bankFeedJournal(i, txnRows[i] as never)
+    ),
+    // Drafts the automation could not categorise: one line on 8090 (uncategorised), one on cash.
+    ...Array.from({ length: DRAFT_COUNT }, (_, i): LedgerJournal => {
+      const index = BANK_FEED_JOURNAL_COUNT + 2 + i;
+      const amount = Number(txnRows[index].amount);
+      return {
+        key: `d${i + 1}`,
+        period: 'current',
+        offsetDays: 0,
+        type: 'expense',
+        status: 'draft',
+        description: String(txnRows[index].description),
+        sourceType: 'financial_transaction',
+        txnIndex: index,
+        lines: [
+          { account: '8090', debit: amount },
+          { account: '1010', credit: amount },
+        ],
+      };
+    }),
+  ];
+  const dated: Journalled[] = journals.map(journal => {
+    let ms: number;
+    if (journal.txnIndex !== undefined) {
+      ms = new Date(String(txnRows[journal.txnIndex].occurred_at)).getTime();
+    } else {
+      ms = Math.min(periodDates[journal.period].start + journal.offsetDays * 86_400_000, yesterday);
+    }
+    return { journal, date: iso(ms) };
+  });
+  const journalRows = dated.map(({ journal, date }) => ({
+    entity_id: entityId,
+    journal_date: `${date}T12:00:00Z`,
+    journal_type: journal.type,
+    description: journal.description,
+    source_type: journal.sourceType,
+    source_id: journal.txnIndex !== undefined ? txnInserted[journal.txnIndex].id : null,
+    status: journal.status,
+    posted_at: journal.status === 'draft' ? null : `${date}T12:00:00Z`,
+    metadata: journal.status === 'draft' ? { reason: 'uncategorised' } : {},
+  }));
+  const insertedJournals = await insertChunked<{ id: string }>(
+    'journals',
+    'journals',
+    journalRows,
+    'id'
+  );
+  await insertChunked(
+    'journal_line_items',
+    'journal_line_items',
+    dated.flatMap(({ journal, date }, i) =>
+      journal.lines.map(l => ({
+        journal_id: insertedJournals[i].id,
+        account_id: gl[l.account],
+        debit: l.debit ?? 0,
+        credit: l.credit ?? 0,
+        currency: 'GBP',
+        description: journal.description,
+        effective_date: `${date}T12:00:00Z`,
+      }))
+    ),
+    'id'
+  );
+
+  const accountType = Object.fromEntries(ACCOUNTS.map(a => [a[0], a[2]]));
+  const range = (which: 'previous' | 'current') => ({
+    from: iso(periodDates[which].start),
+    to: iso(periodDates[which].end),
+  });
+  const countOf = (pred: (j: LedgerJournal) => boolean) => journals.filter(pred).length;
+  const ledger = {
+    currentLabel: periodLabel(periodDates.current.end),
+    previousLabel: periodLabel(periodDates.previous.end),
+    currentFrom: range('current').from,
+    currentTo: range('current').to,
+    previousFrom: range('previous').from,
+    previousTo: range('previous').to,
+    current: expectedFigures(dated, accountType, range('current')),
+    previous: expectedFigures(dated, accountType, range('previous')),
+    all: expectedFigures(dated, accountType, {}),
+    balanceSheet: expectedBalanceSheet(dated, accountType),
+    journalCount: journals.length,
+    posted: countOf(j => j.status === 'posted'),
+    drafts: countOf(j => j.status === 'draft'),
+    reversed: countOf(j => j.status === 'reversed'),
+    manual: countOf(j => j.sourceType === 'manual'),
+    bankFeedJournals: BANK_FEED_JOURNAL_COUNT,
+    draftDescriptions: journals.filter(j => j.status === 'draft').map(j => j.description),
+    reversedDescription: 'Posted in error, reversed',
+    manualDescription: 'Reclassify marketing to materials',
+    tax: {
+      // Profit of the closed year, taxed at the small-profits rate (it is under the lower limit).
+      previousProfit: expectedFigures(dated, accountType, range('previous')).profit,
+      previousTax: money(expectedFigures(dated, accountType, range('previous')).profit * 0.19),
+    },
+  };
+
   // 7. Manifest: what the tests may assert on.
   const manifest = {
     entityName: ENTITY_NAME,
@@ -1281,6 +1430,7 @@ async function main() {
     customerStats: customerSummary,
     products: productSummary,
     rival,
+    ledger,
     seededAt: new Date().toISOString(),
   };
   mkdirSync(path.dirname(MANIFEST_FILE), { recursive: true });
