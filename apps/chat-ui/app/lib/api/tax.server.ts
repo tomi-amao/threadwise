@@ -16,6 +16,7 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { fetchAllRows } from './paginate.server';
 
 // VAT registration becomes compulsory once taxable turnover in any rolling
 // 12-month window exceeds this. Checked monthly, not at year end.
@@ -360,14 +361,23 @@ export async function getTaxData(supabase: SupabaseClient): Promise<TaxData> {
   const windowStartStr = windowStart.toISOString().slice(0, 10);
   const windowEndStr = now.toISOString().slice(0, 10);
 
-  const { data: vatRows } = await supabase
-    .from('orders')
-    .select('grand_total_amount, created_at, status')
-    .gte('created_at', windowStartStr);
+  // Read in full: a plain select() stops at the API's 1,000 rows, which would under-state turnover
+  // for any shop with more than 1,000 orders in the year (the threshold test would then pass when it
+  // should not).
+  const vatRows = await fetchAllRows<{ grand_total_amount: number | null; status: string }>(
+    'orders',
+    (from, to) =>
+      supabase
+        .from('orders')
+        .select('grand_total_amount, status')
+        .gte('created_at', windowStartStr)
+        .order('id')
+        .range(from, to)
+  );
 
-  const rollingTurnover = (vatRows || [])
-    .filter((o: any) => o.status !== 'cancelled')
-    .reduce((sum: number, o: any) => sum + Number(o.grand_total_amount || 0), 0);
+  const rollingTurnover = vatRows
+    .filter(o => o.status !== 'cancelled')
+    .reduce((sum, o) => sum + Number(o.grand_total_amount || 0), 0);
 
   const vat: VatPosition = {
     registered: Boolean(entityRow.vat_registered),

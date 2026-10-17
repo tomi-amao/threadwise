@@ -280,3 +280,75 @@ export async function findTxnIds(description: string, limit = 5): Promise<string
   );
   return rows.map(r => r.id);
 }
+
+// ─── Tax (periods, adjustments and company details a test may change) ───────────────────────────
+
+export interface TaxSnapshot {
+  periods: { id: string; status: string; filed_at: string | null }[];
+  adjustmentIds: string[];
+  entity: {
+    id: string;
+    company_number: string | null;
+    tax_reference: string | null;
+    vat_registered: boolean | null;
+    vat_number: string | null;
+  };
+}
+
+export async function snapshotTax(entityName: string): Promise<TaxSnapshot> {
+  const [periods, adjustments, entities] = await Promise.all([
+    rest<TaxSnapshot['periods']>('GET', 'accounting_periods', 'select=id,status,filed_at'),
+    rest<{ id: string }[]>('GET', 'tax_adjustments', 'select=id'),
+    rest<TaxSnapshot['entity'][]>(
+      'GET',
+      'entities',
+      `select=id,company_number,tax_reference,vat_registered,vat_number&name=eq.${encodeURIComponent(entityName)}`
+    ),
+  ]);
+  return { periods, adjustmentIds: adjustments.map(a => a.id), entity: entities[0] };
+}
+
+export async function restoreTax(before: TaxSnapshot): Promise<void> {
+  const keep = new Set(before.adjustmentIds);
+  const now = await rest<{ id: string }[]>('GET', 'tax_adjustments', 'select=id');
+  for (const row of now) {
+    if (!keep.has(row.id)) await rest('DELETE', 'tax_adjustments', `id=eq.${row.id}`);
+  }
+  for (const p of before.periods) {
+    await rest('PATCH', 'accounting_periods', `id=eq.${p.id}`, {
+      status: p.status,
+      filed_at: p.filed_at,
+    });
+  }
+  const { id, ...fields } = before.entity;
+  await rest('PATCH', 'entities', `id=eq.${id}`, fields);
+}
+
+/** Read the live tax data the way the app does, for checking what a test wrote. */
+export async function readAdjustments(): Promise<
+  { id: string; direction: string; amount: number; source: string; description: string }[]
+> {
+  return rest(
+    'GET',
+    'tax_adjustments',
+    'select=id,direction,amount,source,description&source=eq.manual'
+  );
+}
+
+export async function readPeriod(label: string) {
+  const rows = await rest<{ id: string; status: string }[]>(
+    'GET',
+    'accounting_periods',
+    `select=id,status&label=eq.${encodeURIComponent(label)}`
+  );
+  return rows[0];
+}
+
+export async function readEntityTax(id: string) {
+  const rows = await rest<TaxSnapshot['entity'][]>(
+    'GET',
+    'entities',
+    `select=id,company_number,tax_reference,vat_registered,vat_number&id=eq.${id}`
+  );
+  return rows[0];
+}
