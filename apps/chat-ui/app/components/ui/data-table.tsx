@@ -40,7 +40,9 @@ export function DataTable({
       aria-label={label}
       tabIndex={0}
       className={cn(
-        'overflow-x-auto focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+        // relative: a screen-reader-only header inside is positioned against this box, not the page,
+        // so it cannot widen the page when the table scrolls sideways.
+        'relative overflow-x-auto focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
         bare ? 'focus-visible:ring-inset' : 'rounded-[var(--radius)] border bg-card',
         className
       )}

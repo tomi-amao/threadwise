@@ -352,3 +352,54 @@ export async function readEntityTax(id: string) {
   );
   return rows[0];
 }
+
+// ─── Journals (for tests that write, post and reverse journals) ────────────────────────────────
+
+export interface JournalSnapshot {
+  journals: { id: string; status: string; posted_at: string | null }[];
+  lines: { id: string; account_id: string }[];
+}
+
+export async function snapshotJournals(): Promise<JournalSnapshot> {
+  const [journals, lines] = await Promise.all([
+    rest<JournalSnapshot['journals']>('GET', 'journals', 'select=id,status,posted_at&limit=5000'),
+    rest<JournalSnapshot['lines']>('GET', 'journal_line_items', 'select=id,account_id&limit=20000'),
+  ]);
+  return { journals, lines };
+}
+
+/** Put every changed journal and line back, and remove journals a test wrote. */
+export async function restoreJournals(before: JournalSnapshot): Promise<void> {
+  const now = await snapshotJournals();
+  const was = new Map(before.journals.map(j => [j.id, j]));
+  for (const j of now.journals) {
+    const original = was.get(j.id);
+    if (!original) {
+      await rest('DELETE', 'journal_line_items', `journal_id=eq.${j.id}`);
+      await rest('DELETE', 'journals', `id=eq.${j.id}`);
+    } else if (original.status !== j.status || original.posted_at !== j.posted_at) {
+      await rest('PATCH', 'journals', `id=eq.${j.id}`, {
+        status: original.status,
+        posted_at: original.posted_at,
+      });
+    }
+  }
+  const lineWas = new Map(before.lines.map(l => [l.id, l.account_id]));
+  for (const l of now.lines) {
+    if (lineWas.has(l.id) && lineWas.get(l.id) !== l.account_id) {
+      await rest('PATCH', 'journal_line_items', `id=eq.${l.id}`, { account_id: lineWas.get(l.id) });
+    }
+  }
+}
+
+export async function readJournalsByDescription(description: string) {
+  return rest<{ id: string; status: string; source_type: string | null }[]>(
+    'GET',
+    'journals',
+    `select=id,status,source_type&description=eq.${encodeURIComponent(description)}`
+  );
+}
+
+export async function readJournalByDescription(description: string) {
+  return (await readJournalsByDescription(description))[0];
+}

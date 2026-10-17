@@ -8,6 +8,9 @@
  *   PATCH  /accounting/invoices/{id}               notes, direction, line accounts
  *   POST   /accounting/invoices/{id}/stock         record stock movements for purchase lines
  *   DELETE /accounting/invoices/{id}               remove a draft
+ *   POST   /accounting/journals/{id}/reverse       take a posted journal out of the books (Journals)
+ *   POST   /accounting/journals/{id}/post-draft    choose a draft's account and post it
+ *   POST   /accounting/journals/suggest-accounts   a guess at the account for each draft
  *
  * The real endpoints also post journals and enforce the lifecycle rules; those are tested in
  * the agent's own suite (tests/test_invoice_rules.py, tests/test_invoice_service.py). This
@@ -15,6 +18,9 @@
  * and refuses to run unless Supabase is the local stack. It mimics two refusals so the pages'
  * error handling can be exercised: finalising an invoice dated before the 2026 accounting
  * cutoff, and deleting an invoice that is not a draft.
+ *
+ * Journals: reversing a journal dated inside a closed or filed accounting period is refused with
+ * a 409, as the real agent does when the period lock trips.
  *
  * Inventory: a quantity above 1,000 is refused with a 422.
  */
@@ -256,6 +262,103 @@ async function deleteInvoice(res: import('node:http').ServerResponse, id: string
   send(res, 200, { success: true, deleted: true });
 }
 
+async function reverseJournal(res: import('node:http').ServerResponse, id: string) {
+  const { data: journal } = await supabase
+    .from('journals')
+    .select('id, entity_id, status, journal_date')
+    .eq('id', id)
+    .maybeSingle();
+  if (!journal) return send(res, 404, { detail: 'Journal not found' });
+  if (journal.status !== 'posted')
+    return send(res, 400, { detail: 'Only posted journals can be reversed' });
+  const day = String(journal.journal_date).slice(0, 10);
+  const { data: locked } = await supabase
+    .from('accounting_periods')
+    .select('end_date')
+    .eq('entity_id', journal.entity_id)
+    .in('status', ['closed', 'filed'])
+    .lte('start_date', day)
+    .gte('end_date', day)
+    .limit(1);
+  if (locked && locked.length > 0) {
+    return send(res, 409, {
+      detail: `Accounting period is locked through ${locked[0].end_date}: cannot reverse a journal dated ${day}.`,
+    });
+  }
+  await supabase.from('journals').update({ status: 'reversed' }).eq('id', id);
+  send(res, 200, { id, status: 'reversed' });
+}
+
+async function postDraftJournal(
+  req: import('node:http').IncomingMessage,
+  res: import('node:http').ServerResponse,
+  id: string
+) {
+  const body = await readJson<{ account_id?: string }>(req);
+  const { data: journal } = await supabase
+    .from('journals')
+    .select('id, status')
+    .eq('id', id)
+    .maybeSingle();
+  if (!journal) return send(res, 404, { detail: 'Journal not found' });
+  if (journal.status !== 'draft')
+    return send(res, 400, { detail: 'Only draft journals can be posted' });
+  const { data: fallback } = await supabase
+    .from('chart_of_accounts')
+    .select('id')
+    .eq('account_number', 8090)
+    .limit(1);
+  const fallbackId = fallback?.[0]?.id;
+  const { data: lines } = await supabase
+    .from('journal_line_items')
+    .select('id, account_id')
+    .eq('journal_id', id);
+  const target = (lines ?? []).find(l => l.account_id === fallbackId);
+  if (!target || !body.account_id) return send(res, 400, { detail: 'Nothing to recategorise' });
+  await supabase
+    .from('journal_line_items')
+    .update({ account_id: body.account_id })
+    .eq('id', target.id);
+  await supabase
+    .from('journals')
+    .update({ status: 'posted', posted_at: new Date().toISOString() })
+    .eq('id', id);
+  send(res, 200, { id, status: 'posted' });
+}
+
+async function suggestAccounts(
+  req: import('node:http').IncomingMessage,
+  res: import('node:http').ServerResponse
+) {
+  const body = await readJson<{ journal_ids?: string[] }>(req);
+  const { data: journals } = await supabase
+    .from('journals')
+    .select('id, description')
+    .in('id', body.journal_ids ?? []);
+  const { data: accounts } = await supabase
+    .from('chart_of_accounts')
+    .select('id, account_number')
+    .in('account_number', [6300, 6500]);
+  const idOf = (n: number) => accounts?.find(a => Number(a.account_number) === n)?.id ?? null;
+  const suggestions: Record<string, unknown> = {};
+  for (const j of journals ?? []) {
+    const text = String(j.description ?? '').toLowerCase();
+    const account = text.includes('ad ')
+      ? idOf(6500)
+      : text.includes('postage')
+        ? idOf(6300)
+        : null;
+    suggestions[j.id] = {
+      account_id: account,
+      confidence: account ? 0.8 : 0,
+      reasoning: account
+        ? 'Looks like a stand-in guess from the description'
+        : 'No confident match',
+    };
+  }
+  send(res, 200, { suggestions });
+}
+
 function send(res: import('node:http').ServerResponse, status: number, body: unknown) {
   res.writeHead(status, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify(body));
@@ -309,6 +412,17 @@ createServer(async (req, res) => {
     if (req.method === 'POST' && suffix === '/stock') return applyStock(req, res, id);
     if (req.method === 'PATCH' && !suffix) return updateInvoice(req, res, id);
     if (req.method === 'DELETE' && !suffix) return deleteInvoice(res, id);
+  }
+
+  if (req.method === 'POST' && req.url === '/accounting/journals/suggest-accounts') {
+    return suggestAccounts(req, res);
+  }
+  const journalRoute = /^\/accounting\/journals\/([0-9a-f-]{36})\/(reverse|post-draft)$/.exec(
+    req.url ?? ''
+  );
+  if (req.method === 'POST' && journalRoute) {
+    const [, id, verb] = journalRoute;
+    return verb === 'reverse' ? reverseJournal(res, id) : postDraftJournal(req, res, id);
   }
 
   send(res, 404, { detail: 'Not found' });

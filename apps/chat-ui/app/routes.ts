@@ -54,7 +54,6 @@ export default [
   route('api/customers', 'routes/api.customers.tsx'),
   route('api/products', 'routes/api.products.tsx'),
   route('api/reclassification', 'routes/api.reclassification.tsx'),
-  route('api/journals', 'routes/api.journals.tsx'),
   route('api/inventory', 'routes/api.inventory.tsx'),
   route('api/reports/account-drilldown', 'routes/api.reports.account-drilldown.tsx'),
   route('api/reports/cash-flow-pack', 'routes/api.reports.cash-flow-pack.tsx'),
