@@ -16,6 +16,7 @@ export function DataTable({
   label,
   bare = false,
   dense = false,
+  surface = 'card',
   className,
   children,
 }: {
@@ -25,6 +26,11 @@ export function DataTable({
   bare?: boolean;
   /** Tighter rows, for tables that share a screen with other panels. */
   dense?: boolean;
+  /**
+   * 'page': rows sit on the page's own background (a faint warm white in light mode) and the header is a
+   * tinted band, so it reads as a header. The parent supplies the frame.
+   */
+  surface?: 'card' | 'page';
   className?: string;
   children: React.ReactNode;
 }) {
@@ -45,6 +51,7 @@ export function DataTable({
           dense ? '[&_th]:py-2.5 [&_td]:py-2.5' : '[&_th]:py-3.5 [&_td]:py-4',
           '[&_th]:whitespace-nowrap [&_th]:border-b [&_th]:px-4 [&_th]:font-mono [&_th]:text-xs [&_th]:font-normal [&_th]:uppercase [&_th]:tracking-[0.08em] [&_th]:text-muted-foreground',
           '[&_th:not([class*=text-right])]:text-left',
+          surface === 'page' && '[&_th]:border-b-border-strong [&_th]:bg-muted [&_th]:text-text-2',
           '[&_td]:border-b [&_td]:px-4 [&_td]:align-middle',
           '[&_th:first-child]:pl-6 [&_td:first-child]:pl-6 [&_th:last-child]:pr-6 [&_td:last-child]:pr-6',
           '[&_tbody_tr:last-child_td]:border-b-0 [&_tbody_tr:hover_td]:bg-accent',

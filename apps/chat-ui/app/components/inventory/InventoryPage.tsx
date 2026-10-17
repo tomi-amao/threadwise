@@ -130,7 +130,7 @@ function StockTable({
   selected: string | null;
 }) {
   return (
-    <DataTable label="Stock levels" bare>
+    <DataTable label="Stock levels" bare surface="page">
       <thead>
         <tr>
           <th>Item</th>
@@ -197,7 +197,7 @@ function ItemsTable({
   selected: string | null;
 }) {
   return (
-    <DataTable label="Inventory items" bare>
+    <DataTable label="Inventory items" bare surface="page">
       <thead>
         <tr>
           <th>Item</th>
@@ -519,10 +519,20 @@ export function InventoryPage({ data }: { data: InventoryPageData }) {
                 key={f.key}
                 type="button"
                 onClick={() => jump(f)}
-                className="rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                className="group cursor-pointer rounded-full transition-all hover:-translate-y-px hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               >
-                <Chip tone={f.key === 'oversold' ? 'negative' : 'active'} dot>
+                <Chip
+                  tone={f.key === 'oversold' ? 'negative' : 'active'}
+                  dot
+                  className="border-current/40 pr-2 group-hover:border-current"
+                >
                   {f.count} {f.label}
+                  <ArrowRight
+                    size={12}
+                    weight="bold"
+                    aria-hidden
+                    className="transition-transform group-hover:translate-x-0.5"
+                  />
                 </Chip>
               </button>
             ))}
@@ -590,7 +600,7 @@ export function InventoryPage({ data }: { data: InventoryPageData }) {
         <div
           role="tabpanel"
           aria-labelledby={tabId(tab)}
-          className="overflow-hidden rounded-2xl border bg-card"
+          className="overflow-hidden rounded-2xl border bg-row"
         >
           {empty ? (
             <EmptyState
@@ -609,7 +619,7 @@ export function InventoryPage({ data }: { data: InventoryPageData }) {
           ) : tab === 'items' ? (
             <ItemsTable rows={slice(itemRows)} onOpen={openItem} selected={selectedId} />
           ) : tab === 'movements' ? (
-            <DataTable label="Inventory movements" bare>
+            <DataTable label="Inventory movements" bare surface="page">
               <thead>
                 <tr>
                   <th>Date</th>
@@ -648,7 +658,7 @@ export function InventoryPage({ data }: { data: InventoryPageData }) {
               </tbody>
             </DataTable>
           ) : (
-            <DataTable label="Valuation by item" bare>
+            <DataTable label="Valuation by item" bare surface="page">
               <thead>
                 <tr>
                   <th>Item</th>

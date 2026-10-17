@@ -414,7 +414,7 @@ export function TransactionsPage() {
         <div
           aria-busy={loading}
           className={cn(
-            'overflow-hidden rounded-2xl border bg-card transition-opacity',
+            'overflow-hidden rounded-2xl border bg-row transition-opacity',
             loading && load.data && 'opacity-60'
           )}
         >

@@ -53,6 +53,8 @@
   --plum-tint: #a98fc426;
   --income: #5f4682;
   --border-strong: #58436c38;
+  /* Table rows: a hair warmer than the white page, lighter than the cream cards */
+  --row: #fdfaf6;
   --ramp-1: #f59520;
   --ramp-2: #f5b465;
   --ramp-3: #f4c690;
@@ -98,6 +100,7 @@
   --plum-tint: #a98fc426;
   --income: #b9a2d4;
   --border-strong: #ffffff26;
+  --row: #191a1c;
   --ramp-1: #f59520;
   --ramp-2: #c27a1f;
   --ramp-3: #8f5d1f;
@@ -155,6 +158,7 @@
   --color-plum-tint: var(--plum-tint);
   --color-income: var(--income);
   --color-border-strong: var(--border-strong);
+  --color-row: var(--row);
   --color-ramp-1: var(--ramp-1);
   --color-ramp-2: var(--ramp-2);
   --color-ramp-3: var(--ramp-3);
