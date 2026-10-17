@@ -32,7 +32,6 @@ export default [
     route('chat', 'routes/app.chat.tsx'),
     route('invoices', 'routes/app.invoices.tsx'),
     route('transactions', 'routes/app.transactions.tsx'),
-    route('transactions-v2', 'routes/app.transactions-v2.tsx'),
     route('collections', 'routes/app.collections.tsx'),
     route('collections-v2', 'routes/app.collections-v2.tsx'),
     route('reports', 'routes/app.reports.tsx'),

@@ -19,7 +19,7 @@ export function KpiTile({
   caption?: React.ReactNode;
   /** Values over time, oldest first. Omit for a tile with no trend. */
   trend?: number[];
-  tone?: 'default' | 'negative';
+  tone?: 'default' | 'negative' | 'income';
 }) {
   return (
     <div className="flex min-w-0 flex-col rounded-2xl border bg-card px-5 py-4">
@@ -27,7 +27,8 @@ export function KpiTile({
       <div
         className={cn(
           'mt-2 min-w-0 truncate font-serif text-[clamp(24px,2.1vw,32px)] tabular-nums',
-          tone === 'negative' && 'text-destructive'
+          tone === 'negative' && 'text-destructive',
+          tone === 'income' && 'text-income'
         )}
       >
         {value}

@@ -20,6 +20,7 @@ import { computePosition, autoUpdate, offset, flip, shift, size } from '@floatin
 import { DismissableLayerBranch } from '@radix-ui/react-dismissable-layer';
 import { FocusScope } from '@radix-ui/react-focus-scope';
 import { CaretDown, Check, MagnifyingGlass, X } from 'phosphor-react';
+import { cn } from '~/lib/utils';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -44,6 +45,8 @@ export interface SearchableSelectProps {
   searchable?: boolean;
   /** Extra className applied to the trigger button */
   className?: string;
+  /** Accessible name for the trigger when there is no visible <label> for it */
+  'aria-label'?: string;
   disabled?: boolean;
   /** Custom renderer for each option row */
   renderOption?: (option: SelectOption, isSelected: boolean) => React.ReactNode;
@@ -70,6 +73,7 @@ export function SearchableSelect({
   renderOption,
   renderValue,
   stopPropagation = false,
+  'aria-label': ariaLabel,
 }: SearchableSelectProps) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
@@ -296,8 +300,7 @@ export function SearchableSelect({
   const groupedFiltered = useMemo(() => {
     // Returns entries: { type: 'group', label } | { type: 'option', option, idx }
     type Entry =
-      | { type: 'group'; label: string }
-      | { type: 'option'; option: SelectOption; idx: number };
+      { type: 'group'; label: string } | { type: 'option'; option: SelectOption; idx: number };
 
     const entries: Entry[] = [];
     let lastGroup: string | undefined = undefined;
@@ -436,7 +439,11 @@ export function SearchableSelect({
         type="button"
         disabled={disabled}
         onClick={openDropdown}
-        className={`flex items-center gap-1.5 rounded-md border border-border bg-background text-sm focus:outline-none focus:ring-1 focus:ring-primary/60 disabled:opacity-50 disabled:cursor-not-allowed transition-colors hover:bg-muted/30 ${className}`}
+        aria-label={ariaLabel}
+        className={cn(
+          'flex items-center gap-1.5 rounded-md border border-border bg-background text-sm focus:outline-none focus:ring-1 focus:ring-primary/60 disabled:opacity-50 disabled:cursor-not-allowed transition-colors hover:bg-muted/30',
+          className
+        )}
       >
         <span className="flex-1 min-w-0 text-left">{triggerContent}</span>
         <CaretDown

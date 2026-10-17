@@ -66,7 +66,9 @@ export function Drawer({
               <X size={18} weight="light" />
             </Dialog.Close>
           </div>
-          <div className="flex flex-1 flex-col gap-5 overflow-y-auto px-7 py-5">{children}</div>
+          <div className="flex flex-1 flex-col gap-5 overflow-y-auto px-7 py-5 [&>*]:shrink-0">
+            {children}
+          </div>
           {footer && (
             <div className="flex justify-end gap-2.5 border-t border-border px-7 py-4">
               {footer}
