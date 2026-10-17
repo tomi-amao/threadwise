@@ -3,14 +3,15 @@
  *
  * What sells comes from order line items, so a product that has never been ordered is still a
  * product (the old page only listed products that had sold, which hid the ones that had not).
- * `order_line_items` and `orders` have no row-level security, so these read with the service
- * role and filter on `entityId` (from getUserEntity(), never from the request).
+ * Callers pass the signed-in user's Supabase client, so row-level security limits every read to
+ * their own business; each query also filters by `entityId` (from getUserEntity()) as a second
+ * layer.
  *
  * Revenue is line-item revenue for orders that were not cancelled, before any refunds (refunds
  * are recorded against the order, not the line).
  */
 
-import { getServerSupabaseClient } from '~/lib/supabase';
+import type { SupabaseClient } from '@supabase/supabase-js';
 import { fetchAllRows } from './paginate.server';
 
 export interface ProductRow {
@@ -63,8 +64,10 @@ export function imageUrls(metadata: { images?: unknown[] } | null): string[] {
 }
 
 /** Every product and what it has sold. Read in full: see paginate.server. */
-export async function getProducts(entityId: string): Promise<ProductRow[]> {
-  const supabase = getServerSupabaseClient();
+export async function getProducts(
+  supabase: SupabaseClient,
+  entityId: string
+): Promise<ProductRow[]> {
   const [products, orders, lines] = await Promise.all([
     fetchAllRows<ProductDbRow>('products', (from, to) =>
       supabase
@@ -192,10 +195,11 @@ export interface ProductDetail {
 }
 
 export async function getProductDetail(
+  supabase: SupabaseClient,
   entityId: string,
   productId: string
 ): Promise<ProductDetail | null> {
-  const { data, error } = await getServerSupabaseClient()
+  const { data, error } = await supabase
     .from('products')
     .select('id, name, provider, status, product_type, metadata, variants, created_at')
     .eq('id', productId)

@@ -184,11 +184,12 @@ test.describe('moving an invoice through its lifecycle', () => {
     await expect(page.getByText('Marked as paid')).toBeVisible();
     expect((await readInvoice(inv.overduePurchase))?.status).toBe('PAID');
 
-    // Escape goes to the topmost layer, so wait for the confirmation to be gone first.
+    // Wait for the confirmation to be gone, then close the drawer with its own button: Escape goes
+    // to the topmost layer, which can still be the confirmation while it animates out.
     await expect(
       page.getByRole('dialog').filter({ hasText: 'without a matched payment' })
     ).toHaveCount(0);
-    await page.keyboard.press('Escape');
+    await drawer.getByRole('button', { name: 'Close' }).click();
     await expect(tile(page, 'Overdue')).toContainText(String(inv.overdueCount - 1));
     await expect(tile(page, 'You owe')).toContainText(`${inv.youOweCount - 1} unpaid`);
   });

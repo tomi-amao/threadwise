@@ -6,6 +6,7 @@
 import type { LoaderFunctionArgs } from 'react-router';
 import { getCustomerDetail } from '~/lib/api/customers.server';
 import { getUserEntity } from '~/lib/api/entity.server';
+import { getRequestSupabaseClient } from '~/lib/supabase-server';
 
 const json = (data: unknown, status = 200) =>
   new Response(JSON.stringify(data), {
@@ -19,7 +20,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
   try {
     const entity = await getUserEntity(request);
     if (!entity) return json({ ok: false, error: 'Sign in to view customers' }, 401);
-    const detail = await getCustomerDetail(entity.id, id);
+    const detail = await getCustomerDetail(getRequestSupabaseClient(request), entity.id, id);
     if (!detail) return json({ ok: false, error: 'Customer not found' }, 404);
     return json({ ok: true, detail });
   } catch (error) {

@@ -1,12 +1,13 @@
 /**
  * Orders: server-side reads.
  *
- * `orders`, `order_line_items` and `payments` have no row-level security, so these read with the
- * service role. Every query is filtered by `entityId`, which callers take from
- * getUserEntity() (the signed-in user's own business), never from the request.
+ * Callers pass the signed-in user's Supabase client, so row-level security limits every read to
+ * their own business. Each query also filters by `entityId` (from getUserEntity()), a second
+ * layer that keeps the intent visible and stops one business's rows being mixed into another's
+ * totals should a policy ever be loosened.
  */
 
-import { getServerSupabaseClient } from '~/lib/supabase';
+import type { SupabaseClient } from '@supabase/supabase-js';
 import { fetchAllRows } from './paginate.server';
 
 export interface OrderRow {
@@ -41,8 +42,7 @@ const name = (c: OrderDbRow['customers']): string | null =>
   c ? [c.first_name, c.last_name].filter(Boolean).join(' ') || null : null;
 
 /** Every order for the business, newest first. Read in full: see paginate.server. */
-export async function getOrders(entityId: string): Promise<OrderRow[]> {
-  const supabase = getServerSupabaseClient();
+export async function getOrders(supabase: SupabaseClient, entityId: string): Promise<OrderRow[]> {
   const rows = await fetchAllRows<OrderDbRow>('orders', (from, to) =>
     supabase
       .from('orders')
@@ -109,10 +109,10 @@ export interface OrderDetail {
 
 /** One order with its lines and payments, or null if it is not this business's. */
 export async function getOrderDetail(
+  supabase: SupabaseClient,
   entityId: string,
   orderId: string
 ): Promise<OrderDetail | null> {
-  const supabase = getServerSupabaseClient();
   const { data, error } = await supabase
     .from('orders')
     .select(

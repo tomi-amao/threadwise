@@ -28,6 +28,7 @@ import {
   type OwnedInvoice,
 } from '~/lib/api/invoices.server';
 import { getServerSupabaseClient } from '~/lib/supabase';
+import { getRequestSupabaseClient } from '~/lib/supabase-server';
 import type { StockDecision } from '~/types/invoice';
 
 const MAX_FILE_BYTES = 10 * 1024 * 1024;
@@ -88,7 +89,7 @@ export async function action({ request }: ActionFunctionArgs) {
 
     switch (intent) {
       case 'setStatus':
-        return await setStatus(invoice, form);
+        return await setStatus(request, invoice, form);
       case 'update':
         return await update(invoice, form);
       case 'stock':
@@ -156,14 +157,18 @@ async function upload(request: Request, form: FormData) {
   }
 }
 
-async function setStatus(invoice: OwnedInvoice, form: FormData) {
+async function setStatus(request: Request, invoice: OwnedInvoice, form: FormData) {
   const status = String(form.get('status') ?? '').toUpperCase();
   if (!STATUSES.includes(status)) return fail('Unknown status', 400);
 
   // Marking paid clears the payable against the bank. Without an imported payment the agent
   // cannot say which account the money left, so ask for a deliberate go-ahead.
   if (status === 'PAID' && invoice.status !== 'PAID' && form.get('confirmUnmatched') !== '1') {
-    const matched = await findMatchingTransaction(invoice.invoice_number, invoice.entity_id);
+    const matched = await findMatchingTransaction(
+      getRequestSupabaseClient(request),
+      invoice.invoice_number,
+      invoice.entity_id
+    );
     if (!matched) {
       return fail(
         'No bank payment has been matched to this invoice yet. Import the payment first, or ' +

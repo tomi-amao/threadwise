@@ -1,14 +1,15 @@
 /**
  * Customers: server-side reads.
  *
- * `customers` and `orders` have no row-level security, so these read with the service role and
- * filter every query on `entityId` (taken from getUserEntity(), never from the request).
+ * Callers pass the signed-in user's Supabase client, so row-level security limits every read to
+ * their own business. Each query also filters by `entityId` (from getUserEntity()) as a second
+ * layer.
  *
  * A customer's figures come from their orders: cancelled orders do not count and refunds are
  * taken off, the same rule the Orders page uses for "Sales".
  */
 
-import { getServerSupabaseClient } from '~/lib/supabase';
+import type { SupabaseClient } from '@supabase/supabase-js';
 import { fetchAllRows } from './paginate.server';
 
 export interface CustomerRow {
@@ -43,8 +44,10 @@ export const displayName = (c: Pick<CustomerDbRow, 'first_name' | 'last_name' | 
   [c.first_name, c.last_name].filter(Boolean).join(' ') || c.email || 'Unknown customer';
 
 /** Every customer, with what they have ordered. Read in full: see paginate.server. */
-export async function getCustomers(entityId: string): Promise<CustomerRow[]> {
-  const supabase = getServerSupabaseClient();
+export async function getCustomers(
+  supabase: SupabaseClient,
+  entityId: string
+): Promise<CustomerRow[]> {
   const [customers, orders] = await Promise.all([
     fetchAllRows<CustomerDbRow>('customers', (from, to) =>
       supabase
@@ -113,10 +116,10 @@ export interface CustomerDetail {
 }
 
 export async function getCustomerDetail(
+  supabase: SupabaseClient,
   entityId: string,
   customerId: string
 ): Promise<CustomerDetail | null> {
-  const supabase = getServerSupabaseClient();
   const { data: c, error } = await supabase
     .from('customers')
     .select('id, email, first_name, last_name, phone, created_at')
@@ -164,7 +167,7 @@ export async function getCustomerDetail(
     }
   }
 
-  const stats = (await getCustomers(entityId)).find(r => r.id === customerId);
+  const stats = (await getCustomers(supabase, entityId)).find(r => r.id === customerId);
   return {
     customer: {
       ...(stats ?? {

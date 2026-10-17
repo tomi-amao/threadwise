@@ -1,11 +1,11 @@
 /**
  * Invoices: server-side reads and the call to the AI agent.
  *
- * Reads run as the signed-in user (cookie session), so row-level security decides which
- * invoices they can see. Anything the user's session cannot read (journals, chart of accounts,
- * stock movements: no RLS policies for them) is read with the service client, but only after
- * the invoice itself has been fetched as the user, so the entity always comes from a row the
- * user is allowed to see, never from the request.
+ * Every read runs as the signed-in user (cookie session), so row-level security decides what
+ * they can see: their invoices, and the journals, stock movements, payments and chart of
+ * accounts around them. The service-role client is only used for the document store (Storage),
+ * and only after the invoice has been fetched as the user, so the entity and file always come
+ * from a row the user is allowed to see, never from the request.
  *
  * Writes that touch the ledger go to the agent (see api.invoices.tsx), never straight to
  * Postgres.
@@ -104,16 +104,15 @@ export async function getInvoiceDetail(
     // The table has no line number, so a stable order needs a tiebreak on something fixed.
     .sort((a, b) => a.id.localeCompare(b.id));
 
-  const service = getServerSupabaseClient();
   const entityId = invoice.entity_id;
   const [journals, matched, stocked, accounts, products] = await Promise.all([
-    readJournals(service, entityId, invoiceId),
-    findMatchingTransaction(invoice.invoice_number, entityId),
+    readJournals(user, entityId, invoiceId),
+    findMatchingTransaction(user, invoice.invoice_number, entityId),
     readStockedLines(
-      service,
+      user,
       lines.map(l => l.id)
     ),
-    readGlAccounts(service),
+    readGlAccounts(user),
     readProducts(user, entityId),
   ]);
 
@@ -128,8 +127,8 @@ export async function getInvoiceDetail(
   };
 }
 
-async function readJournals(service: SupabaseClient, entityId: string, invoiceId: string) {
-  const { data, error } = await service
+async function readJournals(supabase: SupabaseClient, entityId: string, invoiceId: string) {
+  const { data, error } = await supabase
     .from('journals')
     .select('id, journal_type, journal_date, status')
     .eq('entity_id', entityId)
@@ -141,9 +140,9 @@ async function readJournals(service: SupabaseClient, entityId: string, invoiceId
   return data ?? [];
 }
 
-async function readStockedLines(service: SupabaseClient, lineIds: string[]): Promise<string[]> {
+async function readStockedLines(supabase: SupabaseClient, lineIds: string[]): Promise<string[]> {
   if (lineIds.length === 0) return [];
-  const { data, error } = await service
+  const { data, error } = await supabase
     .from('inventory_movements')
     .select('reference_id')
     .eq('reference_table', 'invoice_line_items')
@@ -154,8 +153,8 @@ async function readStockedLines(service: SupabaseClient, lineIds: string[]): Pro
 }
 
 /** The chart of accounts is shared by every business (it has no entity column). */
-async function readGlAccounts(service: SupabaseClient): Promise<GlAccountOption[]> {
-  const { data, error } = await service
+async function readGlAccounts(supabase: SupabaseClient): Promise<GlAccountOption[]> {
+  const { data, error } = await supabase
     .from('chart_of_accounts')
     .select('id, account_number, name, account_type')
     .eq('is_header', false)
@@ -183,11 +182,12 @@ async function readProducts(user: SupabaseClient, entityId: string) {
  * number into metadata.invoice_id). null means no match, a normal result; a failing query throws.
  */
 export async function findMatchingTransaction(
+  supabase: SupabaseClient,
   invoiceNumber: string,
   entityId: string
 ): Promise<string | null> {
   if (!invoiceNumber || !entityId) return null;
-  const { data, error } = await getServerSupabaseClient()
+  const { data, error } = await supabase
     .from('financial_transactions')
     .select('id')
     .eq('entity_id', entityId)

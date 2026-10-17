@@ -5,6 +5,7 @@
 
 import type { LoaderFunctionArgs } from 'react-router';
 import { getUserEntity } from '~/lib/api/entity.server';
+import { getRequestSupabaseClient } from '~/lib/supabase-server';
 import { getProductDetail } from '~/lib/api/products.server';
 
 const json = (data: unknown, status = 200) =>
@@ -19,7 +20,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
   try {
     const entity = await getUserEntity(request);
     if (!entity) return json({ ok: false, error: 'Sign in to view products' }, 401);
-    const detail = await getProductDetail(entity.id, id);
+    const detail = await getProductDetail(getRequestSupabaseClient(request), entity.id, id);
     if (!detail) return json({ ok: false, error: 'Product not found' }, 404);
     return json({ ok: true, detail });
   } catch (error) {
