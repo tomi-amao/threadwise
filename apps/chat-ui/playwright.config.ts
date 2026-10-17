@@ -1,4 +1,5 @@
 import { defineConfig, devices } from '@playwright/test';
+import type { ThemeOption } from './e2e/fixtures';
 import { AUTH_FILE, assertLocalSupabase, loadTestEnv, requireEnv } from './e2e/env';
 
 // Refuse to start at all unless Supabase is the local stack (see e2e/env.ts).
@@ -12,7 +13,7 @@ const BASE_URL = `http://localhost:${PORT}`;
 
 const desktop = { ...devices['Desktop Chrome'], viewport: { width: 1280, height: 900 } };
 
-export default defineConfig({
+export default defineConfig<{ theme: ThemeOption }>({
   testDir: './e2e',
   testMatch: /.*\.(spec|setup)\.ts/,
   fullyParallel: true,
@@ -28,32 +29,36 @@ export default defineConfig({
     screenshot: 'only-on-failure',
   },
 
+  // Every page test runs at three widths in both themes (design plan: full dark parity).
   projects: [
     { name: 'setup', testMatch: /auth\.setup\.ts/, use: desktop },
-    {
-      name: 'desktop',
-      testIgnore: /auth\.setup\.ts/,
-      dependencies: ['setup'],
-      use: { ...desktop, storageState: AUTH_FILE },
-    },
-    {
-      name: 'tablet',
-      testIgnore: /auth\.setup\.ts/,
-      dependencies: ['setup'],
-      use: { ...desktop, viewport: { width: 768, height: 1024 }, storageState: AUTH_FILE },
-    },
-    {
-      name: 'mobile',
-      testIgnore: /auth\.setup\.ts/,
-      dependencies: ['setup'],
-      use: {
-        ...desktop,
-        viewport: { width: 390, height: 844 },
-        isMobile: true,
-        hasTouch: true,
-        storageState: AUTH_FILE,
+    ...(['light', 'dark'] as const).flatMap(theme => [
+      {
+        name: `desktop-${theme}`,
+        testIgnore: /auth\.setup\.ts/,
+        dependencies: ['setup'],
+        use: { ...desktop, theme, storageState: AUTH_FILE },
       },
-    },
+      {
+        name: `tablet-${theme}`,
+        testIgnore: /auth\.setup\.ts/,
+        dependencies: ['setup'],
+        use: { ...desktop, viewport: { width: 768, height: 1024 }, theme, storageState: AUTH_FILE },
+      },
+      {
+        name: `mobile-${theme}`,
+        testIgnore: /auth\.setup\.ts/,
+        dependencies: ['setup'],
+        use: {
+          ...desktop,
+          viewport: { width: 390, height: 844 },
+          isMobile: true,
+          hasTouch: true,
+          theme,
+          storageState: AUTH_FILE,
+        },
+      },
+    ]),
   ],
 
   webServer: {
