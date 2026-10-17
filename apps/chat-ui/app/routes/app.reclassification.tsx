@@ -27,7 +27,8 @@ import {
   Link,
   X,
 } from 'phosphor-react';
-import { getServerSupabaseClient } from '~/lib/supabase';
+import { getUserEntity } from '~/lib/api/entity.server';
+import { getRequestSupabaseClient, requireUser } from '~/lib/supabase-server';
 import { cn } from '~/lib/utils';
 
 export const meta: MetaFunction = () => [
@@ -35,7 +36,6 @@ export const meta: MetaFunction = () => [
   { name: 'description', content: 'Temporary tools for inventory reclassification' },
 ];
 
-const ENTITY_ID = 'f49f608d-0868-4e63-b0bb-d4c60d74db68';
 const INCORP_DATE = '2023-04-12';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -121,8 +121,14 @@ async function paginateAll<T = any>(
 
 // ─── Loader ───────────────────────────────────────────────────────────────────
 
-export async function loader({ request: _request }: LoaderFunctionArgs) {
-  const supabase = getServerSupabaseClient();
+export async function loader({ request }: LoaderFunctionArgs) {
+  await requireUser(request);
+  // The business is the signed-in user's own (this page used to read one fixed business's books
+  // whoever was signed in), and every read below runs as the user, so row-level security applies.
+  const entity = await getUserEntity(request);
+  if (!entity) throw new Response('No business found for the current user', { status: 403 });
+  const ENTITY_ID = entity.id;
+  const supabase = getRequestSupabaseClient(request);
 
   // ── Step 1: Parallel base queries (all < 1000 rows, no pagination needed) ──
   const [productsRes, inventoryRes, coaRes, invoicesRes] = await Promise.all([
@@ -443,7 +449,6 @@ function ProductCostRow({ product }: { product: ProductCost }) {
         intent: 'upsertUnitCost',
         productId: product.id,
         inventoryItemId: product.inventoryItemId ?? '',
-        entityId: ENTITY_ID,
         unitCost: value,
       },
       { method: 'post', action: '/api/reclassification', encType: 'application/json' }

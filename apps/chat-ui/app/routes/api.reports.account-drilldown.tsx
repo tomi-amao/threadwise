@@ -1,5 +1,6 @@
 import type { LoaderFunctionArgs } from 'react-router';
 import { getAccountDrilldown, type ReportStatement } from '~/lib/api/reports.server';
+import { getRequestSupabaseClient, requireUser } from '~/lib/supabase-server';
 
 function json(data: unknown, init?: ResponseInit) {
   return new Response(JSON.stringify(data), {
@@ -24,8 +25,10 @@ export async function loader({ request }: LoaderFunctionArgs) {
     return json({ requestKey, error: 'statement must be pnl or balance' }, { status: 400 });
   }
 
+  await requireUser(request);
   try {
     const drilldown = await getAccountDrilldown({
+      supabase: getRequestSupabaseClient(request),
       accountId,
       statement: statement as ReportStatement,
       from,

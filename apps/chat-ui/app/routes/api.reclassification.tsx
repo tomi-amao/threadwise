@@ -6,7 +6,9 @@
  */
 
 import type { ActionFunctionArgs } from 'react-router';
+import { getUserEntity } from '~/lib/api/entity.server';
 import { getServerSupabaseClient } from '~/lib/supabase';
+import { getRequestSupabaseClient, requireUser } from '~/lib/supabase-server';
 
 function json(data: unknown, init?: ResponseInit) {
   return new Response(JSON.stringify(data), {
@@ -16,7 +18,15 @@ function json(data: unknown, init?: ResponseInit) {
 }
 
 export async function action({ request }: ActionFunctionArgs) {
-  const supabase = getServerSupabaseClient();
+  await requireUser(request);
+  // The business comes from the signed-in user's session, never from the request body. Reads and
+  // the inventory writes run as the user (row-level security limits them to their business);
+  // only the transaction write below is service-role, because users have no write policy on
+  // financial transactions, and it happens only after the user's session could read the row.
+  const entity = await getUserEntity(request);
+  if (!entity) return json({ error: 'No business found for the current user' }, { status: 403 });
+  const entityId = entity.id;
+  const supabase = getRequestSupabaseClient(request);
   let body: Record<string, string>;
 
   try {
@@ -31,7 +41,7 @@ export async function action({ request }: ActionFunctionArgs) {
     return json({ error: 'Invalid request body' }, { status: 400 });
   }
 
-  const { intent, productId, inventoryItemId, entityId, unitCost } = body;
+  const { intent, productId, inventoryItemId, unitCost } = body;
 
   if (intent === 'linkInvoice') {
     const { transactionId, invoiceId, invoiceNumber } = body;
@@ -47,8 +57,17 @@ export async function action({ request }: ActionFunctionArgs) {
     if (fetchErr || !ft)
       return json({ error: fetchErr?.message ?? 'Transaction not found' }, { status: 404 });
 
+    // The invoice has to be this user's too: a number written onto a transaction is how an
+    // invoice is later found to be paid.
+    const { data: invoice } = await supabase
+      .from('invoices')
+      .select('id')
+      .eq('id', invoiceId)
+      .maybeSingle();
+    if (!invoice) return json({ error: 'Invoice not found' }, { status: 404 });
+
     const updatedMetadata = { ...(ft.metadata ?? {}), invoice_id: invoiceNumber ?? invoiceId };
-    const { error: updateErr } = await supabase
+    const { error: updateErr } = await getServerSupabaseClient()
       .from('financial_transactions')
       .update({ metadata: updatedMetadata })
       .eq('id', transactionId);
@@ -66,19 +85,29 @@ export async function action({ request }: ActionFunctionArgs) {
     return json({ error: 'unitCost must be a non-negative number' }, { status: 400 });
   }
 
-  if (!productId || !entityId) {
-    return json({ error: 'productId and entityId are required' }, { status: 400 });
+  if (!productId) {
+    return json({ error: 'productId is required' }, { status: 400 });
   }
+  const { data: product } = await supabase
+    .from('products')
+    .select('id')
+    .eq('id', productId)
+    .maybeSingle();
+  if (!product) return json({ error: 'Product not found' }, { status: 404 });
 
   // Update existing inventory_item if id is provided
   if (inventoryItemId) {
-    const { error } = await supabase
+    const { data: updated, error } = await supabase
       .from('inventory_items')
       .update({ unit_cost: parsed, updated_at: new Date().toISOString() })
       .eq('id', inventoryItemId)
-      .eq('entity_id', entityId);
+      .eq('entity_id', entityId)
+      .select('id');
 
     if (error) return json({ error: error.message }, { status: 500 });
+    if (!updated || updated.length === 0) {
+      return json({ error: 'Inventory item not found' }, { status: 404 });
+    }
     return json({ ok: true, action: 'updated', inventoryItemId });
   }
 

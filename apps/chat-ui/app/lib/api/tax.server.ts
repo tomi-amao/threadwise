@@ -15,7 +15,7 @@
  * submission requires HMRC-recognised software and iXBRL-tagged accounts.
  */
 
-import { getServerSupabaseClient } from '~/lib/supabase';
+import type { SupabaseClient } from '@supabase/supabase-js';
 
 // VAT registration becomes compulsory once taxable turnover in any rolling
 // 12-month window exceeds this. Checked monthly, not at year end.
@@ -167,9 +167,12 @@ function daysUntil(dateStr: string): number {
   return Math.round((target.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
 }
 
-export async function getTaxData(): Promise<TaxData> {
-  const supabase = getServerSupabaseClient();
-
+/**
+ * The tax position for the signed-in user's business. `supabase` is the user's own client, so
+ * row-level security limits every read (and the views and functions below, which run as the
+ * caller) to their business.
+ */
+export async function getTaxData(supabase: SupabaseClient): Promise<TaxData> {
   const { data: entityRows, error: entityError } = await supabase
     .from('entities')
     .select(

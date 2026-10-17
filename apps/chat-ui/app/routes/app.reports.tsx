@@ -59,6 +59,7 @@ import type {
   ReportsData,
 } from '~/lib/api/reports.server';
 import { getServerSupabaseClient } from '~/lib/supabase';
+import { getRequestSupabaseClient, requireUser } from '~/lib/supabase-server';
 
 export const meta: MetaFunction = () => [
   { title: 'Financial Reports - ThreadWise' },
@@ -151,9 +152,11 @@ export async function loader({ request }: LoaderFunctionArgs) {
   const from = url.searchParams.get('from') || null;
   const to = url.searchParams.get('to') || null;
 
-  const supabase = getServerSupabaseClient();
+  await requireUser(request);
+  // The signed-in user's own session: row-level security limits every read to their business.
+  const supabase = getRequestSupabaseClient(request);
   const [data, entityResult] = await Promise.all([
-    getReportsData(from, to),
+    getReportsData(supabase, from, to),
     supabase.from('entities').select('year_end_day, year_end_month').limit(1).single(),
   ]);
 
@@ -179,7 +182,11 @@ function json(data: unknown, init?: ResponseInit) {
 }
 
 export async function action({ request }: ActionFunctionArgs) {
-  const supabase = getServerSupabaseClient();
+  await requireUser(request);
+  // Reads (and so the ownership check) run as the user; the write itself is service-role only,
+  // because users have no write policy on transactions. It happens only after the user's own
+  // session could read the row.
+  const supabase = getRequestSupabaseClient(request);
 
   let body: Record<string, string>;
   try {
@@ -262,7 +269,7 @@ export async function action({ request }: ActionFunctionArgs) {
     };
   }
 
-  const { error } = await supabase
+  const { error } = await getServerSupabaseClient()
     .from('financial_transactions')
     .update(updatePayload)
     .eq('id', transactionId);

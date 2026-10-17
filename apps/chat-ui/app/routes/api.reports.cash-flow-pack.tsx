@@ -13,6 +13,7 @@
 
 import type { LoaderFunctionArgs } from 'react-router';
 import { getReportsData } from '~/lib/api/reports.server';
+import { getRequestSupabaseClient, requireUser } from '~/lib/supabase-server';
 import type { CashFlowLine } from '~/lib/api/reports.server';
 
 const GBP = (value: number) =>
@@ -37,7 +38,8 @@ export async function loader({ request }: LoaderFunctionArgs) {
   const from = url.searchParams.get('from');
   const to = url.searchParams.get('to');
 
-  const data = await getReportsData(from, to);
+  await requireUser(request);
+  const data = await getReportsData(getRequestSupabaseClient(request), from, to);
   const { cashFlow, cashInsights } = data;
 
   const periodLabel =

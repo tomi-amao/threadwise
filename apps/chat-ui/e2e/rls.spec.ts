@@ -6,7 +6,7 @@
  */
 
 import { test, expect, readManifest } from './fixtures';
-import { api, readItemIdBySku, signIn } from './helpers/db';
+import { api, readItemIdBySku, rpc, signIn } from './helpers/db';
 
 const seed = readManifest();
 const rival = seed.rival;
@@ -58,6 +58,46 @@ test.describe('without signing in', () => {
       external_id: 'x',
     });
     expect(result.status).toBeGreaterThanOrEqual(400);
+  });
+});
+
+test.describe('database functions', () => {
+  const ZERO = '00000000-0000-4000-8000-000000000000';
+  // SECURITY DEFINER functions ignore row-level security, so they are for the service role only.
+  const PRIVILEGED: [string, Record<string, unknown>][] = [
+    ['get_api_key_secure', { p_source_id: ZERO }],
+    ['store_api_key_secure', { p_source_id: ZERO, p_api_key: 'x', p_provider: 'x' }],
+    ['delete_api_key_secure', { p_source_id: ZERO }],
+    ['get_sync_stats_by_source', { p_source_id: ZERO }],
+    ['post_draft_journal', { p_entity_id: ZERO, p_journal_id: ZERO, p_account_id: ZERO }],
+  ];
+
+  test('the public key cannot call any privileged function', async () => {
+    for (const [fn, args] of PRIVILEGED) {
+      const result = await rpc(fn, args);
+      expect([401, 403, 404], fn).toContain(result.status);
+    }
+  });
+
+  test('neither can a signed-in user', async () => {
+    for (const [fn, args] of PRIVILEGED) {
+      const result = await rpc(fn, args, mine);
+      expect([401, 403, 404], fn).toContain(result.status);
+    }
+  });
+
+  test('a user can run the ordinary ones, but only over their own business', async () => {
+    const own = await api('GET', 'entities', 'select=id', mine);
+    const ownId = String(own.rows[0].id);
+    const rivalId = String((await api('GET', 'entities', 'select=id', theirs)).rows[0].id);
+    const ownRun = await rpc('compute_corporation_tax', { p_entity_id: ownId }, mine);
+    expect(ownRun.status).toBe(200);
+    const crossRun = await rpc('compute_corporation_tax', { p_entity_id: rivalId }, mine);
+    expect(crossRun.status).toBe(200);
+    expect(crossRun.body).toEqual([]); // runs as the caller: the other business is invisible
+    expect(
+      (await rpc('compute_corporation_tax', { p_entity_id: ownId })).status
+    ).toBeGreaterThanOrEqual(401);
   });
 });
 

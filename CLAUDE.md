@@ -122,12 +122,21 @@ distinct data paths, and it matters which one a given feature uses:
    (also defaults to `:2024` in some files — check the actual env var before assuming
    which port a given call hits).
 3. **Direct-to-Supabase reads** — `.server.ts` loaders (`dashboard.server.ts`,
-   `bank-balance.server.ts`, `revenue-metrics.server.ts`, etc.) query Supabase
-   directly via `getServerSupabaseClient()`/`getAuthenticatedServerClient()`
-   (`app/lib/supabase.ts`), bypassing the AI agent entirely for read-heavy dashboard
-   data. `getAuthenticatedServerClient` forwards the caller's session (Authorization
-   header or `sb-*-auth-token` cookie) so Postgres RLS applies; `getServerSupabaseClient`
-   uses the service-role key and bypasses RLS — don't use it for user-scoped reads.
+   `inventory.server.ts`, `orders.server.ts`, `invoices.server.ts`, etc.) query Supabase
+   directly, bypassing the AI agent, **as the signed-in user**:
+   `getRequestSupabaseClient(request)` (`app/lib/supabase-server.ts`) builds a client from the
+   `sb-*-auth-token` cookie, so Postgres row-level security decides what each read can see.
+   Call `requireUser(request)` first: with no valid session every RLS read quietly returns
+   nothing, and an empty page is worse than a 401. Never read business data with
+   `getServerSupabaseClient()` (service-role key, bypasses RLS). It is only for what a user
+   session must not do: storage (invoice documents) and writes that go to tables with no write
+   policy, and only *after* the same row was read as the user. Writes that touch the ledger go to
+   the agent. The business comes from `getUserEntity(request)`, never from the request.
+   Policies (`supabase/migrations/20261017000000_row_level_security.sql`): every table the app
+   reads has an owner-of-the-entity SELECT policy, views are `security_invoker`, `anon` has no
+   privileges, and SECURITY DEFINER functions are service-role only
+   (`20261017000001_lock_down_functions.sql`). `e2e/rls.spec.ts` proves it against a second
+   seeded business; add a table to its list when you add one to the app.
 
 ### Frontend structure (`apps/chat-ui/`)
 

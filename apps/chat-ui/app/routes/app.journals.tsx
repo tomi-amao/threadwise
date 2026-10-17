@@ -22,7 +22,7 @@ import {
   ArrowsDownUp,
   Info,
 } from 'phosphor-react';
-import { getServerSupabaseClient } from '~/lib/supabase';
+import { getRequestSupabaseClient, requireUser } from '~/lib/supabase-server';
 import { getEntityInfo } from '~/lib/api/dashboard.server';
 import { cn } from '~/lib/utils';
 import { Button } from '~/components/ui/button';
@@ -79,13 +79,15 @@ export async function loader({ request }: LoaderFunctionArgs): Promise<LoaderDat
   // Resolve the entity from the logged-in user's session rather than a
   // hardcoded id — this page previously always read and wrote a single
   // fixed entity's books regardless of who was signed in.
+  await requireUser(request);
   const entity = await getEntityInfo(request);
   if (!entity) {
     throw new Response('No entity found for the current user', { status: 403 });
   }
   const entityId = entity.id;
 
-  const supabase = getServerSupabaseClient();
+  // Reads run as the signed-in user, so row-level security applies on top of the filters below.
+  const supabase = getRequestSupabaseClient(request);
 
   const [accountsRes, sampleItemsRes] = await Promise.all([
     supabase

@@ -10,7 +10,7 @@
  */
 
 import { useState, useEffect } from 'react';
-import type { MetaFunction } from 'react-router';
+import type { LoaderFunctionArgs, MetaFunction } from 'react-router';
 import { useLoaderData, useFetcher } from 'react-router';
 import {
   Bank,
@@ -29,6 +29,7 @@ import {
   X,
 } from 'phosphor-react';
 import { getTaxData } from '~/lib/api/tax.server';
+import { getRequestSupabaseClient, requireUser } from '~/lib/supabase-server';
 import type { TaxData, TaxPeriod, TaxDeadline, ProfitBreakdownLine } from '~/lib/api/tax.server';
 import type { AccountDrilldownData } from '~/lib/api/reports.server';
 import { RouteErrorBoundary } from '~/components/RouteErrorBoundary';
@@ -60,8 +61,9 @@ const formatDate = (value: string) => {
   return date.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
 };
 
-export async function loader() {
-  const data = await getTaxData();
+export async function loader({ request }: LoaderFunctionArgs) {
+  await requireUser(request);
+  const data = await getTaxData(getRequestSupabaseClient(request));
   return { data };
 }
 

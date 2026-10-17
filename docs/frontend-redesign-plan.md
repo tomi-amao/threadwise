@@ -10,6 +10,28 @@ Status: decisions made, ready for Phase 0 · Branch: `feat/frontend-redesign` ·
 | 1 Dashboard   | Done, layout revised after review | Full-width command-centre layout: compact header, six KPI tiles (two with sparklines), then a 12-column panel grid so the headline numbers, revenue trend and order breakdown share the first screen. Parity with the old page; tests in both themes. Cookie-based auth shipped with it, so loaders can identify the user. Typecheck baseline went from 30 to 6 errors (`module: ESNext` plus Vite client types). Shared `Panel`, `KpiTile`, `Sparkline` and dense `DataTable` are the pattern for the other tool pages. |
 | 2 Table pages | Done                              | All six pages done: Transactions, Inventory, Invoices, Orders, Customers, Products. Next: Phase 3.                                                                                                                                                                                                                                                                                                                                                                                                                       |
 
+Follow-ups from the security pass (before Phase 3):
+
+- **Done:** migrations `20261017000000_row_level_security` and `20261017000001_lock_down_functions`
+  (apply with `supabase db push`; they are idempotent to re-read but not to re-run). Dashboard,
+  Inventory, Invoices, Orders, Customers, Products, Reports, Tax, Journals and Reclassification now
+  read as the signed-in user. Reclassification used to read one hard-coded business's books
+  whoever was signed in. `e2e/rls.spec.ts` tests the boundary from outside.
+- **Found and fixed on the way:** the public `anon` key had ALL privileges on every table and view
+  (and 14 tables had RLS off); views returned every business's rows; and every database function,
+  including the SECURITY DEFINER ones that read and replace stored API keys and post journals, was
+  callable with the public key.
+- **Not done, needs your call:** Collections (`app.collections.tsx`, `collection-plans.server.ts`,
+  the plan-pack route) still read with the service key and pick "the first entity in the database".
+  They have uncommitted edits of yours in the working tree, so I left them alone: the change is
+  small (user client + `requireUser`; their tables already have ALL policies) but would mix with
+  your work in one commit.
+- **Not done:** the FastAPI agent trusts the `entity_id` the browser sends it (Transactions calls
+  it straight from the browser). Fixing that means the agent verifying the user's Supabase JWT.
+- **Not done:** the app's own writes through the service key (`api.journals`, reports exclusion,
+  reclassification link) are gated on a user-session read of the same row, but the right end
+  state is the agent doing them behind an authenticated call.
+
 Follow-ups from Phase 2 (Orders, Customers, Products):
 
 - **Silent truncation, gone.** The old Orders page showed the first 100 of 1,200 orders; Customers
@@ -21,9 +43,7 @@ Follow-ups from Phase 2 (Orders, Customers, Products):
   Customers and Products. A new list page is a model file, a page, a drawer and a loader.
 - **Product revenue is before refunds** (refunds sit on the order, not the line) and excludes
   cancelled orders. The customer and order pages take refunds off.
-- **Still service-role reads:** these pages scope every query to the user's entity in code
-  because `orders`, `customers` and `payments` have no RLS. Adding policies is the real fix and
-  needs a migration. The dashboard has the same exposure.
+- **Reads are now RLS** (see the security pass above); the entity filters stay as a second layer.
 - **The AI insights on a product** call the LangGraph server from the browser, as before. They are
   tested against a stand-in for its two endpoints.
 
@@ -50,8 +70,6 @@ Follow-ups from Phase 2 (Invoices):
 - **Not done:** "mark paid" still keys on `metadata.invoice_id` to find the bank payment, so
   invoices paid by Revolut (no invoice number in metadata) need the "mark paid anyway" path.
   A picker that lets the user choose the matching transaction is the real fix.
-- **Same exposure elsewhere:** `orders`, `customers` and `payments` have no RLS policies, so
-  their pages read with the service role and must scope by the user's entity in code.
 
 Follow-ups from Phase 2 (Inventory):
 

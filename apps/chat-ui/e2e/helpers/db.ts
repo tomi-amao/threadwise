@@ -218,3 +218,28 @@ export async function readItemIdBySku(sku: string): Promise<string> {
   if (!rows[0]) throw new Error(`No inventory item with SKU ${sku}`);
   return rows[0].id;
 }
+
+/** Call a database function over the REST API, as anyone with the public key could. */
+export async function rpc(
+  fn: string,
+  args: Record<string, unknown>,
+  token?: string
+): Promise<{ status: number; body: unknown }> {
+  const response = await fetch(`${url}/rest/v1/rpc/${fn}`, {
+    method: 'POST',
+    headers: {
+      apikey: anonKey,
+      Authorization: `Bearer ${token ?? anonKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(args),
+  });
+  const text = await response.text();
+  let body: unknown = text;
+  try {
+    body = JSON.parse(text);
+  } catch {
+    /* keep the text */
+  }
+  return { status: response.status, body };
+}

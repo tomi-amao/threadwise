@@ -12,13 +12,14 @@
  * - Profit & Loss: journals (posted) → journal_line_items → chart_of_accounts
  * - Balance Sheet: journals (posted, cumulative) → journal_line_items → chart_of_accounts
  * - Cash Flow: financial_transactions (direct method), bank_accounts
+ *
+ * Every function takes the Supabase client to read with. Callers pass the signed-in user's
+ * (see getRequestSupabaseClient), so row-level security limits each read to their own business.
  */
 
-import { getServerSupabaseClient } from '~/lib/supabase';
+import type { SupabaseClient } from '@supabase/supabase-js';
 import { getDerivedBankBalances } from './bank-balance.server';
 import { getRevenueMetricsData } from './revenue-metrics.server';
-
-const getSupabase = getServerSupabaseClient;
 
 // ─── Types ────────────────────────────────────────────────────────────
 
@@ -456,9 +457,11 @@ function classifyContraAccount(accountNumber: string, accountType: string): CfSe
 
 // ─── Main Function ────────────────────────────────────────────────────
 
-export async function getReportsData(from: string | null, to: string | null): Promise<ReportsData> {
-  const supabase = getSupabase();
-
+export async function getReportsData(
+  supabase: SupabaseClient,
+  from: string | null,
+  to: string | null
+): Promise<ReportsData> {
   // ── Build date-filtered queries ──
   const revenueDataPromise = getRevenueMetricsData(supabase, { from, to });
 
@@ -1633,18 +1636,18 @@ export async function getReportsData(from: string | null, to: string | null): Pr
 }
 
 export async function getAccountDrilldown({
+  supabase,
   accountId,
   statement,
   from,
   to,
 }: {
+  supabase: SupabaseClient;
   accountId: string;
   statement: ReportStatement;
   from: string | null;
   to: string | null;
 }): Promise<AccountDrilldownData> {
-  const supabase = getSupabase();
-
   const { data: account, error: accountError } = await supabase
     .from('chart_of_accounts')
     .select('id, name, account_type, account_number, normal_balance')

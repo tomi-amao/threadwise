@@ -14,6 +14,7 @@
 
 import type { LoaderFunctionArgs } from 'react-router';
 import { getTaxData } from '~/lib/api/tax.server';
+import { getRequestSupabaseClient, requireUser } from '~/lib/supabase-server';
 
 const GBP = (value: number) =>
   new Intl.NumberFormat('en-GB', {
@@ -36,7 +37,8 @@ export async function loader({ request }: LoaderFunctionArgs) {
   const url = new URL(request.url);
   const periodId = url.searchParams.get('periodId');
 
-  const data = await getTaxData();
+  await requireUser(request);
+  const data = await getTaxData(getRequestSupabaseClient(request));
   const period =
     data.periods.find(p => p.periodId === periodId) ??
     data.lastClosedPeriod ??
