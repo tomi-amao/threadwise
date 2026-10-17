@@ -16,6 +16,8 @@ import { getServerSupabaseClient } from '~/lib/supabase';
 import { getRequestSupabaseClient } from '~/lib/supabase-server';
 import { getApiBaseUrl } from './base-url';
 import { fetchAllRows } from './paginate.server';
+
+export { getUserEntity } from './entity.server';
 import type {
   GlAccountOption,
   InvoiceContact,
@@ -219,19 +221,6 @@ export async function getOwnedInvoice(
     .maybeSingle();
   if (error) throw new Error(`Failed to load invoice: ${error.message}`);
   return (data as OwnedInvoice | null) ?? null;
-}
-
-/** The business the signed-in user owns (its id and trading currency), or null. */
-export async function getUserEntity(
-  request: Request
-): Promise<{ id: string; currency: string } | null> {
-  const { data, error } = await getRequestSupabaseClient(request)
-    .from('entities')
-    .select('id, currency')
-    .limit(1)
-    .maybeSingle();
-  if (error) throw new Error(`Failed to load your business: ${error.message}`);
-  return data ? { id: data.id, currency: data.currency ?? 'GBP' } : null;
 }
 
 export async function getDocumentUrl(filePath: string, expiresIn = 3600): Promise<string> {

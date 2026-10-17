@@ -9,16 +9,8 @@
  * Tab, direction, search, the overdue filter and the open invoice live in the URL.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import {
-  ArrowDown,
-  ArrowLeft,
-  ArrowRight,
-  ArrowUp,
-  MagnifyingGlass,
-  Plus,
-  X,
-} from 'phosphor-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { ArrowDown, ArrowUp, MagnifyingGlass, Plus, X } from 'phosphor-react';
 import { useRevalidator } from 'react-router';
 import { Button } from '~/components/ui/button';
 import { Chip } from '~/components/ui/chip';
@@ -28,9 +20,10 @@ import { Input } from '~/components/ui/input';
 import { JumpTo } from '~/components/ui/jump-to';
 import { KpiTile } from '~/components/ui/kpi-tile';
 import { CompactHeader } from '~/components/ui/page-header';
+import { Pager } from '~/components/ui/pager';
 import { Segmented } from '~/components/ui/segmented';
 import { Tabs, tabId } from '~/components/ui/tabs';
-import { useUrlParams } from '~/lib/use-url-params';
+import { useListUrlState } from '~/lib/use-list-url-state';
 import { cn } from '~/lib/utils';
 import type { InvoiceRow, InvoiceType } from '~/types/invoice';
 import { AddInvoiceDialog } from './AddInvoiceDialog';
@@ -68,7 +61,7 @@ export function InvoicesPage({
   currency: string;
 }) {
   const revalidator = useRevalidator();
-  const [sp, apply] = useUrlParams();
+  const { sp, set, q, page, searchText, setSearchText } = useListUrlState();
 
   const rawTab = sp.get('tab');
   const tab: Tab = isTab(rawTab)
@@ -81,8 +74,6 @@ export function InvoicesPage({
       ? (sp.get('dir') as InvoiceType)
       : 'all';
   const overdueOnly = sp.get('view') === 'overdue';
-  const q = sp.get('q') ?? '';
-  const page = Math.max(1, Number(sp.get('page')) || 1);
   const openId = sp.get('invoice');
 
   const summary = useMemo(() => summarise(invoices, today, base), [invoices, today, base]);
@@ -107,28 +98,6 @@ export function InvoicesPage({
   const pages = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
   const current = Math.min(page, pages);
   const shown = rows.slice((current - 1) * PAGE_SIZE, current * PAGE_SIZE);
-
-  const set = useCallback(
-    (patch: Record<string, string | null>) =>
-      apply(p => {
-        for (const [key, value] of Object.entries(patch)) {
-          if (value === null) p.delete(key);
-          else p.set(key, value);
-        }
-        if (!('page' in patch)) p.delete('page');
-        return p;
-      }),
-    [apply]
-  );
-
-  // Search: type freely, apply after a short pause.
-  const [searchText, setSearchText] = useState(q);
-  useEffect(() => setSearchText(q), [q]);
-  useEffect(() => {
-    if (searchText === q) return;
-    const timer = setTimeout(() => set({ q: searchText.trim() || null }), 300);
-    return () => clearTimeout(timer);
-  }, [searchText, q, set]);
 
   // Adding invoices: from the button, or by dropping files anywhere on the page.
   const [adding, setAdding] = useState(false);
@@ -433,38 +402,12 @@ export function InvoicesPage({
               </tbody>
             </DataTable>
           )}
-          {pages > 1 && (
-            <nav
-              aria-label="Pagination"
-              className="flex flex-wrap items-center justify-between gap-3 border-t px-6 py-3"
-            >
-              <span className="font-mono text-xs tracking-[0.04em] text-muted-foreground">
-                {int((current - 1) * PAGE_SIZE + 1)}–
-                {int(Math.min(current * PAGE_SIZE, rows.length))} OF {int(rows.length)}
-              </span>
-              <div className="flex items-center gap-3">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  disabled={current <= 1}
-                  onClick={() => set({ page: current - 1 <= 1 ? null : String(current - 1) })}
-                >
-                  <ArrowLeft size={14} weight="light" aria-hidden /> Previous
-                </Button>
-                <span className="font-mono text-[13px] text-text-2">
-                  {current} / {pages}
-                </span>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  disabled={current >= pages}
-                  onClick={() => set({ page: String(current + 1) })}
-                >
-                  Next <ArrowRight size={14} weight="light" aria-hidden />
-                </Button>
-              </div>
-            </nav>
-          )}
+          <Pager
+            page={current}
+            pageSize={PAGE_SIZE}
+            total={rows.length}
+            onPage={n => set({ page: n <= 1 ? null : String(n) })}
+          />
         </div>
       </div>
 

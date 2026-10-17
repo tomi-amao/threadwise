@@ -34,6 +34,18 @@ export const ENTITY_NAME = 'Atelier North (E2E)';
 // believable positive balance.
 const OPENING_BALANCE = 600_000;
 const SIZES = ['S', 'M'] as const;
+/**
+ * Customers who are not ordinary regulars, so every customer segment has someone in it:
+ * one order only, orders but none for 90+ days, and two who never ordered.
+ */
+const EXTRA_CUSTOMERS = [
+  ['Zed', 'Onetime'],
+  ['Nina', 'Lapsed'],
+  ['Ola', 'Neverordered'],
+  ['Pat', 'Neverordered'],
+] as const;
+/** Order number -> share of its total refunded. */
+const REFUNDS: Record<number, number> = { 1010: 0.5, 1020: 0.5, 1030: 0.5 };
 /** Transaction index -> the invoice number it pays. */
 const MATCHED_PAYMENTS: Record<number, string> = { 2: 'INV-ML-0900', 8: 'INV-ML-1004' };
 /** Extra purchase/sale movement pairs on one item, to prove movements are read past the 1,000-row cap. */
@@ -210,15 +222,18 @@ async function main() {
     supabase
       .from('customers')
       .insert(
-        first.map((f, i) => ({
-          entity_id: entityId,
-          provider: 'shopify',
-          external_id: `e2e-cust-${i + 1}`,
-          email: `${f}.${last[i]}@example.test`.toLowerCase(),
-          first_name: f,
-          last_name: last[i],
-          created_at: daysAgo(320),
-        }))
+        [...first, ...EXTRA_CUSTOMERS.map(c => c[0])].map((f, i) => {
+          const l = i < first.length ? last[i] : EXTRA_CUSTOMERS[i - first.length][1];
+          return {
+            entity_id: entityId,
+            provider: 'shopify',
+            external_id: `e2e-cust-${i + 1}`,
+            email: `${f}.${l}@example.test`.toLowerCase(),
+            first_name: f,
+            last_name: l,
+            created_at: daysAgo(320),
+          };
+        })
       )
       .select('id, email')
   )) as { id: string; email: string }[];
@@ -245,12 +260,17 @@ async function main() {
     }));
     return {
       n: 1001 + i,
-      customer: pick(customers),
+      customer: pick(customers.slice(0, first.length)),
       status: pick(statuses),
       age: Math.floor(((ORDER_COUNT - i) / ORDER_COUNT) * 300) + Math.floor(between(0, 4)),
       lines,
     };
   });
+  // The one-time customer ordered once, recently; the lapsed one twice, months ago.
+  const [zed, nina] = [customers[first.length], customers[first.length + 1]];
+  Object.assign(plan[4], { customer: zed, status: 'delivered', age: 20 });
+  Object.assign(plan[5], { customer: nina, status: 'delivered', age: 230 });
+  Object.assign(plan[6], { customer: nina, status: 'delivered', age: 250 });
 
   const orderRows = plan.map(o => {
     const subtotal = money(o.lines.reduce((s, l) => s + prices[l.productIdx] * l.qty, 0));
@@ -273,7 +293,7 @@ async function main() {
       // UK prices are VAT-inclusive: the VAT is inside the gross total.
       tax_total_amount: money(grand / 6),
       grand_total_amount: grand,
-      refunded_total_amount: 0,
+      refunded_total_amount: REFUNDS[o.n] ? money(grand * REFUNDS[o.n]) : 0,
       currency: 'GBP',
       created_at: daysAgo(o.age),
     };
@@ -886,6 +906,63 @@ async function main() {
     counterparty: 'Mill Lane Textiles',
   };
 
+  // 6d. What the Orders and Customers pages should show, by the same rules they use.
+  const kept = (r: (typeof orderRows)[number]) =>
+    (r.status as string) === 'cancelled'
+      ? 0
+      : money(r.grand_total_amount - Number(r.refunded_total_amount));
+  const ordersByStatus: Record<string, number> = {};
+  for (const r of orderRows) ordersByStatus[r.status] = (ordersByStatus[r.status] ?? 0) + 1;
+  const refundedRows = orderRows.filter(r => Number(r.refunded_total_amount) > 0);
+  const orderSummary = {
+    total: orderRows.length,
+    byStatus: ordersByStatus,
+    toFulfil: orderRows.filter(r => ['pending', 'confirmed', 'processing'].includes(r.status))
+      .length,
+    shipped: ordersByStatus.shipped ?? 0,
+    delivered: ordersByStatus.delivered ?? 0,
+    sales: money(orderRows.reduce((sum, r) => sum + kept(r), 0)),
+    refundedCount: refundedRows.length,
+    refunded: money(refundedRows.reduce((sum, r) => sum + Number(r.refunded_total_amount), 0)),
+    // An order that is refunded in part, and one with a known customer, for tests that open them.
+    refundedOrderNumber: `#${Number(Object.keys(REFUNDS)[0])}`,
+    sampleOrderNumber: '#1100',
+  };
+  const perCustomer = new Map<string, { orders: number; spent: number; last: number }>();
+  plan.forEach((o, i) => {
+    const row = orderRows[i];
+    const entry = perCustomer.get(o.customer.id) ?? { orders: 0, spent: 0, last: Infinity };
+    entry.orders += 1;
+    entry.spent = money(entry.spent + kept(row));
+    entry.last = Math.min(entry.last, o.age);
+    perCustomer.set(o.customer.id, entry);
+  });
+  const nameOf = (c: (typeof customers)[number]) => {
+    const i = customers.indexOf(c);
+    return i < first.length
+      ? `${first[i]} ${last[i]}`
+      : `${EXTRA_CUSTOMERS[i - first.length][0]} ${EXTRA_CUSTOMERS[i - first.length][1]}`;
+  };
+  const stats = customers.map(c => ({
+    name: nameOf(c),
+    ...(perCustomer.get(c.id) ?? { orders: 0, spent: 0, last: Infinity }),
+  }));
+  const topSpender = [...stats].sort((a, b) => b.spent - a.spent)[0];
+  const customerSummary = {
+    total: customers.length,
+    repeat: stats.filter(c => c.orders >= 2).length,
+    oneTime: stats.filter(c => c.orders === 1).length,
+    lapsed: stats.filter(c => c.orders > 0 && c.last > 90).length,
+    never: stats.filter(c => c.orders === 0).length,
+    spentTotal: money(stats.reduce((sum, c) => sum + c.spent, 0)),
+    topSpender: topSpender.name,
+    topSpenderOrders: topSpender.orders,
+    topSpenderSpent: topSpender.spent,
+    oneTimeName: 'Zed Onetime',
+    lapsedName: 'Nina Lapsed',
+    neverName: 'Ola Neverordered',
+  };
+
   // 7. Manifest: what the tests may assert on.
   const manifest = {
     entityName: ENTITY_NAME,
@@ -898,6 +975,8 @@ async function main() {
     expectedBankBalance,
     inventory,
     invoices,
+    orders: orderSummary,
+    customerStats: customerSummary,
     seededAt: new Date().toISOString(),
   };
   mkdirSync(path.dirname(MANIFEST_FILE), { recursive: true });

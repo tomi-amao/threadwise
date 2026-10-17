@@ -6,6 +6,7 @@ export interface SeedManifest {
   entityName: string;
   email: string;
   orderCount: number;
+  /** Every customer, including those who never ordered. */
   customerCount: number;
   productCount: number;
   bankAccountCount: number;
@@ -35,6 +36,34 @@ export interface SeedManifest {
     unlimitedSku: string;
     unlinkedSku: string;
     sampleSku: string;
+  };
+  /** What the seed put into orders, by the rules the Orders page uses. */
+  orders: {
+    total: number;
+    byStatus: Record<string, number>;
+    toFulfil: number;
+    shipped: number;
+    delivered: number;
+    sales: number;
+    refundedCount: number;
+    refunded: number;
+    refundedOrderNumber: string;
+    sampleOrderNumber: string;
+  };
+  /** What the seed put into customers; the rules are the Customers page's. */
+  customerStats: {
+    total: number;
+    repeat: number;
+    oneTime: number;
+    lapsed: number;
+    never: number;
+    spentTotal: number;
+    topSpender: string;
+    topSpenderOrders: number;
+    topSpenderSpent: number;
+    oneTimeName: string;
+    lapsedName: string;
+    neverName: string;
   };
   /** What the seed put into invoices; amounts are in GBP and add up as the page does. */
   invoices: {

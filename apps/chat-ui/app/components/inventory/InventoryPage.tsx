@@ -8,7 +8,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { ArrowClockwise, ArrowLeft, ArrowRight, MagnifyingGlass, X } from 'phosphor-react';
+import { ArrowClockwise, MagnifyingGlass, X } from 'phosphor-react';
 import { useRevalidator } from 'react-router';
 import { Button } from '~/components/ui/button';
 import { Chip } from '~/components/ui/chip';
@@ -17,6 +17,7 @@ import { EmptyState } from '~/components/ui/empty-state';
 import { Input } from '~/components/ui/input';
 import { JumpTo } from '~/components/ui/jump-to';
 import { KpiTile } from '~/components/ui/kpi-tile';
+import { Pager } from '~/components/ui/pager';
 import { CompactHeader } from '~/components/ui/page-header';
 import { Segmented } from '~/components/ui/segmented';
 import { Tabs, tabId } from '~/components/ui/tabs';
@@ -253,48 +254,6 @@ function ItemsTable({
         })}
       </tbody>
     </DataTable>
-  );
-}
-
-function Pager({
-  page,
-  pages,
-  total,
-  onPage,
-}: {
-  page: number;
-  pages: number;
-  total: number;
-  onPage: (page: number) => void;
-}) {
-  if (pages <= 1) return null;
-  const from = (page - 1) * PAGE_SIZE + 1;
-  const to = Math.min(page * PAGE_SIZE, total);
-  return (
-    <nav
-      aria-label="Pagination"
-      className="flex flex-wrap items-center justify-between gap-3 border-t px-6 py-3"
-    >
-      <span className="font-mono text-xs tracking-[0.04em] text-muted-foreground">
-        {int(from)}–{int(to)} OF {int(total)}
-      </span>
-      <div className="flex items-center gap-3">
-        <Button variant="outline" size="sm" disabled={page <= 1} onClick={() => onPage(page - 1)}>
-          <ArrowLeft size={14} weight="light" aria-hidden /> Previous
-        </Button>
-        <span className="font-mono text-[13px] text-text-2">
-          {page} / {pages}
-        </span>
-        <Button
-          variant="outline"
-          size="sm"
-          disabled={page >= pages}
-          onClick={() => onPage(page + 1)}
-        >
-          Next <ArrowRight size={14} weight="light" aria-hidden />
-        </Button>
-      </div>
-    </nav>
   );
 }
 
@@ -684,7 +643,7 @@ export function InventoryPage({ data }: { data: InventoryPageData }) {
             </DataTable>
           )}
           {listLength > 0 && (
-            <Pager page={current} pages={pages} total={listLength} onPage={setPage} />
+            <Pager page={current} pageSize={PAGE_SIZE} total={listLength} onPage={setPage} />
           )}
         </div>
       </div>

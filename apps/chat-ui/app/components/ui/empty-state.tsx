@@ -18,7 +18,8 @@ export function EmptyState({
   return (
     <div className={cn('px-6 py-16 text-center', className)}>
       {eyebrow && <Eyebrow>{eyebrow}</Eyebrow>}
-      <h3 className="mx-auto mt-3 max-w-md font-serif text-2xl">{title}</h3>
+      {/* h2: it sits directly under the page's h1, and a skipped level fails the heading-order check. */}
+      <h2 className="mx-auto mt-3 max-w-md font-serif text-2xl">{title}</h2>
       {description && <p className="mx-auto mt-2 max-w-md text-text-2">{description}</p>}
       {action && <div className="mt-5">{action}</div>}
     </div>
