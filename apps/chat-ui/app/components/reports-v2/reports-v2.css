@@ -1,0 +1,269 @@
+/* Reports v2 additions. Tokens and base styles come from collections-v2.css (.cv2). */
+
+/* Statement tables: label left, amount right, hairlines only where they mean something. */
+.cv2-stmt {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 15px;
+}
+.cv2-stmt td {
+  padding: 9px 0;
+  vertical-align: baseline;
+}
+.cv2-stmt td:last-child {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  padding-left: 16px;
+}
+.cv2-stmt .section td {
+  padding-top: 28px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border);
+  font: 400 12px/1.5 var(--font-mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+.cv2-stmt tr:first-child.section td {
+  padding-top: 4px;
+}
+.cv2-stmt .line td:first-child {
+  color: var(--text-2);
+}
+.cv2-stmt .indent td:first-child {
+  padding-left: 16px;
+}
+.cv2-stmt .total td {
+  font-weight: 500;
+  border-top: 1px solid var(--border);
+}
+.cv2-stmt .grand td {
+  padding-top: 16px;
+  padding-bottom: 16px;
+  border-top: 1px solid var(--text);
+  font-family: var(--font-serif);
+  font-weight: 300;
+  font-size: 24px;
+  letter-spacing: -0.02em;
+}
+.cv2-stmt .deduct td:last-child {
+  color: var(--text-2);
+}
+.cv2-stmt-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0;
+  border: 0;
+  background: none;
+  text-align: left;
+  color: inherit;
+  text-decoration: underline dotted transparent;
+  text-underline-offset: 4px;
+  transition:
+    text-decoration-color 0.15s,
+    color 0.15s;
+}
+.cv2-stmt-btn:hover {
+  color: var(--accent-text);
+  text-decoration-color: currentColor;
+}
+.cv2-stmt-btn svg {
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+.cv2-stmt-btn:hover svg {
+  opacity: 1;
+}
+.cv2-cell-btn {
+  border: 0;
+  background: none;
+  padding: 2px 6px;
+  margin: -2px -6px;
+  border-radius: 8px;
+  color: inherit;
+  font-variant-numeric: tabular-nums;
+}
+.cv2-cell-btn:hover {
+  background: var(--accent-tint);
+  color: var(--accent-text);
+}
+
+.cv2-verdict {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.cv2-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex: none;
+}
+
+.cv2-note {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--bg-alt);
+  font-size: 14px;
+  color: var(--text-2);
+}
+.cv2-note b {
+  font: 400 12px/1.6 var(--font-mono);
+  color: var(--accent-text);
+}
+
+.cv2-dl {
+  display: grid;
+  gap: 0;
+  margin: 0;
+}
+.cv2-dl > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border);
+}
+.cv2-dl > div:last-child {
+  border-bottom: 0;
+}
+.cv2-dl dt {
+  color: var(--text-2);
+}
+.cv2-dl dd {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+.cv2-dl small {
+  display: block;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.cv2-chart-legend {
+  display: flex;
+  gap: 20px;
+  font-size: 13px;
+  color: var(--text-2);
+}
+.cv2-chart-legend i {
+  display: inline-block;
+  width: 14px;
+  height: 3px;
+  border-radius: 2px;
+  margin-right: 8px;
+  vertical-align: middle;
+}
+
+.cv2-grid-wide {
+  display: grid;
+  grid-template-columns: 1.6fr 1fr;
+  gap: 20px;
+  align-items: start;
+}
+@media (max-width: 960px) {
+  .cv2-grid-wide {
+    grid-template-columns: 1fr;
+  }
+}
+.cv2-table tfoot td {
+  border-top: 1px solid var(--text);
+  border-bottom: 0;
+  font-weight: 500;
+}
+
+/*
+ * Date range picker. The shared component is styled with the app's own colour
+ * tokens (bg-popover, text-foreground, bg-primary...). Mapping those tokens onto
+ * the cream/plum/amber palette here re-themes it without touching the original
+ * reports page, which keeps using the picker unchanged.
+ */
+.cv2-picker {
+  --popover: var(--surface);
+  --popover-foreground: var(--text);
+  --foreground: var(--text);
+  --muted: var(--bg-alt);
+  --muted-foreground: var(--text-muted);
+  --accent: var(--accent-tint);
+  --accent-foreground: var(--text);
+  --primary: #f59520;
+  --primary-foreground: #241b2c;
+  --ring: #f59520;
+  position: relative;
+  display: inline-block;
+}
+.cv2 .cv2-picker-trigger {
+  gap: 10px;
+  padding: 10px 20px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--btn-outline);
+  background: transparent;
+  font-size: 15px;
+  font-weight: 500;
+  line-height: 1;
+  color: var(--text);
+}
+.cv2 .cv2-picker-trigger:hover {
+  background: var(--accent-tint);
+  border-color: var(--border-strong);
+}
+.cv2-picker > div[style*='fixed'] {
+  border-color: var(--border-strong);
+  box-shadow: 0 24px 60px -20px #58436c59;
+}
+
+.cv2-grid-4 {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 20px;
+}
+@media (max-width: 960px) {
+  .cv2-grid-4 {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+@media (max-width: 560px) {
+  .cv2-grid-4 {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Loss / problem state chip, shared by the v2 pages. */
+.cv2-chip-neg {
+  border-color: transparent;
+  background: color-mix(in srgb, var(--neg) 14%, transparent);
+  color: var(--neg);
+}
+
+/* Attention row: small pill buttons that jump to a pre-filtered view. */
+.cv2-flag {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-pill);
+  background: var(--surface);
+  font-size: 14px;
+  transition:
+    border-color 0.15s,
+    background 0.15s;
+}
+.cv2-flag:hover {
+  border-color: var(--accent);
+  background: var(--accent-tint);
+}
+.cv2-flag b {
+  font: 500 14px var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+.cv2-flag-neg b {
+  color: var(--neg);
+}

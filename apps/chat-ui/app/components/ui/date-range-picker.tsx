@@ -174,6 +174,13 @@ export interface DateRangePickerProps {
   onApply: (from: string, to: string) => void;
   fiscalYearEnd?: FiscalYearEnd;
   className?: string;
+  /**
+   * Where the floating panel is mounted. Defaults to document.body; pass an
+   * element to keep the panel inside a themed subtree (e.g. a page that
+   * overrides the colour tokens), since portalled content otherwise inherits
+   * only the root theme.
+   */
+  portalContainer?: HTMLElement | null;
 }
 
 export function DateRangePicker({
@@ -182,6 +189,7 @@ export function DateRangePicker({
   onApply,
   fiscalYearEnd,
   className = '',
+  portalContainer,
 }: DateRangePickerProps) {
   const [open, setOpen] = useState(false);
   const today = useMemo(() => new Date(), []);
@@ -467,7 +475,7 @@ export function DateRangePicker({
               </div>
             </div>
           </div>,
-          document.body
+          portalContainer ?? document.body
         )}
     </div>
   );
