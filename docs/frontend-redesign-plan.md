@@ -4,20 +4,24 @@ Status: decisions made, ready for Phase 0 · Branch: `feat/frontend-redesign` ·
 
 ## Progress
 
-| Phase         | State         | Notes                                                                                                                                                                                                                                   |
-| ------------- | ------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 0 Foundations | Done (Oct 17) | Tokens, self-hosted fonts, cookie theme, component kit, themed Nivo wrappers, re-themed shell, Playwright (width x theme) with contrast, axe and overflow gates. Gallery at `/ui-kit` (dev only).                                       |
-| 1 Dashboard   | Done (Oct 18) | New page on the shared kit, parity with the old one, tests in both themes. Cookie-based auth shipped with it: loaders can now identify the user. Typecheck baseline went from 30 to 6 errors (`module: ESNext` plus Vite client types). |
-| 2 Table pages | Next          | Transactions and Inventory first.                                                                                                                                                                                                       |
+| Phase         | State                             | Notes                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| ------------- | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 0 Foundations | Done (Oct 17)                     | Tokens, self-hosted fonts, cookie theme, component kit, themed Nivo wrappers, re-themed shell, Playwright (width x theme) with contrast, axe and overflow gates. Gallery at `/ui-kit` (dev only).                                                                                                                                                                                                                                                                                                                        |
+| 1 Dashboard   | Done, layout revised after review | Full-width command-centre layout: compact header, six KPI tiles (two with sparklines), then a 12-column panel grid so the headline numbers, revenue trend and order breakdown share the first screen. Parity with the old page; tests in both themes. Cookie-based auth shipped with it, so loaders can identify the user. Typecheck baseline went from 30 to 6 errors (`module: ESNext` plus Vite client types). Shared `Panel`, `KpiTile`, `Sparkline` and dense `DataTable` are the pattern for the other tool pages. |
+| 2 Table pages | Next                              | Transactions and Inventory first.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 
-Follow-ups noted while doing Phase 1:
+Follow-ups from Phase 1:
 
-- `lib/supabase.ts` still holds the old localStorage browser client and `getAuthenticatedServerClient`;
-  both are unused now. It has uncommitted key-name work, so remove them once that lands.
-- Only the dashboard's entity lookup is user-scoped. Its other queries (and most other loaders) use the
-  service-role key, which bypasses row-level security. Fine for one business per database, wrong for more.
-- Dashboard queries have no `.range()`, so Supabase's default 1,000-row cap would silently truncate a
-  large store. Aggregate in SQL (a view or RPC) when this matters.
+- **Fixed:** reads silently capped at the API's 1,000 rows (`.limit(10000)` cannot raise `max_rows`).
+  `fetchAllRows` now pages the dashboard, revenue-metrics (also used by Reports) and bank-balance
+  reads, with tests against a seed of 1,200 orders and 1,100 transactions. Other loaders that
+  `select()` whole tables should adopt it as their pages convert.
+- **Done in the working tree, not yet committed:** the old localStorage browser client and
+  `getAuthenticatedServerClient` are removed from `lib/supabase.ts` (nothing called them). That file
+  also has separate key-name edits that are not part of this work, so it is left for them to commit.
+- Only the dashboard's entity lookup is user-scoped. Its other queries (and most other loaders) use
+  the service-role key, which bypasses row-level security. Fine for one business per database,
+  wrong for more.
 - `app.invoices.tsx` has a stale comment saying auth lives in localStorage.
 
 ## Goal
@@ -33,15 +37,15 @@ This plan turns what they taught us into a rollout.
 
 ## Decisions (resolved Oct 13)
 
-| #   | Question       | Decision                                                                                                                                                                                                                                                                                    |
-| --- | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1   | Sidebar        | Follows the theme. **Light by default.**                                                                                                                                                                                                                                                    |
-| 2   | Header density | **Compact header** on dense pages (Transactions, Inventory, Orders, Customers, Products, Invoices, Journals, Reclassification). **Hero only where strictly necessary:** Dashboard, Reports, Collections index, Landing.                                                                     |
-| 3   | Charts         | **Keep Nivo, theme it, and improve it** (shared wrappers, tokens, real tooltips, keyboard and text alternatives). No custom-SVG rewrite.                                                                                                                                                    |
-| 4   | Testing        | **Add Playwright** in Phase 0 and **write tests as each page changes**.                                                                                                                                                                                                                     |
-| 5   | Legacy pages   | **Delete each old page as its replacement ships and is verified**, not in a final sweep.                                                                                                                                                                                                    |
-| 6   | Card cream     | **`#FCF8F4`** on a **`#FFFFFF`** page. Alt band `#F8F1EA`. A step lighter than the preview's `#FBF6F1`: still 1.06:1 against white, every text pair still passes 4.5:1 (muted text 5.0:1), and warmer than `#FDFAF7`, which is nearly white and leaves cards relying on their border alone. |
-| 7   | Dark mode      | **Full parity, light default** (see below).                                                                                                                                                                                                                                                 |
+| #   | Question       | Decision                                                                                                                                                                                                                                                                                                                                                    |
+| --- | -------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | Sidebar        | Follows the theme. **Light by default.**                                                                                                                                                                                                                                                                                                                    |
+| 2   | Header density | **Compact header** on dense pages (Transactions, Inventory, Orders, Customers, Products, Invoices, Journals, Reclassification). **Hero only where strictly necessary:** Reports, Collections index, Landing. (The Dashboard began with a hero and was reworked: it is a tool you glance at, so it uses a compact header and a dense full-width panel grid.) |
+| 3   | Charts         | **Keep Nivo, theme it, and improve it** (shared wrappers, tokens, real tooltips, keyboard and text alternatives). No custom-SVG rewrite.                                                                                                                                                                                                                    |
+| 4   | Testing        | **Add Playwright** in Phase 0 and **write tests as each page changes**.                                                                                                                                                                                                                                                                                     |
+| 5   | Legacy pages   | **Delete each old page as its replacement ships and is verified**, not in a final sweep.                                                                                                                                                                                                                                                                    |
+| 6   | Card cream     | **`#FCF8F4`** on a **`#FFFFFF`** page. Alt band `#F8F1EA`. A step lighter than the preview's `#FBF6F1`: still 1.06:1 against white, every text pair still passes 4.5:1 (muted text 5.0:1), and warmer than `#FDFAF7`, which is nearly white and leaves cards relying on their border alone.                                                                 |
+| 7   | Dark mode      | **Full parity, light default** (see below).                                                                                                                                                                                                                                                                                                                 |
 
 **What "full parity" means for dark mode.** Dark is not a lesser, best-effort skin. Every
 page, drawer, dialog, chart and empty state ships in both themes, from the same tokens, with

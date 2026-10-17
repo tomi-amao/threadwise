@@ -14,11 +14,17 @@ import { cn } from '~/lib/utils';
  */
 export function DataTable({
   label,
+  bare = false,
+  dense = false,
   className,
   children,
 }: {
   /** Accessible name, e.g. "Collections". */
   label: string;
+  /** No border or background: for a table that sits inside a Panel, which supplies the card. */
+  bare?: boolean;
+  /** Tighter rows, for tables that share a screen with other panels. */
+  dense?: boolean;
   className?: string;
   children: React.ReactNode;
 }) {
@@ -28,16 +34,18 @@ export function DataTable({
       aria-label={label}
       tabIndex={0}
       className={cn(
-        'overflow-x-auto rounded-[var(--radius)] border bg-card focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+        'overflow-x-auto focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+        bare ? 'focus-visible:ring-inset' : 'rounded-[var(--radius)] border bg-card',
         className
       )}
     >
       <table
         className={cn(
           'w-full border-collapse text-[15px]',
-          '[&_th]:whitespace-nowrap [&_th]:border-b [&_th]:px-4 [&_th]:py-3.5 [&_th]:font-mono [&_th]:text-xs [&_th]:font-normal [&_th]:uppercase [&_th]:tracking-[0.08em] [&_th]:text-muted-foreground',
+          dense ? '[&_th]:py-2.5 [&_td]:py-2.5' : '[&_th]:py-3.5 [&_td]:py-4',
+          '[&_th]:whitespace-nowrap [&_th]:border-b [&_th]:px-4 [&_th]:font-mono [&_th]:text-xs [&_th]:font-normal [&_th]:uppercase [&_th]:tracking-[0.08em] [&_th]:text-muted-foreground',
           '[&_th:not([class*=text-right])]:text-left',
-          '[&_td]:border-b [&_td]:px-4 [&_td]:py-4 [&_td]:align-middle',
+          '[&_td]:border-b [&_td]:px-4 [&_td]:align-middle',
           '[&_th:first-child]:pl-6 [&_td:first-child]:pl-6 [&_th:last-child]:pr-6 [&_td:last-child]:pr-6',
           '[&_tbody_tr:last-child_td]:border-b-0 [&_tbody_tr:hover_td]:bg-accent',
           '[&_tfoot_td]:border-b-0 [&_tfoot_td]:border-t [&_tfoot_td]:border-t-foreground [&_tfoot_td]:font-medium'

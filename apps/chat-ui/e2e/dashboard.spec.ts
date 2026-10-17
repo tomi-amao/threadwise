@@ -19,24 +19,63 @@ test.describe('dashboard', () => {
     await expect(page.getByRole('main').getByText('Your business · All time')).toHaveCount(0);
   });
 
-  test('has one h1 and a heading for each section', async ({ page }) => {
+  test('has one h1 and one h2 per panel', async ({ page }) => {
     await expect(page.getByRole('heading', { level: 1 })).toHaveCount(1);
-    await expect(page.getByRole('heading', { level: 2 })).toHaveCount(5);
+    const h2s = await page.getByRole('heading', { level: 2 }).allInnerTexts();
+    expect(h2s.map(t => t.toLowerCase())).toEqual([
+      'monthly gross revenue',
+      'orders by status',
+      'top products',
+      'payment methods',
+      'bank accounts',
+      'latest orders',
+      'top customers',
+    ]);
   });
 
-  test('stat strip shows the four headline numbers from the seed', async ({ page }) => {
+  test('shows the six headline numbers from the seed', async ({ page }) => {
     const main = page.getByRole('main');
-    for (const label of ['Gross revenue', 'Net revenue', 'In the bank', 'Customers']) {
-      // 'Customers' is both a stat label and a section eyebrow; the stat strip comes first.
+    for (const label of [
+      'Gross revenue',
+      'Net revenue',
+      'Orders',
+      'Customers',
+      'In the bank',
+      'Processing fees',
+    ]) {
       await expect(main.getByText(label, { exact: true }).first()).toBeVisible();
     }
     await expect(
-      main.getByText(`${seed.orderCount.toLocaleString('en-GB')} orders ·`)
+      main.getByText(`${seed.orderCount.toLocaleString('en-GB')} orders`).first()
     ).toBeVisible();
     await expect(
       main.getByText(`${seed.bankAccountCount} accounts`, { exact: true })
     ).toBeVisible();
     await expect(main.getByText(String(seed.customerCount), { exact: true }).first()).toBeVisible();
+  });
+
+  test('the first screen holds the key numbers and the revenue chart', async ({ page }) => {
+    // The point of the layout: no scrolling needed to see the KPIs and the trend.
+    const viewport = page.viewportSize()!;
+    test.skip(viewport.width < 1024, 'single column below 1024px; the chart sits below the tiles');
+    const inView = async (locator: import('@playwright/test').Locator) => {
+      const box = await locator.boundingBox();
+      return !!box && box.y + 120 < viewport.height;
+    };
+    expect(await inView(page.getByText('Gross revenue', { exact: true }).first())).toBe(true);
+    expect(await inView(page.getByTestId('panel-revenue'))).toBe(true);
+    expect(await inView(page.getByTestId('panel-status'))).toBe(true);
+  });
+
+  test('uses the full width of the page', async ({ page }) => {
+    test.skip(page.viewportSize()!.width < 1280, 'only meaningful where the grid is multi-column');
+    const main = await page.getByRole('main').boundingBox();
+    const panel = await page.getByTestId('panel-revenue').boundingBox();
+    // Panels start within one gutter of the content edge, not centred in a narrow column.
+    expect(panel!.x - main!.x).toBeLessThanOrEqual(40);
+    const rightEdge = main!.x + main!.width;
+    const status = await page.getByTestId('panel-status').boundingBox();
+    expect(rightEdge - (status!.x + status!.width)).toBeLessThanOrEqual(40);
   });
 
   // Regression: the API caps every read at 1,000 rows (max_rows), and the dashboard's `.limit(10000)`
@@ -63,9 +102,7 @@ test.describe('dashboard', () => {
   });
 
   test('order statuses add up to the total number of orders', async ({ page }) => {
-    const card = page
-      .getByText('Orders by status', { exact: true })
-      .locator('xpath=ancestor::div[1]');
+    const card = page.getByTestId('panel-status');
     // Each <dd> is "<count><span>NN%</span>": read the count text node only.
     const counts = await card
       .locator('dd')
@@ -84,10 +121,10 @@ test.describe('dashboard', () => {
     };
     const group = page.getByRole('group', { name: 'Chart window' });
 
-    await group.getByRole('button', { name: '6 months' }).click();
+    await group.getByRole('button', { name: '6m' }).click();
     await expect.poll(monthsInChart).toBe(6);
 
-    await group.getByRole('button', { name: '12 months' }).click();
+    await group.getByRole('button', { name: '12m' }).click();
     await expect.poll(monthsInChart).toBeGreaterThan(6);
 
     await group.getByRole('button', { name: 'All' }).click();
@@ -109,7 +146,7 @@ test.describe('dashboard', () => {
     expect(
       await table('Top customers by lifetime value').locator('tbody tr').count()
     ).toBeGreaterThanOrEqual(3);
-    await expect(table('Latest orders').locator('tbody tr')).toHaveCount(10);
+    await expect(table('Most recent orders').locator('tbody tr')).toHaveCount(10);
     await expect(page.getByRole('main').getByText('Revolut Business')).toBeVisible();
     await expect(page.getByRole('main').getByText('Revolut Savings')).toBeVisible();
     await expect(
@@ -123,12 +160,15 @@ test.describe('dashboard', () => {
   test('section links go where they say', async ({ page }) => {
     const main = page.getByRole('main');
     for (const [name, href] of [
-      ['Open reports', '/reports'],
+      ['Reports', '/reports'],
       ['All products', '/products'],
       ['All customers', '/customers'],
       ['Cash flow', '/reports'],
     ] as const) {
-      await expect(main.getByRole('link', { name }).first()).toHaveAttribute('href', href);
+      await expect(main.getByRole('link', { name, exact: true }).first()).toHaveAttribute(
+        'href',
+        href
+      );
     }
     await expect(main.getByRole('link', { name: 'All orders' }).first()).toHaveAttribute(
       'href',

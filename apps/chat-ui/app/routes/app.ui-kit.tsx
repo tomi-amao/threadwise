@@ -15,8 +15,10 @@ import { EmptyState } from '~/components/ui/empty-state';
 import { Eyebrow } from '~/components/ui/eyebrow';
 import { Field } from '~/components/ui/field';
 import { Input } from '~/components/ui/input';
+import { KpiTile } from '~/components/ui/kpi-tile';
 import { Meter } from '~/components/ui/meter';
 import { CompactHeader, Hero, Page, PageSection } from '~/components/ui/page-header';
+import { Panel, PanelLink } from '~/components/ui/panel';
 import { Segmented } from '~/components/ui/segmented';
 import { Stat, StatStrip } from '~/components/ui/stat-strip';
 import { Statement } from '~/components/ui/statement';
@@ -154,6 +156,54 @@ export default function UiKit() {
         <div className="mt-5 grid max-w-md gap-4">
           <Meter value={0.62} label="62% of budget used" />
           <Meter value={1} over label="Budget exceeded" />
+        </div>
+      </Block>
+
+      <Block id="dashboard-parts" title="KPI tiles and panels">
+        <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+          <KpiTile label="Gross revenue" value="£268,837" caption="1,200 orders" trend={SALES} />
+          <KpiTile label="Net revenue" value="£311,171" caption="After fees and refunds" />
+          <KpiTile
+            label="Orders"
+            value="1,200"
+            caption="Avg £224.03"
+            trend={SALES.map(v => Math.round(v / 70))}
+          />
+          <KpiTile label="In the bank" value="−£4,200" caption="2 accounts" tone="negative" />
+        </div>
+        <div className="mt-4 grid gap-4 lg:grid-cols-2">
+          <Panel
+            flush
+            title="Top products"
+            note="Three products carry 61% of sales."
+            action={<PanelLink to="/products">All products</PanelLink>}
+          >
+            <DataTable bare dense label="Top products">
+              <thead>
+                <tr>
+                  <th>Product</th>
+                  <th className="text-right">Revenue</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>Wool Overshirt</td>
+                  <td className="text-right tabular-nums">£58,900</td>
+                </tr>
+                <tr>
+                  <td>Heavy Knit Cardigan</td>
+                  <td className="text-right tabular-nums">£40,768</td>
+                </tr>
+              </tbody>
+            </DataTable>
+          </Panel>
+          <Panel
+            title="Bank accounts"
+            note="Live balances."
+            action={<PanelLink to="/reports">Cash flow</PanelLink>}
+          >
+            <Meter value={0.62} label="62% of total cash" />
+          </Panel>
         </div>
       </Block>
 
