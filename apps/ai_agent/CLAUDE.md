@@ -60,7 +60,10 @@ invoked via Husky) run Black/isort/flake8/mypy/bandit on changed Python files at
 commit time.
 
 Only `tests/test_normalization.py` exists today — most services (journal_service,
-account_mapping, langgraph_service, mcp_client, etc.) have no test coverage yet.
+account_mapping, langgraph_service, etc.) have no test coverage yet. Auth and the agent's
+database scoping are covered by `tests/test_auth.py`, `tests/test_api_auth.py`,
+`tests/test_scoped_sql.py` and `tests/test_agent_scoping.py` (the last two use the local
+Supabase database when it is running, and skip that part otherwise).
 
 ## Architecture
 
@@ -128,11 +131,13 @@ START → classify_query → retrieve_context → evaluate_context_sufficiency
   not a single monolithic prompt — read the node docstrings before changing
   the routing logic, each node has specific confidence thresholds it enforces
   (e.g. context is only treated as sufficient above 0.7 confidence).
-- `analytics_agent_node` picks its toolset at runtime based on `state["data_source"]`:
-  `"sql_toolkit"` (default, via `tools/sql_tools.py` + `core/database.py`'s direct
-  Postgres `SQLDatabase` connection) or `"supabase_mcp"` (via `services/mcp_client.py`,
-  which connects to Supabase's hosted MCP server through `langchain-mcp-adapters`).
-  MCP failures fall back to the SQL toolkit rather than erroring.
+- `analytics_agent_node` builds its database tools per request from the authenticated user
+  (`config["configurable"]["langgraph_auth_user"]`, set by `auth.py`; the server rejects a
+  client that tries to set it): `tools/sql_tools.py::build_sql_tools`. Every query runs through
+  `core/scoped_sql.py` (see "Agent database access"). A run with no signed-in user gets a
+  refusal and no tools. `retrieve_context_node` searches the vector namespace of the
+  caller's business only. The Supabase MCP path is gone (it was a second route to arbitrary
+  SQL).
 - `push_visualization_node` uses `langgraph.graph.ui.push_ui_message` (generative UI)
   to stream chart/table/metric components to the frontend — it re-analyzes the
   agent's own text output with another LLM call to decide what to visualize, it
@@ -150,15 +155,33 @@ START → classify_query → retrieve_context → evaluate_context_sufficiency
 ### Two separate DB access paths — don't conflate them
 
 - `core/supabase_client.py::get_supabase_client()` — Supabase Python client
-  (PostgREST), used by nearly all business logic (normalization, journal_service,
-  account_mapping, services/*). Table calls are synchronous and wrapped in
-  `asyncio.to_thread(...)` throughout — follow this pattern for new Supabase calls.
-- `core/database.py::get_db()` — a direct `langchain_community.utilities.SQLDatabase`
-  (psycopg2) connection used only by the analytics agent's SQL toolkit for
-  free-form read queries against the warehouse.
+  (PostgREST) with the **service key**, used by nearly all business logic (normalization,
+  journal_service, account_mapping, services/*). It bypasses row-level security, so a route
+  that uses it must already have checked who the caller is (`api/deps.py`). Table calls are
+  synchronous and wrapped in `asyncio.to_thread(...)` throughout — follow this pattern.
+  It is an `@lru_cache` singleton that returns `None` when unconfigured; handle that.
+- `core/scoped_sql.py` — the analytics agent's read-only SQL over `DATABASE_URL` (psycopg2),
+  below.
 
-Both are `@lru_cache` singletons and return `None`/log a warning rather than
-raising when unconfigured — callers must handle the `None` case.
+### Agent database access (`core/scoped_sql.py`)
+
+The model writes SQL, so access cannot rely on it behaving. Two layers:
+
+1. `check_query` parses with Postgres's own parser (pglast) and accepts one plain SELECT over
+   an allow-list of business tables and views (`ALLOWED_RELATIONS`; not `external_sources`,
+   raw events, sync state, backups) calling only allow-listed functions
+   (`ALLOWED_FUNCTIONS`). The function list is what matters: `set_config` could rewrite the
+   identity RLS reads, `pg_read_file`/`dblink` reach out of the database. Add a function
+   to the list only when a real question needs it. CTE names are scoped properly, so
+   `WITH external_sources AS (SELECT * FROM external_sources)` is refused.
+2. `run_query` opens a READ ONLY transaction, `SET LOCAL ROLE authenticated`, sets the
+   user's id as the JWT claim, applies a statement timeout, and fetches at most 200 rows
+   through a server-side cursor. The same RLS policies as the app's pages therefore decide
+   which rows exist; the model is never trusted to filter by business.
+
+`DATABASE_URL` must be a role that can `SET ROLE authenticated` (the `postgres` role on
+Supabase). Add a table to `ALLOWED_RELATIONS` only with an RLS policy on it, and cover it in
+`tests/test_scoped_sql.py` and `e2e/rls.spec.ts`.
 
 ### ETL / normalization pipeline
 
@@ -268,18 +291,17 @@ review rather than mis-posted. Debits must equal credits within `BALANCE_TOLERAN
 
 ### Tools
 
-`tools/sql_tools.py` is the analytics agent's SQL toolkit. It runs free-form SQL on a
-direct Postgres connection that is **not** scoped to the caller's business; replacing it with
-RLS-scoped access is the next step in `docs/chat-redesign-plan.md` (Phase 1). The old
-`tools/sub_agents.py`, `agents/middleware.py`, `core/nodes.py` and `core/state.py` were
-unused and have been removed.
+`tools/sql_tools.py` builds the analytics agent's four database tools for one user
+(`sql_db_list_tables`, `sql_db_schema`, `sql_db_query_checker`, `sql_db_query`, the names the
+prompts use). The old `tools/sub_agents.py`, `agents/middleware.py`, `core/nodes.py`,
+`core/state.py`, `core/database.py` and `services/mcp_client.py` were unused or unsafe and
+have been removed.
 
 ## Environment
 
 Config is centralized in `core/config.py` (`pydantic_settings.BaseSettings`,
 loaded from `.env`, unknown keys ignored). Notable settings: `database_url`
-(direct Postgres), `supabase_url`/`supabase_key` (PostgREST), `supabase_access_token`
-(PAT for MCP auth), `local_llm_base_url`, `inngest_event_key`/`inngest_signing_key`,
+(direct Postgres), `supabase_url`/`supabase_key` (PostgREST), `local_llm_base_url`, `inngest_event_key`/`inngest_signing_key`,
 `pinecone_api_key` (vector store for embeddings/RAG), `internal_api_key` and
 `cors_allow_origins` (see "Authentication and authorization"), `zoho_client_id`/
 `zoho_client_secret`/`zoho_redirect_uri`/`zoho_accounts_domain` (see "OAuth
