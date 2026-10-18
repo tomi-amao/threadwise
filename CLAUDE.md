@@ -71,6 +71,9 @@ pnpm build                    # react-router build
 pnpm db:start                 # supabase start: applies supabase/migrations to the local stack
 pnpm db:fresh                 # reset the local DB, write .env.test, reseed (run after changing the seed)
 pnpm e2e                      # Playwright: 3 widths x 2 themes (starts its own server on :5180)
+pnpm e2e:quick                # desktop-light only (~2 min); `-- --last-failed` re-runs just failures
+pnpm e2e:changed              # desktop-light, only specs changed vs main
+pnpm e2e:mutations            # only the data-changing specs (~1.5 min)
 supabase migration up         # apply a new migration to the running local stack
 
 # Backend (cd apps/ai_agent — Poetry is not usable from repo root)

@@ -39,7 +39,10 @@
     "db:fresh": "supabase db reset && pnpm e2e:env && pnpm e2e:seed",
     "e2e:env": "pnpm --filter threadwise-chat-ui e2e:env",
     "e2e:seed": "pnpm --filter threadwise-chat-ui e2e:seed",
-    "e2e": "pnpm --filter threadwise-chat-ui test:e2e"
+    "e2e": "pnpm --filter threadwise-chat-ui test:e2e",
+    "e2e:quick": "pnpm --filter threadwise-chat-ui test:e2e:quick",
+    "e2e:changed": "pnpm --filter threadwise-chat-ui test:e2e:changed",
+    "e2e:mutations": "pnpm --filter threadwise-chat-ui test:e2e:mutations"
   },
   "keywords": [],
   "author": "",

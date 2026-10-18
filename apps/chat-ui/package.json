@@ -10,6 +10,9 @@
     "e2e:env": "tsx e2e/write-env.ts",
     "e2e:seed": "tsx e2e/seed/seed.ts",
     "test:e2e": "playwright test",
+    "test:e2e:quick": "playwright test --project=desktop-light",
+    "test:e2e:changed": "playwright test --project=desktop-light --only-changed=main",
+    "test:e2e:mutations": "E2E_MUTATIONS_ONLY=1 playwright test --project=mutations",
     "test:e2e:ui": "playwright test --ui"
   },
   "dependencies": {

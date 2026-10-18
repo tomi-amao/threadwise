@@ -26,7 +26,8 @@ export default defineConfig<{ theme: ThemeOption }>({
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 1 : 0,
-  workers: process.env.CI ? 1 : undefined,
+  // CI runners have 2 to 4 cores; one worker would leave them idle (CI also shards, see e2e.yml).
+  workers: process.env.CI ? Number(process.env.E2E_WORKERS ?? 2) : undefined,
   timeout: 30_000,
   expect: { timeout: 10_000 },
   reporter: process.env.CI ? [['list'], ['html', { open: 'never' }]] : [['list']],
@@ -71,14 +72,18 @@ export default defineConfig<{ theme: ThemeOption }>({
       // changed cost or an extra movement can never skew a total another test is checking.
       name: 'mutations',
       testMatch: /-edit\.spec\.ts/,
-      dependencies: [
-        'desktop-light',
-        'desktop-dark',
-        'tablet-light',
-        'tablet-dark',
-        'mobile-light',
-        'mobile-dark',
-      ],
+      // E2E_MUTATIONS_ONLY (CI's separate mutations job, which has its own database) skips the
+      // read-only projects and only logs in first.
+      dependencies: process.env.E2E_MUTATIONS_ONLY
+        ? ['setup']
+        : [
+            'desktop-light',
+            'desktop-dark',
+            'tablet-light',
+            'tablet-dark',
+            'mobile-light',
+            'mobile-dark',
+          ],
       fullyParallel: false,
       workers: 1,
       use: { ...desktop, theme: 'light', storageState: AUTH_FILE },

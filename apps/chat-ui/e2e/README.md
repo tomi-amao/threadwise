@@ -20,6 +20,10 @@ pnpm db:start      # supabase start (applies supabase/migrations)
 pnpm e2e:env       # writes apps/chat-ui/.env.test from `supabase status`
 pnpm e2e:seed      # test user + one business with orders, payments, banks, transactions
 pnpm e2e           # runs the suite (starts its own dev server on :5180)
+pnpm e2e:quick     # desktop-light only, ~2 min: use while iterating
+pnpm e2e:changed   # same, but only spec files changed vs main
+pnpm e2e:mutations # only the data-changing (`-edit`) specs
+# after a failure, add `-- --last-failed` to re-run only what failed
 ```
 
 Reset to a clean, freshly seeded database at any time with `pnpm db:fresh`.
@@ -54,3 +58,10 @@ Every page spec also runs axe and `expectNoHorizontalOverflow`, with each drawer
 - The browser's own calls to the agent (Integrations) are mocked in the spec with `page.route`,
   limited to the agent's address (the app's own modules also live under `/integrations/`).
 - `pnpm db:fresh` after changing the seed; it refuses to run twice otherwise.
+
+## CI
+
+`.github/workflows/e2e.yml` runs the six read-only projects as four parallel shards
+(`--shard=i/4`) and the `mutations` project as a fifth job (`E2E_MUTATIONS_ONLY=1`, which makes it
+depend on login only). Every job starts and seeds its own local Supabase, so no job sees another's
+data changes. Browsers are cached by Playwright version.
