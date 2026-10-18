@@ -36,8 +36,11 @@ const LEGACY_KEY = /^sb-.+-auth-token$/;
  * signed in before this change are not signed out. Safe to call on every load: it does nothing
  * once the cookie session exists or there is no legacy session, and it always removes the
  * legacy entry so it cannot be replayed.
+ *
+ * Returns true when it moved a session. The page's loaders already ran without a cookie (and
+ * answered 401), so the caller should reload once now that the cookie exists.
  */
-export async function migrateLegacySession(supabase: SupabaseClient): Promise<void> {
+export async function migrateLegacySession(supabase: SupabaseClient): Promise<boolean> {
   let legacyKey: string | null = null;
   try {
     for (let i = 0; i < localStorage.length; i++) {
@@ -48,10 +51,11 @@ export async function migrateLegacySession(supabase: SupabaseClient): Promise<vo
       }
     }
   } catch {
-    return; // storage unavailable (private mode, blocked): nothing to migrate
+    return false; // storage unavailable (private mode, blocked): nothing to migrate
   }
-  if (!legacyKey) return;
+  if (!legacyKey) return false;
 
+  let migrated = false;
   try {
     const { data } = await supabase.auth.getSession();
     if (!data.session) {
@@ -61,6 +65,7 @@ export async function migrateLegacySession(supabase: SupabaseClient): Promise<vo
           access_token: stored.access_token,
           refresh_token: stored.refresh_token,
         });
+        migrated = true;
       }
     }
   } catch {
@@ -72,4 +77,5 @@ export async function migrateLegacySession(supabase: SupabaseClient): Promise<vo
       /* ignore */
     }
   }
+  return migrated;
 }

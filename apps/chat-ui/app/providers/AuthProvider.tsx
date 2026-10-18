@@ -53,7 +53,11 @@ async function getSupabase(): Promise<SupabaseClient> {
   const { getSupabaseBrowserClient, migrateLegacySession } = await import('~/lib/supabase-browser');
   supabaseClient = getSupabaseBrowserClient();
   // People signed in before the move to cookie sessions keep their session.
-  await migrateLegacySession(supabaseClient);
+  if (await migrateLegacySession(supabaseClient)) {
+    // The loaders ran before the cookie existed and refused; run them again, once (the legacy
+    // copy is gone now, so this cannot loop).
+    window.location.reload();
+  }
   return supabaseClient;
 }
 
