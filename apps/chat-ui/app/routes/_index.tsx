@@ -2,7 +2,7 @@
  * Home Route (Landing Page)
  *
  * Public-facing home page for ThreadWise.
- * Describes the product and provides signup/login CTAs.
+ * The books, shown working: a sale you can follow, and the planner and tax maths to try.
  */
 
 import type { MetaFunction } from 'react-router';
@@ -10,11 +10,11 @@ import { LandingPage } from '~/components/landing';
 
 export const meta: MetaFunction = () => {
   return [
-    { title: 'ThreadWise - AI-Powered Business Intelligence' },
+    { title: 'ThreadWise - Know what you made. See how we know.' },
     {
       name: 'description',
       content:
-        'Replace complex dashboards with natural conversations. Ask questions about your finances, get instant insights, and make smarter decisions.',
+        'Double-entry books for people who make things. Connect Shopify, PayPal and your bank, and open any figure down to the orders and bank lines behind it.',
     },
   ];
 };
