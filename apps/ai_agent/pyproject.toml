@@ -38,6 +38,8 @@ dependencies = [
     # was removed/moved there) — cap it here until langchain-mcp-adapters itself
     # bumps its constraint after verifying compatibility.
     "mcp (<2.0.0)",
+    # Verifying Supabase user tokens against the project JWKS (ai_agent/core/auth.py)
+    "pyjwt[crypto] (>=2.10.0,<3.0.0)",
 ]
 
 [tool.poetry]

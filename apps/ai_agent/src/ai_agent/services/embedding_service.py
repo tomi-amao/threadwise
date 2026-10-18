@@ -47,7 +47,8 @@ from dotenv import load_dotenv
 # Load environment variables (relative to cwd, matching core/config.py's
 # load_dotenv(dotenv_path=".env") — do not hardcode an absolute path here,
 # it only worked on one developer's machine)
-load_dotenv(dotenv_path=".env", override=True)
+# override=False: a variable already set in the real environment wins over .env
+load_dotenv(dotenv_path=".env", override=False)
 
 logger = logging.getLogger(__name__)
 

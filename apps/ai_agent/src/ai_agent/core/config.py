@@ -13,7 +13,8 @@ from langchain.chat_models import init_chat_model
 from pydantic import BaseModel
 from pydantic_settings import BaseSettings
 
-load_dotenv(dotenv_path=".env", override=True)
+# override=False: a variable already set in the real environment wins over .env
+load_dotenv(dotenv_path=".env", override=False)
 
 # =============================================================================
 # PYDANTIC SETTINGS
@@ -49,6 +50,8 @@ class Settings(BaseSettings):
     supabase_url: Optional[str] = None
     supabase_key: Optional[str] = None
     supabase_anon_key: Optional[str] = None
+    # Only for legacy projects that still sign user tokens with a shared HS256 secret.
+    supabase_jwt_secret: Optional[str] = None
     supabase_access_token: Optional[str] = None  # PAT for MCP auth
     
     # Development settings
