@@ -10,7 +10,6 @@ from .config import (
     CustomContext,
     Settings,
 )
-from .database import get_db
 
 __all__ = [
     "get_local_llm",
@@ -18,5 +17,4 @@ __all__ = [
     "CustomState",
     "CustomContext",
     "Settings",
-    "get_db",
 ]

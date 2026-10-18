@@ -32,14 +32,9 @@ dependencies = [
     "pinecone (>=5.0.0)",
     "langchain-pinecone (>=0.2.0)",
     "inngest (>=0.5.15,<0.6.0)",
-    "langchain-mcp-adapters (>=0.2.1,<0.3.0)",
-    # langchain-mcp-adapters declares "mcp >=1.9.2" with no upper bound, but its
-    # actual code isn't compatible with mcp 2.x (mcp.shared.context.RequestContext
-    # was removed/moved there) — cap it here until langchain-mcp-adapters itself
-    # bumps its constraint after verifying compatibility.
-    "mcp (<2.0.0)",
     # Verifying Supabase user tokens against the project JWKS (ai_agent/core/auth.py)
     "pyjwt[crypto] (>=2.10.0,<3.0.0)",
+    "pglast (>=7.0,<8.0)",
 ]
 
 [tool.poetry]

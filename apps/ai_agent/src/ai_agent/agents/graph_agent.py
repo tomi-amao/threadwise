@@ -42,6 +42,7 @@ from typing import Annotated, Any, Literal, Sequence
 
 from langchain.agents import create_agent
 from langchain.messages import AIMessage, HumanMessage, SystemMessage
+from langchain_core.runnables import RunnableConfig
 from langchain_core.messages import BaseMessage
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
@@ -55,9 +56,8 @@ from .prompts import (
     invoice_extraction_prompt,
 )
 from ..core import get_local_llm, get_chat_model
-from ..tools.sql_tools import get_sql_tools
+from ..tools import agent_user_from_config, build_sql_tools
 from ..services.embedding_service import get_embedding_service
-from ..services.mcp_client import load_mcp_tools, get_available_data_sources
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -71,10 +71,6 @@ logging.basicConfig(level=logging.INFO)
 
 # Use TypedDict for proper LangGraph compatibility
 from typing import TypedDict
-
-# Data source type for routing between SQL toolkit and MCP servers
-DataSourceType = Literal["sql_toolkit", "supabase_mcp"]
-
 
 class AgentState(TypedDict):
     """State schema for the ad-hoc analytics agent graph.
@@ -90,8 +86,6 @@ class AgentState(TypedDict):
     has_file_attachment: bool | None
     extracted_document: dict | None
     model: str | None
-    # Data source selection: "sql_toolkit" (default) or "supabase_mcp"
-    data_source: DataSourceType | None
     # Semantic search context
     retrieved_context: list[dict] | None
     # Context sufficiency evaluation
@@ -491,23 +485,24 @@ async def generic_response_node(state: AgentState) -> dict[str, Any]:
     return {"messages": [ai_message]}
 
 
-async def analytics_agent_node(state: AgentState) -> dict[str, Any]:
-    """Handle data analytics queries with SQL tools or MCP tools.
+async def analytics_agent_node(state: AgentState, config: RunnableConfig) -> dict[str, Any]:
+    """Handle data analytics queries with the signed-in user's database tools.
 
-    Dynamically selects the tool set based on the data_source state field:
-    - "sql_toolkit" (default): Uses local SQLDatabaseToolkit tools
-    - "supabase_mcp": Connects to Supabase MCP server for database access
+    The tools are built per request from the authenticated user (set by the auth layer,
+    never by the client) and run every query as that user with row-level security on, so the
+    agent can only see its own business. A run with no authenticated user is refused.
 
-    Uses create_agent internally for flexible data exploration queries.
-    This node can execute SQL and generate visualizations. Enriches
-    queries with relevant context from the vector store.
+    Uses create_agent internally for flexible data exploration queries. Enriches queries
+    with relevant context from the vector store.
     """
     logger.info("=== ANALYTICS AGENT NODE ===")
 
-    retrieved_context = state.get("retrieved_context")
-    data_source = state.get("data_source", "sql_toolkit")
+    try:
+        user = agent_user_from_config(config)
+    except PermissionError as exc:
+        return {"messages": [AIMessage(content=str(exc))]}
 
-    logger.info(f"Data source: {data_source}")
+    retrieved_context = state.get("retrieved_context")
 
     # Build system prompt with optional context
     system_prompt = analytics_system_prompt
@@ -516,37 +511,12 @@ async def analytics_agent_node(state: AgentState) -> dict[str, Any]:
         system_prompt = f"{analytics_system_prompt}\n\n{context_str}\n\nUse the above context to inform your analysis when relevant."
         logger.info(f"Including {len(retrieved_context)} context documents in analytics")
 
-    # Select tools based on data source
-    sql_tools = get_sql_tools()
-    if data_source == "supabase_mcp":
-        try:
-            agent_tools = await load_mcp_tools("supabase_mcp")
-            logger.info(f"Using Supabase MCP tools: {[t.name for t in agent_tools]}")
-
-            # Enhance system prompt for MCP context
-            system_prompt += (
-                "\n\n## Data Source: Supabase MCP\n"
-                "You are connected to the database via Supabase MCP server. "
-                "Use the available MCP tools to query the database. "
-                "The tools include execute_sql for running queries and "
-                "list_tables for discovering the schema. "
-                "Always use execute_sql for data queries, not apply_migration."
-            )
-        except Exception as e:
-            logger.error(f"Failed to load MCP tools, falling back to SQL toolkit: {e}")
-            agent_tools = sql_tools
-            # Add a note about the fallback
-            system_prompt += (
-                "\n\nNote: MCP connection failed, using direct SQL toolkit instead. "
-                f"Error: {str(e)}"
-            )
-    else:
-        agent_tools = sql_tools
-        logger.info(f"Using SQL toolkit tools: {[t.name for t in agent_tools]}")
+    agent_tools = build_sql_tools(user)
+    logger.info(f"Using SQL tools: {[t.name for t in agent_tools]}")
 
     model = _get_local_model()
 
-    # Create a sub-agent for analytics with the selected tools
+    # Create a sub-agent for analytics with the user's tools
     analytics_agent = create_agent(
         model,
         tools=agent_tools,
@@ -558,17 +528,7 @@ async def analytics_agent_node(state: AgentState) -> dict[str, Any]:
     # Run the analytics agent - cast to list for compatibility
     result = await analytics_agent.ainvoke({"messages": list(messages)})  # type: ignore
 
-    # Extract the response
-    new_messages = result.get("messages", [])
-
-    # Get the last AI message for potential visualization
-    last_ai_msg = None
-    for msg in reversed(new_messages):
-        if isinstance(msg, AIMessage):
-            last_ai_msg = msg
-            break
-
-    return {"messages": new_messages}
+    return {"messages": result.get("messages", [])}
 
 
 async def infer_document_category_filter(user_query: str) -> dict[str, Any] | None:
@@ -644,7 +604,7 @@ Query: "{user_query}"
         return None
 
 
-async def retrieve_context_node(state: AgentState) -> dict[str, Any]:
+async def retrieve_context_node(state: AgentState, config: RunnableConfig) -> dict[str, Any]:
     """Retrieve relevant context from the vector store using semantic search.
 
     This node runs after query classification and before processing nodes.
@@ -677,6 +637,13 @@ async def retrieve_context_node(state: AgentState) -> dict[str, Any]:
     logger.info(f"Retrieving context for query: {user_query[:100]}...")
 
     try:
+        # Documents live in one vector namespace per business: search only the caller's.
+        user = agent_user_from_config(config)
+    except PermissionError:
+        logger.warning("No authenticated user - skipping context retrieval")
+        return {"retrieved_context": None}
+
+    try:
         embedding_service = get_embedding_service()
         if embedding_service is None:
             logger.warning("Embedding service not available - skipping context retrieval")
@@ -694,6 +661,7 @@ async def retrieve_context_node(state: AgentState) -> dict[str, Any]:
         search_results = await embedding_service.hybrid_search_with_rerank(
             query=user_query,
             limit=5,  # Final number of results after reranking
+            namespace=user.entity_id,
             similarity_threshold=0.3,  # Minimum similarity score for initial retrieval
             filter_metadata=filter_metadata,
             rerank=True,  # Enable reranking for better relevance

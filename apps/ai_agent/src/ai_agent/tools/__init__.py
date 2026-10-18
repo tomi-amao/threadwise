@@ -1,13 +1,8 @@
 """Tools module for ThreadWise AI Agent.
 
-Contains SQL tools, and custom tools for the financial agent.
-All heavy tool initialization is deferred via getter functions.
+Contains the analytics agent's database tools, scoped to the signed-in user.
 """
 
-from .sql_tools import get_toolkit, get_sql_tools, State
+from .sql_tools import AgentUser, agent_user_from_config, build_sql_tools
 
-__all__ = [
-    "get_toolkit",
-    "get_sql_tools",
-    "State",
-]
+__all__ = ["AgentUser", "agent_user_from_config", "build_sql_tools"]
