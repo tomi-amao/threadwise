@@ -23,6 +23,8 @@
  * a 409, as the real agent does when the period lock trips.
  *
  * Inventory: a quantity above 1,000 is refused with a 422.
+ *
+ * Every route answers only a request carrying a live Supabase user token, as the real agent does.
  */
 
 import { createServer } from 'node:http';
@@ -366,6 +368,18 @@ function send(res: import('node:http').ServerResponse, status: number, body: unk
 
 createServer(async (req, res) => {
   if (req.method === 'GET' && req.url === '/health') return send(res, 200, { ok: true });
+
+  // Like the real agent, answer only a signed-in user: the token must be a live Supabase one.
+  const bearer = /^Bearer (\S+)$/.exec(req.headers.authorization ?? '')?.[1];
+  const { data: caller } = bearer ? await supabase.auth.getUser(bearer) : { data: { user: null } };
+  if (!caller.user) return send(res, 401, { detail: 'Missing or invalid bearer token' });
+
+  // Where Zoho would send the user to consent; the test follows the redirect back to the app.
+  if (req.method === 'GET' && req.url === '/oauth/zoho_calendar/authorize-url') {
+    return send(res, 200, {
+      url: `http://localhost:${process.env.E2E_PORT ?? 5180}/integrations?zoho_calendar=connected`,
+    });
+  }
 
   if (req.method === 'POST' && req.url === '/accounting/inventory/disposal') {
     let raw = '';

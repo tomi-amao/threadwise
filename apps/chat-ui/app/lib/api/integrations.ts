@@ -8,6 +8,7 @@
  */
 
 import { getApiBaseUrl } from './base-url';
+import { agentFetch } from './agent-auth';
 
 // Integration summary from the API
 export interface IntegrationSummary {
@@ -104,7 +105,7 @@ export async function getIntegrationsSummary(entityId?: string): Promise<Integra
   const params = entityId ? `?entity_id=${entityId}` : '';
 
   try {
-    const response = await fetch(`${baseUrl}/integrations/summary${params}`, {
+    const response = await agentFetch(`${baseUrl}/integrations/summary${params}`, {
       method: 'GET',
       headers: {
         'Content-Type': 'application/json',
@@ -138,7 +139,7 @@ export async function triggerSync(
   const baseUrl = getApiBaseUrl();
 
   try {
-    const response = await fetch(`${baseUrl}/integrations/sources/${sourceId}/sync`, {
+    const response = await agentFetch(`${baseUrl}/integrations/sources/${sourceId}/sync`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -155,7 +156,9 @@ export async function triggerSync(
       try {
         const parsed = JSON.parse(errorText);
         detail = parsed.detail || detail;
-      } catch {}
+      } catch {
+        /* not JSON: keep the HTTP status as the message */
+      }
       throw new Error(detail);
     }
 
@@ -175,7 +178,7 @@ export async function createExternalSource(
   const baseUrl = getApiBaseUrl();
 
   try {
-    const response = await fetch(`${baseUrl}/integrations/sources`, {
+    const response = await agentFetch(`${baseUrl}/integrations/sources`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -197,18 +200,15 @@ export async function createExternalSource(
 }
 
 /**
- * Build the URL for the "Connect with Zoho" link on the Integrations page.
+ * The link behind "Connect with Zoho" on the Integrations page.
  *
  * Unlike every other provider, Zoho Calendar isn't connected by submitting
- * a form to createExternalSource — it needs real user-consent OAuth, so the
- * button is a plain link straight to the backend's redirect-to-Zoho route.
- * The backend builds the actual authorize URL (scopes, client_id, signed
- * state); this helper never needs to know any of that.
+ * a form to createExternalSource — it needs real user-consent OAuth. A link
+ * can't carry the user's token, so it points at the app's own route, which asks
+ * the agent (as the user) for the consent URL and redirects to it. The agent
+ * builds the actual authorize URL (scopes, client_id, signed state).
  */
-export function getZohoCalendarOAuthStartUrl(entityId: string): string {
-  const baseUrl = getApiBaseUrl();
-  return `${baseUrl}/oauth/zoho_calendar/start?entity_id=${encodeURIComponent(entityId)}`;
-}
+export const ZOHO_CALENDAR_CONNECT_PATH = '/api/integrations/zoho/connect';
 
 /**
  * Validate the API key for an integration
@@ -222,7 +222,7 @@ export async function validateApiKey(sourceId: string): Promise<ValidateApiKeyRe
   const baseUrl = getApiBaseUrl();
 
   try {
-    const response = await fetch(`${baseUrl}/integrations/sources/${sourceId}/validate`, {
+    const response = await agentFetch(`${baseUrl}/integrations/sources/${sourceId}/validate`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -257,7 +257,7 @@ export async function updateApiKey(
   const baseUrl = getApiBaseUrl();
 
   try {
-    const response = await fetch(`${baseUrl}/integrations/sources/${sourceId}/api-key`, {
+    const response = await agentFetch(`${baseUrl}/integrations/sources/${sourceId}/api-key`, {
       method: 'PUT',
       headers: {
         'Content-Type': 'application/json',
@@ -296,7 +296,7 @@ export async function triggerNormalization(
   const baseUrl = getApiBaseUrl();
 
   try {
-    const response = await fetch(`${baseUrl}/integrations/sources/${sourceId}/normalize`, {
+    const response = await agentFetch(`${baseUrl}/integrations/sources/${sourceId}/normalize`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -332,7 +332,7 @@ export async function reprocessFailedEvents(
   try {
     const body = sourceId ? { source_id: sourceId, limit } : { limit };
 
-    const response = await fetch(`${baseUrl}/normalization/reprocess-failed`, {
+    const response = await agentFetch(`${baseUrl}/normalization/reprocess-failed`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -366,7 +366,7 @@ export async function deleteExternalSource(
   const baseUrl = getApiBaseUrl();
 
   try {
-    const response = await fetch(`${baseUrl}/integrations/sources/${sourceId}`, {
+    const response = await agentFetch(`${baseUrl}/integrations/sources/${sourceId}`, {
       method: 'DELETE',
       headers: {
         'Content-Type': 'application/json',
@@ -401,7 +401,7 @@ export interface IncompleteTransaction {
   occurred_at: string;
   description: string | null;
   counterparty_name: string | null;
-  metadata: Record<string, any> | null;
+  metadata: Record<string, unknown> | null;
 }
 
 export interface IncompleteTransactionsResponse {
@@ -445,7 +445,7 @@ export async function getIncompleteTransactions(
   params.set('offset', offset.toString());
 
   try {
-    const response = await fetch(`${baseUrl}/integrations/transactions/incomplete?${params}`, {
+    const response = await agentFetch(`${baseUrl}/integrations/transactions/incomplete?${params}`, {
       method: 'GET',
       headers: { 'Content-Type': 'application/json' },
     });
@@ -472,11 +472,14 @@ export async function updateTransactionCategory(
   const baseUrl = getApiBaseUrl();
 
   try {
-    const response = await fetch(`${baseUrl}/integrations/transactions/${transactionId}/category`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ account_number: accountNumber }),
-    });
+    const response = await agentFetch(
+      `${baseUrl}/integrations/transactions/${transactionId}/category`,
+      {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ account_number: accountNumber }),
+      }
+    );
 
     if (!response.ok) {
       console.error('Failed to update transaction category:', response.status);
@@ -499,7 +502,7 @@ export async function aiCategorizeTransactions(
   const baseUrl = getApiBaseUrl();
 
   try {
-    const response = await fetch(`${baseUrl}/integrations/transactions/ai-categorize`, {
+    const response = await agentFetch(`${baseUrl}/integrations/transactions/ai-categorize`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ transaction_ids: transactionIds }),
@@ -527,7 +530,7 @@ export async function getChartOfAccounts(accountType?: string): Promise<ChartOfA
   if (accountType) params.set('account_type', accountType);
 
   try {
-    const response = await fetch(`${baseUrl}/integrations/chart-of-accounts?${params}`, {
+    const response = await agentFetch(`${baseUrl}/integrations/chart-of-accounts?${params}`, {
       method: 'GET',
       headers: { 'Content-Type': 'application/json' },
     });

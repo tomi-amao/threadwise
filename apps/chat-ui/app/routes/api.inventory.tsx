@@ -4,6 +4,7 @@
  * - POST recordDisposal: record a gift or write-off of stock (dated, journaled)
  */
 
+import { requestAccessToken } from '~/lib/api/agent-auth.server';
 import type { ActionFunctionArgs } from 'react-router';
 import { getRequestSupabaseClient, requireUser } from '~/lib/supabase-server';
 
@@ -49,7 +50,10 @@ export async function action({ request }: ActionFunctionArgs) {
     // Postgres directly — the same reasoning as invoice status changes.
     const response = await fetch(`${AI_AGENT_URL}/accounting/inventory/disposal`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${await requestAccessToken(request)}`,
+      },
       body: JSON.stringify({
         entity_id: item.entity_id,
         inventory_item_id: inventoryItemId,

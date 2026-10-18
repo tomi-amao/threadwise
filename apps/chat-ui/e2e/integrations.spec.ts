@@ -93,7 +93,8 @@ const SOURCES: Source[] = [
 
 const CORS = {
   'access-control-allow-origin': '*',
-  'access-control-allow-headers': '*',
+  // `*` does not cover Authorization, so it is named.
+  'access-control-allow-headers': 'authorization, content-type',
   'access-control-allow-methods': '*',
 };
 
@@ -116,6 +117,9 @@ async function mockAgent(page: Page, initial: Source[] = SOURCES) {
           headers: { ...CORS, 'content-type': 'application/json' },
           body: JSON.stringify(body),
         });
+      // The agent refuses anyone who is not signed in: so does this stand-in.
+      if (!/^Bearer \S+/.test(request.headers()['authorization'] ?? ''))
+        return json({ detail: 'Missing bearer token' }, 401);
       if (url.pathname === '/integrations/summary') return json(sources);
       let body: unknown = null;
       try {
@@ -260,11 +264,22 @@ test.describe('integrations', () => {
     await page.getByRole('button', { name: 'Add integration' }).first().click();
     const d = page.getByRole('dialog');
     await d.getByRole('radio', { name: /Zoho Calendar/ }).click();
+    // A plain link to the app's own route, which signs the request and redirects to Zoho.
     await expect(d.getByRole('link', { name: /Connect with Zoho/ })).toHaveAttribute(
       'href',
-      /oauth\/zoho_calendar\/start/
+      '/api/integrations/zoho/connect'
     );
     await expect(d.getByLabel(/API key/)).toHaveCount(0);
+  });
+
+  test('the Zoho link asks the agent as the signed-in user, then follows its redirect', async ({
+    page,
+  }) => {
+    // The stand-in agent only answers a live user token, so reaching its redirect proves the
+    // app sent one. (The link itself cannot carry a header, which is why it goes through the app.)
+    await mockAgent(page);
+    await page.goto('/api/integrations/zoho/connect');
+    await expect(page.getByText('Zoho Calendar connected').first()).toBeVisible();
   });
 
   test('with nothing connected it says where to start', async ({ page }) => {

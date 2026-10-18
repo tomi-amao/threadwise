@@ -29,6 +29,7 @@ import {
   setPaymentMatch,
   type OwnedInvoice,
 } from '~/lib/api/invoices.server';
+import { requestAccessToken } from '~/lib/api/agent-auth.server';
 import { getServerSupabaseClient } from '~/lib/supabase';
 import { getRequestSupabaseClient } from '~/lib/supabase-server';
 import type { StockDecision } from '~/types/invoice';
@@ -93,11 +94,11 @@ export async function action({ request }: ActionFunctionArgs) {
       case 'setStatus':
         return await setStatus(request, invoice, form);
       case 'update':
-        return await update(invoice, form);
+        return await update(request, invoice, form);
       case 'stock':
-        return await stock(invoice, form);
+        return await stock(request, invoice, form);
       case 'delete':
-        return await remove(invoice);
+        return await remove(request, invoice);
       case 'matchPayment':
       case 'unmatchPayment': {
         const result = await setPaymentMatch(
@@ -153,7 +154,10 @@ async function upload(request: Request, form: FormData) {
       invoice: { id: string; invoice_number: string | null; invoice_type: string };
       contact: { name: string; company_name: string | null } | null;
       extraction: { confidence_score: number };
-    }>('/accounting/invoices/process', { method: 'POST', body: agentForm });
+    }>('/accounting/invoices/process', await requestAccessToken(request), {
+      method: 'POST',
+      body: agentForm,
+    });
     return json({
       ok: true,
       invoiceId: result.invoice.id,
@@ -197,6 +201,7 @@ async function setStatus(request: Request, invoice: OwnedInvoice, form: FormData
     purchase_journal?: unknown;
   }>(
     `/accounting/invoices/${invoice.id}/status`,
+    await requestAccessToken(request),
     jsonInit('PATCH', { entity_id: invoice.entity_id, status })
   );
   return json({
@@ -208,7 +213,7 @@ async function setStatus(request: Request, invoice: OwnedInvoice, form: FormData
   });
 }
 
-async function update(invoice: OwnedInvoice, form: FormData) {
+async function update(request: Request, invoice: OwnedInvoice, form: FormData) {
   const body: Record<string, unknown> = { entity_id: invoice.entity_id };
   const notes = form.get('notes');
   if (typeof notes === 'string') body.notes = notes;
@@ -220,25 +225,31 @@ async function update(invoice: OwnedInvoice, form: FormData) {
   }
   if (coding) body.line_item_gl_accounts = coding;
 
-  await callAgent(`/accounting/invoices/${invoice.id}`, jsonInit('PATCH', body));
+  await callAgent(
+    `/accounting/invoices/${invoice.id}`,
+    await requestAccessToken(request),
+    jsonInit('PATCH', body)
+  );
   return json({ ok: true });
 }
 
-async function stock(invoice: OwnedInvoice, form: FormData) {
+async function stock(request: Request, invoice: OwnedInvoice, form: FormData) {
   const decisions = parseJson<StockDecision[]>(form.get('decisions'));
   if (!decisions || decisions.length === 0)
     return fail('Choose how at least one line is handled', 400);
 
   const result = await callAgent<{ recorded: number; not_recorded: string[] }>(
     `/accounting/invoices/${invoice.id}/stock`,
+    await requestAccessToken(request),
     jsonInit('POST', { entity_id: invoice.entity_id, decisions })
   );
   return json({ ok: true, recorded: result.recorded, notRecorded: result.not_recorded });
 }
 
-async function remove(invoice: OwnedInvoice) {
+async function remove(request: Request, invoice: OwnedInvoice) {
   await callAgent(
     `/accounting/invoices/${invoice.id}?entity_id=${encodeURIComponent(invoice.entity_id)}`,
+    await requestAccessToken(request),
     { method: 'DELETE' }
   );
   return json({ ok: true });

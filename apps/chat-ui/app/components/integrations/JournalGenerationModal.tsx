@@ -47,6 +47,7 @@ import { Button } from '~/components/ui/button';
 import { SearchableSelect, type SelectOption } from '~/components/ui/searchable-select';
 import { cn } from '~/lib/utils';
 import { getApiBaseUrl } from '~/lib/api/base-url';
+import { agentFetch } from '~/lib/api/agent-auth';
 import {
   generateAllJournals,
   fetchReviewSummary,
@@ -663,7 +664,7 @@ export function JournalGenerationModal({ isOpen, onClose, entityId }: JournalGen
   // Fetch subscription token — same pattern as SyncProgressToast, scoped to
   // the entity's journals channel instead of a source's sync channel.
   const refreshToken = async () => {
-    const response = await fetch(`${baseUrl}/realtime/subscription-token`, {
+    const response = await agentFetch(`${baseUrl}/realtime/subscription-token`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({

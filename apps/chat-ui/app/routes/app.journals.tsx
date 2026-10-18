@@ -12,6 +12,7 @@ import { useLoaderData } from 'react-router';
 import { RouteErrorBoundary } from '~/components/RouteErrorBoundary';
 import { JournalsPage } from '~/components/journals/JournalsPage';
 import { getUserEntity } from '~/lib/api/entity.server';
+import { requestAccessToken } from '~/lib/api/agent-auth.server';
 import {
   createManualJournal,
   getJournalDetail,
@@ -62,10 +63,16 @@ export async function action({ request }: ActionFunctionArgs) {
       result = await createManualJournal(supabase, entity.id, form);
       break;
     case 'reverse':
-      result = await reverseJournal(supabase, entity.id, id);
+      result = await reverseJournal(supabase, entity.id, id, await requestAccessToken(request));
       break;
     case 'postDraft':
-      result = await postDraft(supabase, entity.id, id, String(form.get('accountId') ?? ''));
+      result = await postDraft(
+        supabase,
+        entity.id,
+        id,
+        String(form.get('accountId') ?? ''),
+        await requestAccessToken(request)
+      );
       break;
     case 'suggest': {
       let ids: string[] = [];
@@ -74,7 +81,7 @@ export async function action({ request }: ActionFunctionArgs) {
       } catch {
         /* none */
       }
-      result = await suggestForDrafts(entity.id, ids);
+      result = await suggestForDrafts(entity.id, ids, await requestAccessToken(request));
       break;
     }
     default:

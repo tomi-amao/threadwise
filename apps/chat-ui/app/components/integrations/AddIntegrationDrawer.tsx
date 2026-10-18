@@ -10,7 +10,7 @@ import { Drawer } from '~/components/ui/drawer';
 import { Field } from '~/components/ui/field';
 import { Input } from '~/components/ui/input';
 import { PasswordInput } from '~/components/ui/password-input';
-import { createExternalSource, getZohoCalendarOAuthStartUrl } from '~/lib/api/integrations';
+import { createExternalSource, ZOHO_CALENDAR_CONNECT_PATH } from '~/lib/api/integrations';
 import { cn } from '~/lib/utils';
 import { useAuth } from '~/providers/AuthProvider';
 import { PROVIDERS, type ProviderKey } from './model';
@@ -130,7 +130,7 @@ function Form({ onDone }: { onDone: () => void }) {
             and allow access, so use the account whose calendar you want synced.
           </p>
           {entity?.id && (
-            <a href={getZohoCalendarOAuthStartUrl(entity.id)} className={buttonVariants({})}>
+            <a href={ZOHO_CALENDAR_CONNECT_PATH} className={buttonVariants({})}>
               <CalendarBlank size={16} aria-hidden /> Connect with Zoho
             </a>
           )}
