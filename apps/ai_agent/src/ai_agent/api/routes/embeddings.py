@@ -5,7 +5,9 @@ import logging
 from datetime import datetime
 from typing import Dict, Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
+
+from ..deps import require_internal
 
 from ..schemas import (
     EmbedFileRequest,
@@ -17,7 +19,7 @@ from ..schemas import (
     DeleteNamespaceRequest,
 )
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(require_internal)])
 logger = logging.getLogger(__name__)
 
 

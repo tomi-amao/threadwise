@@ -52,12 +52,7 @@ def health_check():
     """Health check endpoint."""
     embedding_service, langgraph_service, inngest_client, validate_inngest_config = get_services()
     
-    inngest_status = "disabled"
-    inngest_config = {}
-    
-    if inngest_client and validate_inngest_config:
-        inngest_status = "enabled"
-        inngest_config = validate_inngest_config()
+    inngest_status = "enabled" if inngest_client and validate_inngest_config else "disabled"
     
     return {
         "status": "ok",
@@ -66,7 +61,6 @@ def health_check():
         "chat_service": "enabled" if langgraph_service else "disabled",
         "embedding_service": "enabled" if embedding_service else "disabled",
         "inngest_service": inngest_status,
-        "inngest_config": inngest_config
     }
 
 

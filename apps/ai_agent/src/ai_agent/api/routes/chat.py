@@ -5,7 +5,9 @@ import logging
 from datetime import datetime
 from typing import Dict, Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
+
+from ..deps import current_user
 
 from ..schemas import (
     ChatMessage,
@@ -14,7 +16,7 @@ from ..schemas import (
     CreateAssistantRequest,
 )
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(current_user)])
 logger = logging.getLogger(__name__)
 
 

@@ -7,19 +7,30 @@ import asyncio
 import logging
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
 import inngest
 
 
+from ..deps import (
+    CurrentUser,
+    authorize_entity,
+    entity_guard,
+    owned_source,
+    owned_transaction,
+    require_internal,
+)
 from ...services.external_sync_service import sync_service
 from ...integrations.inngest import get_client
 from ...normalization.inngest_functions import trigger_source_normalization
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter()
+# Every route needs a signed-in user, and any business it names must be theirs.
+router = APIRouter(dependencies=[Depends(entity_guard)])
+# Machine-only routes (operators, scripts): INTERNAL_API_KEY.
+internal_router = APIRouter(dependencies=[Depends(require_internal)])
 
 
 # =============================================================================
@@ -177,7 +188,7 @@ class UpdateApiKeyResponse(BaseModel):
 # =============================================================================
 
 
-@router.post("/entities", response_model=EntityResponse, status_code=status.HTTP_201_CREATED)
+@internal_router.post("/entities", response_model=EntityResponse, status_code=status.HTTP_201_CREATED)
 async def create_entity(request: CreateEntityRequest):
     """Create a new entity."""
     try:
@@ -204,7 +215,7 @@ async def create_entity(request: CreateEntityRequest):
         )
 
 
-@router.get("/entities", response_model=List[EntityResponse])
+@internal_router.get("/entities", response_model=List[EntityResponse])
 async def list_entities():
     """List all entities."""
     try:
@@ -255,13 +266,14 @@ async def create_external_source(request: CreateExternalSourceRequest):
 
 @router.get("/sources", response_model=List[ExternalSourceResponse])
 async def list_external_sources(
+    user: CurrentUser,
     entity_id: Optional[str] = None,
     provider: Optional[str] = None
 ):
-    """List external sources with optional filtering."""
+    """List the caller's external sources, optionally filtered by provider."""
     try:
         return await sync_service.list_external_sources(
-            entity_id=entity_id,
+            entity_id=authorize_entity(user, entity_id),
             provider=provider
         )
     except Exception as e:
@@ -272,7 +284,7 @@ async def list_external_sources(
         )
 
 
-@router.get("/sources/{source_id}", response_model=ExternalSourceResponse)
+@router.get("/sources/{source_id}", dependencies=[Depends(owned_source)], response_model=ExternalSourceResponse)
 async def get_external_source(source_id: str):
     """Get an external source by ID."""
     try:
@@ -296,7 +308,7 @@ async def get_external_source(source_id: str):
         )
 
 
-@router.delete("/sources/{source_id}")
+@router.delete("/sources/{source_id}", dependencies=[Depends(owned_source)])
 async def delete_external_source(source_id: str):
     """Delete an external source and all associated data.
 
@@ -328,7 +340,7 @@ async def delete_external_source(source_id: str):
 # =============================================================================
 
 
-@router.put("/sources/{source_id}/api-key", response_model=UpdateApiKeyResponse)
+@router.put("/sources/{source_id}/api-key", dependencies=[Depends(owned_source)], response_model=UpdateApiKeyResponse)
 async def update_api_key(source_id: str, request: UpdateApiKeyRequest):
     """Update the API key for an external source.
     
@@ -366,7 +378,7 @@ async def update_api_key(source_id: str, request: UpdateApiKeyRequest):
 # =============================================================================
 
 
-@router.post("/sources/{source_id}/sync", response_model=TriggerSyncResponse)
+@router.post("/sources/{source_id}/sync", dependencies=[Depends(owned_source)], response_model=TriggerSyncResponse)
 async def trigger_sync(source_id: str, request: Optional[TriggerSyncRequest] = None):
     """Trigger a sync for an external source.
     
@@ -448,7 +460,7 @@ async def trigger_sync(source_id: str, request: Optional[TriggerSyncRequest] = N
         )
 
 
-@router.post("/sources/{source_id}/validate", response_model=ValidateApiKeyResponse)
+@router.post("/sources/{source_id}/validate", dependencies=[Depends(owned_source)], response_model=ValidateApiKeyResponse)
 async def validate_api_key(source_id: str):
     """Validate the API key for an external source.
     
@@ -706,7 +718,7 @@ async def _validate_zoho_calendar_api_key(api_key: str) -> tuple[bool, Optional[
         return False, f"Connection error: {str(e)}"
 
 
-@router.get("/sources/{source_id}/stats", response_model=SyncStatsResponse)
+@router.get("/sources/{source_id}/stats", dependencies=[Depends(owned_source)], response_model=SyncStatsResponse)
 async def get_sync_stats(source_id: str):
     """Get sync statistics for an external source."""
     try:
@@ -743,6 +755,7 @@ async def get_sync_stats(source_id: str):
 
 @router.post(
     "/sources/{source_id}/normalize",
+    dependencies=[Depends(owned_source)],
     response_model=TriggerNormalizeResponse,
     summary="Trigger Normalization",
     description="""
@@ -903,6 +916,7 @@ class CategorizationResult(BaseModel):
 
 @router.get(
     "/transactions/incomplete",
+    dependencies=[Depends(owned_source)],
     response_model=IncompleteTransactionsResponse,
     summary="Get Incomplete Transactions",
     description="Get financial transactions that are missing expense categorization in metadata."
@@ -974,6 +988,7 @@ async def get_incomplete_transactions(
 
 @router.put(
     "/transactions/{transaction_id}/category",
+    dependencies=[Depends(owned_transaction)],
     response_model=UpdateTransactionCategoryResponse,
     summary="Assign Category to Transaction",
     description="Assign a chart_of_accounts entry to a financial transaction."
@@ -1064,7 +1079,7 @@ async def update_transaction_category(
     summary="AI-Suggest Categories",
     description="Use AI to suggest chart_of_accounts categories for transactions based on their description, merchant, and MCC data."
 )
-async def ai_suggest_categories(request: AISuggestCategoryRequest):
+async def ai_suggest_categories(request: AISuggestCategoryRequest, user: CurrentUser):
     """AI-powered category suggestion for uncategorized transactions."""
     try:
         import asyncio
@@ -1075,7 +1090,18 @@ async def ai_suggest_categories(request: AISuggestCategoryRequest):
         client = get_supabase_client()
         if not client:
             raise RuntimeError("Supabase client not configured")
-        
+
+        owned = await asyncio.to_thread(
+            lambda: client.table("financial_transactions")
+            .select("id")
+            .in_("id", request.transaction_ids)
+            .eq("entity_id", user.entity_id)
+            .execute()
+            .data
+        )
+        if len(owned or []) != len(set(request.transaction_ids)):
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Not found")
+
         # Wrap blocking DB calls in asyncio.to_thread
         def _fetch_data():
             # Fetch transactions with their raw_event_id
@@ -1185,6 +1211,8 @@ async def ai_suggest_categories(request: AISuggestCategoryRequest):
         
         return AISuggestCategoryResponse(suggestions=suggestions)
     
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error in AI categorization: {e}")
         raise HTTPException(
@@ -1321,14 +1349,16 @@ async def get_chart_of_accounts(
 
 
 @router.get("/summary", response_model=List[IntegrationSummary])
-async def get_integrations_summary(entity_id: Optional[str] = None):
+async def get_integrations_summary(user: CurrentUser, entity_id: Optional[str] = None):
     """Get a summary of all integrations for UI display.
     
     Args:
         entity_id: Optional entity ID to filter by (for user's entity)
     """
     try:
-        sources = await sync_service.list_external_sources(entity_id=entity_id)
+        sources = await sync_service.list_external_sources(
+            entity_id=authorize_entity(user, entity_id)
+        )
         
         summaries = []
         for source in sources:

@@ -3,9 +3,11 @@
 import logging
 from datetime import datetime
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 
-router = APIRouter()
+from ..deps import require_internal
+
+router = APIRouter(dependencies=[Depends(require_internal)])
 logger = logging.getLogger(__name__)
 
 

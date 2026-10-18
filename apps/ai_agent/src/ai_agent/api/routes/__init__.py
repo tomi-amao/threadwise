@@ -13,7 +13,10 @@ from .integrations import router as integrations_router
 from .oauth import router as oauth_router
 from .realtime import router as realtime_router
 from .normalization import router as normalization_router
+from .normalization import user_router as normalization_user_router
 from .accounting import router as accounting_router
+from .accounting import internal_router as accounting_internal_router
+from .integrations import internal_router as integrations_internal_router
 
 # Main API router
 router = APIRouter()
@@ -27,6 +30,9 @@ router.include_router(integrations_router, prefix="/integrations", tags=["Integr
 router.include_router(oauth_router, prefix="/oauth", tags=["OAuth"])
 router.include_router(realtime_router, prefix="/realtime", tags=["Realtime"])
 router.include_router(normalization_router, prefix="/normalization", tags=["Normalization"])
+router.include_router(normalization_user_router, prefix="/normalization", tags=["Normalization"])
 router.include_router(accounting_router, prefix="/accounting", tags=["Accounting"])
+router.include_router(accounting_internal_router, prefix="/accounting", tags=["Accounting"])
+router.include_router(integrations_internal_router, prefix="/integrations", tags=["Integrations"])
 
 __all__ = ["router"]

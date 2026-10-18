@@ -8,7 +8,7 @@ import logging
 from enum import Enum
 from typing import List
 
-from fastapi import APIRouter, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, status, Query
 from pydantic import BaseModel, Field
 
 from ...integrations.inngest.config import get_subscription_token
@@ -20,11 +20,12 @@ from ...integrations.inngest.channels import (
     NORMALIZATION_TOPICS,
     JOURNAL_TOPICS,
 )
+from ..deps import CurrentUser, assert_owned, authorize_entity, current_user, owned_source
 from ...services.external_sync_service import sync_service
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(current_user)])
 
 
 # =============================================================================
@@ -121,9 +122,17 @@ class SubscriptionTokenResponse(BaseModel):
 )
 async def create_subscription_token(
     request: SubscriptionTokenRequest,
+    user: CurrentUser,
 ) -> SubscriptionTokenResponse:
     """Generate a subscription token for realtime updates."""
     try:
+        # A token only ever opens the caller's own channels. Journals are scoped to the
+        # business (source_id is its id); sync and normalization to one of its sources.
+        if request.channel_type == ChannelType.JOURNALS:
+            authorize_entity(user, request.source_id)
+        else:
+            await assert_owned(user, "external_sources", request.source_id)
+
         # Verify the subject exists. Journals are scoped to an entity, not an
         # external source, so they're verified against a different table.
         if request.channel_type == ChannelType.JOURNALS:
@@ -141,8 +150,6 @@ async def create_subscription_token(
                     detail=f"External source not found: {request.source_id}"
                 )
 
-        # TODO: Add proper authorization checks here
-        
         # Resolve channel config
         config = CHANNEL_CONFIG[request.channel_type]
         valid_topics = config["topics"]
@@ -194,6 +201,7 @@ async def create_subscription_token(
 
 @router.get(
     "/channels/{source_id}",
+    dependencies=[Depends(owned_source)],
     summary="Get Channel Information",
     description="Get information about available channels and topics for a source",
 )
