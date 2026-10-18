@@ -21,6 +21,7 @@ export interface Entity {
   industry: string | null;
   description: string | null;
   website: string | null;
+  country: string | null;
   employee_count: string | null;
   onboarding_completed: boolean;
   created_at: string;

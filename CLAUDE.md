@@ -27,21 +27,13 @@ path typos in `.gitignore`/`.pre-commit-config.yaml`, an empty stray
 `apps/ai_agent/__init__.py` that broke all of pytest, `bandit`/`flake8` not being
 real dependencies, a production-build-breaking route naming issue). What's left:
 
-- Frontend `typecheck` still fails on ~8 pre-existing genuine type errors
-  (`OnboardingModal` extra prop, a `ChatProvider` message-content type mismatch,
-  a couple of `ReactNode` mismatches, `tailwind.config.ts` darkMode typing) —
-  these predate any given task; don't assume you broke typecheck unless your
-  diff touches those specific files. (A larger batch of ~20 `import.meta`/
-  dynamic-import errors that used to dominate this list turned out to share one
-  root cause — `tsconfig.json` never set `module` explicitly, so with
-  `moduleResolution: "Bundler"` it silently resolved to `module: "es6"` — and
-  is a known, not-yet-applied one-line fix: add `"module": "ESNext"`.)
-- ESLint has a large pre-existing backlog (mostly `no-explicit-any` and
-  `no-unused-vars` across the newer route files) that the Husky `lint-staged`
-  hook's `eslint --fix` will refuse to commit past — it aborts the whole commit
-  on *any* remaining error in a staged file, including ones unrelated to your
-  change. Until that backlog is cleared, `git commit --no-verify` is the
-  practical workaround for otherwise-legitimate commits.
+- Frontend `typecheck` has 4 errors, all in the chat code (`ChatArea`, `ThreadSidebar`,
+  `ChatProvider`), which is being reworked separately. Everything else type-checks clean, so a new
+  error is yours.
+- ESLint is clean outside the chat code (`components/thread/*`, `ChatProvider`). The Husky
+  `lint-staged` hook runs `eslint --fix` and aborts a commit on any remaining error in a staged
+  file, so committing a chat file still needs `git commit --no-verify` until that code is
+  reworked; nothing else should.
 - `apps/chat-ui/.env.local` is committed to git with live Supabase/LangSmith/Google
   API keys despite `.gitignore` listing `**/.env.local` — the ignore rule was added
   after the file was already tracked. Don't add new secrets to it, and flag this to
@@ -51,9 +43,9 @@ real dependencies, a production-build-breaking route naming issue). What's left:
   `docker-compose.yml`) — stale paths from before an app rename, and the backend
   Dockerfile is unmodified `langgraph build` template output. Not part of the
   day-to-day dev workflow; don't try to fix it as a side effect of an unrelated task.
-- No frontend test runner exists yet (no Vitest/Jest, no test script) — planned
-  as a follow-up, not yet started. Backend has one test file
-  (`apps/ai_agent/tests/test_normalization.py`); most services are untested.
+- Frontend tests are Playwright end-to-end tests (see "Frontend tests" below); there is no
+  unit-test runner. Backend has one test file (`apps/ai_agent/tests/test_normalization.py`); most
+  services are untested.
 
 ## Commands (run from repo root unless noted)
 
@@ -74,6 +66,15 @@ pnpm dev:all                    # or: make dev-all — chat-ui + langgraph dev (
 # Frontend-specific (cd apps/chat-ui, or --filter threadwise-chat-ui from root)
 pnpm typecheck                # react-router typegen && tsc
 pnpm build                    # react-router build
+
+# Local database and end-to-end tests (from repo root; needs Docker and the Supabase CLI)
+pnpm db:start                 # supabase start: applies supabase/migrations to the local stack
+pnpm db:fresh                 # reset the local DB, write .env.test, reseed (run after changing the seed)
+pnpm e2e                      # Playwright: 3 widths x 2 themes (starts its own server on :5180)
+pnpm e2e:quick                # desktop-light only (~2 min); `-- --last-failed` re-runs just failures
+pnpm e2e:changed              # desktop-light, only specs changed vs main
+pnpm e2e:mutations            # only the data-changing specs (~1.5 min)
+supabase migration up         # apply a new migration to the running local stack
 
 # Backend (cd apps/ai_agent — Poetry is not usable from repo root)
 poetry install
@@ -122,12 +123,21 @@ distinct data paths, and it matters which one a given feature uses:
    (also defaults to `:2024` in some files — check the actual env var before assuming
    which port a given call hits).
 3. **Direct-to-Supabase reads** — `.server.ts` loaders (`dashboard.server.ts`,
-   `bank-balance.server.ts`, `revenue-metrics.server.ts`, etc.) query Supabase
-   directly via `getServerSupabaseClient()`/`getAuthenticatedServerClient()`
-   (`app/lib/supabase.ts`), bypassing the AI agent entirely for read-heavy dashboard
-   data. `getAuthenticatedServerClient` forwards the caller's session (Authorization
-   header or `sb-*-auth-token` cookie) so Postgres RLS applies; `getServerSupabaseClient`
-   uses the service-role key and bypasses RLS — don't use it for user-scoped reads.
+   `inventory.server.ts`, `orders.server.ts`, `invoices.server.ts`, etc.) query Supabase
+   directly, bypassing the AI agent, **as the signed-in user**:
+   `getRequestSupabaseClient(request)` (`app/lib/supabase-server.ts`) builds a client from the
+   `sb-*-auth-token` cookie, so Postgres row-level security decides what each read can see.
+   Call `requireUser(request)` first: with no valid session every RLS read quietly returns
+   nothing, and an empty page is worse than a 401. Never read business data with
+   `getServerSupabaseClient()` (service-role key, bypasses RLS). It is only for what a user
+   session must not do: storage (invoice documents) and writes that go to tables with no write
+   policy, and only _after_ the same row was read as the user. Writes that touch the ledger go to
+   the agent. The business comes from `getUserEntity(request)`, never from the request.
+   Policies (`supabase/migrations/20261017000000_row_level_security.sql`): every table the app
+   reads has an owner-of-the-entity SELECT policy, views are `security_invoker`, `anon` has no
+   privileges, and SECURITY DEFINER functions are service-role only
+   (`20261017000001_lock_down_functions.sql`). `e2e/rls.spec.ts` proves it against a second
+   seeded business; add a table to its list when you add one to the app.
 
 ### Frontend structure (`apps/chat-ui/`)
 
@@ -135,8 +145,8 @@ distinct data paths, and it matters which one a given feature uses:
   file-system convention — check that file to find which route module backs a URL.
   Two layouts: `routes/auth.tsx` (login/signup) and `routes/app.tsx` (the
   authenticated app shell with sidebar: dashboard, chat, invoices, transactions,
-  collections, reports, orders, products, inventory, customers, integrations,
-  account, reclassification, journals, tax).
+  collections (`/collections` and `/collections/:id`), reports, orders, products, inventory,
+  customers, integrations, account, journals, tax).
   `api.*.tsx` routes (no `.server` suffix — see below) are resource routes (no
   UI) that the frontend's own `fetch` calls hit as a thin proxy/aggregation
   layer in front of the AI agent or Supabase.
@@ -147,8 +157,11 @@ distinct data paths, and it matters which one a given feature uses:
   module referenced by client") when it tries to generate the route's client-side
   stub. Plain `.ts`/`.tsx` is correct; `loader`/`action` exports are already
   server-only by framework convention regardless of filename. (Helper modules
-  under `lib/api/*.server.ts` that are only ever *imported by* a route, not
+  under `lib/api/*.server.ts` that are only ever _imported by_ a route, not
   registered as one themselves, are a different case and fine to suffix.)
+  A client component must not import a _value_ from a `*.server.ts` module (the module is
+  stripped from the client bundle and the page fails to load with a 500 on that file); type-only
+  imports are fine. Shared constants belong in a plain `lib/*.ts` file.
 - `providers/AuthProvider.tsx` wraps the whole app (in `root.tsx`) and owns
   Supabase auth state, profile, and entity (the business/org record) — most
   authenticated pages read from `useAuth()` rather than querying Supabase themselves.
@@ -157,6 +170,26 @@ distinct data paths, and it matters which one a given feature uses:
   message shape, to avoid a conversion layer.
 - `components/dashboard/`, `components/visualizations/`, etc. are organized by
   feature/domain, mirroring the route list above.
+
+### Design system
+
+Tokens are in `app/globals.css` (light and dark, one value each, components use tokens only,
+never raw colours); the shared kit is `app/components/ui` (browse it at `/ui-kit` in development).
+`docs/design-language.md` has the reference design and, at the end, the "As built" decisions and
+rules (contrast values, one job per colour, compact vs hero headers, state in the URL, drawers and
+confirm dialogs, accessibility rules). Build a page from the kit before adding a component.
+
+### Frontend tests (`apps/chat-ui/e2e/`)
+
+Playwright against a local Supabase stack and a seeded business (plus a second, rival business to
+prove the security boundary). Import `test`/`expect` from `./fixtures`, assert on counts and
+figures from `readManifest()` (written by the seed), never on dates or invented numbers. Every
+page spec also runs axe and an overflow check. Files named `*-edit.spec.ts` change data and run
+last, in the `mutations` project, restoring what they change (helpers in `e2e/helpers/db.ts`);
+don't change the seeded user's password (it signs every session out; use a throwaway user), and
+don't remove seeded rows. The stand-in agent (`e2e/stand-in-agent.ts`) answers the server-side
+agent calls; calls the browser makes to the agent are mocked in the spec with `page.route`.
+`e2e/README.md` has the layout.
 
 ### Backend structure (`apps/ai_agent/`)
 

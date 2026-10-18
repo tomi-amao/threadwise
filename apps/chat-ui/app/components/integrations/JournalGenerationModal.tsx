@@ -145,32 +145,32 @@ const PIPELINE_STEPS: Array<{
     title: 'Accrue Payments',
     description: 'Revenue recognition for captured payments → Clearing',
     icon: ShoppingCart,
-    iconColor: 'text-blue-400',
-    bgColor: 'bg-blue-500/10',
+    iconColor: 'text-accent-text',
+    bgColor: 'bg-accent-tint',
   },
   {
     key: 'journal_settlements',
     title: 'Settle Payouts',
     description: 'Cash recognition from inbound gateway transfers',
     icon: Bank,
-    iconColor: 'text-emerald-400',
-    bgColor: 'bg-emerald-500/10',
+    iconColor: 'text-income',
+    bgColor: 'bg-income/10',
   },
   {
     key: 'journal_inbound',
     title: 'Journal Inbound',
     description: 'Funding, sales receipts, refunds, FX conversions, merchant payments',
     icon: ArrowRight,
-    iconColor: 'text-cyan-400',
-    bgColor: 'bg-cyan-500/10',
+    iconColor: 'text-income',
+    bgColor: 'bg-income/10',
   },
   {
     key: 'journal_expenses',
     title: 'Journal Expenses',
     description: 'Record categorised bank outflows as expenses',
     icon: Receipt,
-    iconColor: 'text-amber-400',
-    bgColor: 'bg-amber-500/10',
+    iconColor: 'text-accent-text',
+    bgColor: 'bg-accent-tint',
   },
 ];
 
@@ -238,17 +238,17 @@ function StepStatusIcon({
 }) {
   switch (status) {
     case 'running':
-      return <ArrowsClockwise size={18} className="text-blue-400 animate-spin" />;
+      return <ArrowsClockwise size={18} className="text-accent-text animate-spin" />;
     case 'completed':
-      return <CheckCircle size={18} weight="fill" className="text-emerald-400" />;
+      return <CheckCircle size={18} weight="fill" className="text-income" />;
     case 'error':
-      return <XCircle size={18} weight="fill" className="text-red-400" />;
+      return <XCircle size={18} weight="fill" className="text-destructive" />;
     default:
       return (
         <div
           className={cn(
             'h-[18px] w-[18px] rounded-full border-2',
-            isActive ? 'border-blue-400' : 'border-border'
+            isActive ? 'border-ring/40' : 'border-border'
           )}
         />
       );
@@ -331,13 +331,13 @@ function DraftJournalRow({
   };
 
   return (
-    <div className="rounded-lg border border-amber-500/20 bg-amber-500/5">
+    <div className="rounded-lg border border-ring/40 bg-accent-tint">
       <button
         onClick={() => setExpanded(e => !e)}
-        className="w-full flex items-center justify-between px-3 py-2.5 text-left hover:bg-amber-500/5 transition-colors rounded-lg"
+        className="w-full flex items-center justify-between px-3 py-2.5 text-left hover:bg-accent-tint transition-colors rounded-lg"
       >
         <div className="flex items-center gap-2 min-w-0">
-          <ClipboardText size={16} className="text-amber-400 shrink-0" />
+          <ClipboardText size={16} className="text-accent-text shrink-0" />
           <span className="text-sm text-foreground truncate">
             {journal.description ?? `${journal.journal_type} journal`}
           </span>
@@ -346,7 +346,7 @@ function DraftJournalRow({
           </span>
         </div>
         <div className="flex items-center gap-2 shrink-0 ml-2">
-          <span className="text-xs px-1.5 py-0.5 rounded-full bg-amber-500/20 text-amber-400 font-medium">
+          <span className="text-xs px-1.5 py-0.5 rounded-full bg-accent-tint text-accent-text font-medium">
             draft
           </span>
           {expanded ? (
@@ -358,7 +358,7 @@ function DraftJournalRow({
       </button>
 
       {expanded && lineItems.length > 0 && (
-        <div className="px-3 pb-3 space-y-1 border-t border-amber-500/10 pt-2">
+        <div className="px-3 pb-3 space-y-1 border-t border-ring/40 pt-2">
           <p className="text-xs text-muted-foreground mb-1.5">Journal line items:</p>
           {lineItems.map((li, i) => (
             <div key={i} className="flex items-center justify-between text-xs font-mono gap-2">
@@ -366,12 +366,12 @@ function DraftJournalRow({
               <div className="flex gap-3 shrink-0">
                 {li.debit > 0 && (
                   <span className="text-muted-foreground">
-                    DR <span className="text-emerald-400">{li.debit.toFixed(2)}</span>
+                    DR <span className="text-income">{li.debit.toFixed(2)}</span>
                   </span>
                 )}
                 {li.credit > 0 && (
                   <span className="text-muted-foreground">
-                    CR <span className="text-blue-400">{li.credit.toFixed(2)}</span>
+                    CR <span className="text-accent-text">{li.credit.toFixed(2)}</span>
                   </span>
                 )}
               </div>
@@ -383,15 +383,15 @@ function DraftJournalRow({
                 Correct GL account for the uncategorised line:
               </label>
               {suggestedAccount ? (
-                <div className="flex items-start gap-1.5 text-xs bg-violet-500/10 border border-violet-500/20 rounded-lg px-2.5 py-2">
-                  <Sparkle size={13} weight="fill" className="text-violet-400 shrink-0 mt-0.5" />
-                  <span className="text-violet-200">
+                <div className="flex items-start gap-1.5 text-xs bg-income/10 border border-income/30 rounded-lg px-2.5 py-2">
+                  <Sparkle size={13} weight="fill" className="text-income shrink-0 mt-0.5" />
+                  <span className="text-income">
                     <span className="font-medium">Suggested: </span>
                     <span className="font-mono">{suggestedAccount.account_number}</span>
                     {' — '}
                     {suggestedAccount.name} · {Math.round((suggestion?.confidence ?? 0) * 100)}%
                     confident
-                    <span className="block text-violet-300/70 mt-0.5">{suggestion?.reasoning}</span>
+                    <span className="block text-income mt-0.5">{suggestion?.reasoning}</span>
                   </span>
                 </div>
               ) : (
@@ -438,7 +438,7 @@ function DraftJournalRow({
               </Button>
             </div>
           ) : (
-            <p className="text-xs text-amber-400/70 mt-2 pt-2 border-t border-border/60">
+            <p className="text-xs text-accent-text mt-2 pt-2 border-t border-border/60">
               No uncategorised line found on this journal — nothing to fix here.
             </p>
           )}
@@ -537,8 +537,8 @@ function ReviewTab({ entityId }: { entityId: string }) {
 
   if (error) {
     return (
-      <div className="rounded-xl border border-red-500/20 bg-red-500/5 px-4 py-3">
-        <p className="text-sm text-red-400">{error}</p>
+      <div className="rounded-xl border border-destructive/30 bg-destructive/10 px-4 py-3">
+        <p className="text-sm text-destructive">{error}</p>
         <button
           onClick={load}
           className="mt-2 text-xs text-muted-foreground hover:text-foreground underline"
@@ -561,7 +561,7 @@ function ReviewTab({ entityId }: { entityId: string }) {
         <div
           className={cn(
             'flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium',
-            totalDraft > 0 ? 'bg-amber-500/15 text-amber-400' : 'bg-muted text-muted-foreground'
+            totalDraft > 0 ? 'bg-accent-tint text-accent-text' : 'bg-muted text-muted-foreground'
           )}
         >
           <ClipboardText size={13} />
@@ -578,9 +578,9 @@ function ReviewTab({ entityId }: { entityId: string }) {
       </div>
 
       {nothingToReview && (
-        <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 px-4 py-4 text-center">
-          <CheckCircle size={24} weight="fill" className="text-emerald-400 mx-auto mb-2" />
-          <p className="text-sm font-medium text-emerald-300">Everything looks good</p>
+        <div className="rounded-xl border border-income/30 bg-income/10 px-4 py-4 text-center">
+          <CheckCircle size={24} weight="fill" className="text-income mx-auto mb-2" />
+          <p className="text-sm font-medium text-income">Everything looks good</p>
           <p className="text-xs text-muted-foreground mt-1">No draft journals require attention.</p>
         </div>
       )}
@@ -593,9 +593,9 @@ function ReviewTab({ entityId }: { entityId: string }) {
             className="w-full flex items-center justify-between mb-2 group"
           >
             <div className="flex items-center gap-2">
-              <ClipboardText size={16} className="text-amber-400" />
+              <ClipboardText size={16} className="text-accent-text" />
               <span className="text-sm font-medium text-foreground">Draft Journals</span>
-              <span className="text-xs px-1.5 py-0.5 rounded-full bg-amber-500/20 text-amber-400">
+              <span className="text-xs px-1.5 py-0.5 rounded-full bg-accent-tint text-accent-text">
                 {totalDraft}
               </span>
             </div>
@@ -697,7 +697,7 @@ export function JournalGenerationModal({ isOpen, onClose, entityId }: JournalGen
   useEffect(() => {
     if (!freshData || freshData.length === 0) return;
 
-    freshData.forEach((message: any) => {
+    freshData.forEach(message => {
       if (message.topic === 'status') {
         setOverallStatus(prev => {
           const incoming = message.data as JournalPipelineStatusData;
@@ -829,8 +829,8 @@ export function JournalGenerationModal({ isOpen, onClose, entityId }: JournalGen
         {/* Header */}
         <div className="sticky top-0 z-10 flex items-center justify-between border-b border-border bg-card/95 backdrop-blur-sm px-6 py-4">
           <div className="flex items-center gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-violet-500/10">
-              <BookOpen size={22} weight="duotone" className="text-violet-400" />
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-income/10">
+              <BookOpen size={22} weight="duotone" className="text-income" />
             </div>
             <div>
               <h2 className="text-lg font-semibold text-foreground">Generate Journals</h2>
@@ -858,7 +858,7 @@ export function JournalGenerationModal({ isOpen, onClose, entityId }: JournalGen
             className={cn(
               'flex items-center gap-1.5 px-1 py-3 text-sm font-medium border-b-2 -mb-px transition-colors',
               activeTab === 'pipeline'
-                ? 'border-violet-500 text-violet-400'
+                ? 'border-income/30 text-income'
                 : 'border-transparent text-muted-foreground hover:text-muted-foreground'
             )}
           >
@@ -870,7 +870,7 @@ export function JournalGenerationModal({ isOpen, onClose, entityId }: JournalGen
             className={cn(
               'flex items-center gap-1.5 px-1 py-3 ml-4 text-sm font-medium border-b-2 -mb-px transition-colors',
               activeTab === 'review'
-                ? 'border-amber-500 text-amber-400'
+                ? 'border-ring/40 text-accent-text'
                 : 'border-transparent text-muted-foreground hover:text-muted-foreground'
             )}
           >
@@ -919,7 +919,7 @@ export function JournalGenerationModal({ isOpen, onClose, entityId }: JournalGen
                           className={cn(
                             'px-3 py-1.5 rounded-lg text-xs font-medium transition-colors border',
                             scope === opt.value
-                              ? 'border-violet-500/50 bg-violet-500/15 text-violet-300'
+                              ? 'border-income/30 bg-income/10 text-income'
                               : 'border-border/60 bg-muted/50 text-muted-foreground hover:text-foreground hover:border-border'
                           )}
                         >
@@ -943,16 +943,16 @@ export function JournalGenerationModal({ isOpen, onClose, entityId }: JournalGen
                   className={cn(
                     'rounded-xl border px-4 py-3 mb-2',
                     overallStatus.total_errors > 0
-                      ? 'border-amber-500/30 bg-amber-500/5'
-                      : 'border-emerald-500/30 bg-emerald-500/5'
+                      ? 'border-ring/40 bg-accent-tint'
+                      : 'border-income/30 bg-income/10'
                   )}
                 >
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-3">
                       {overallStatus.total_errors > 0 ? (
-                        <WarningCircle size={20} weight="fill" className="text-amber-400" />
+                        <WarningCircle size={20} weight="fill" className="text-accent-text" />
                       ) : (
-                        <CheckCircle size={20} weight="fill" className="text-emerald-400" />
+                        <CheckCircle size={20} weight="fill" className="text-income" />
                       )}
                       <div className="text-sm">
                         <span className="font-semibold text-foreground">
@@ -973,7 +973,7 @@ export function JournalGenerationModal({ isOpen, onClose, entityId }: JournalGen
                         {overallStatus.total_errors > 0 && (
                           <>
                             {' · '}
-                            <span className="font-semibold text-red-400">
+                            <span className="font-semibold text-destructive">
                               {overallStatus.total_errors}
                             </span>{' '}
                             <span className="text-muted-foreground">
@@ -986,7 +986,7 @@ export function JournalGenerationModal({ isOpen, onClose, entityId }: JournalGen
                     {/* Review prompt */}
                     <button
                       onClick={() => setActiveTab('review')}
-                      className="flex items-center gap-1 text-xs text-amber-400 hover:text-amber-300 transition-colors"
+                      className="flex items-center gap-1 text-xs text-accent-text hover:text-accent-text transition-colors"
                     >
                       <Eye size={13} />
                       Review items
@@ -998,11 +998,11 @@ export function JournalGenerationModal({ isOpen, onClose, entityId }: JournalGen
 
               {/* Trigger / connection errors */}
               {(triggerError || realtimeError) && (
-                <div className="rounded-xl border border-red-500/30 bg-red-500/5 px-4 py-3 mb-2">
+                <div className="rounded-xl border border-destructive/30 bg-destructive/10 px-4 py-3 mb-2">
                   <div className="flex items-start gap-2">
-                    <XCircle size={18} weight="fill" className="text-red-400 mt-0.5 shrink-0" />
+                    <XCircle size={18} weight="fill" className="text-destructive mt-0.5 shrink-0" />
                     <div>
-                      <p className="text-sm font-medium text-red-400">
+                      <p className="text-sm font-medium text-destructive">
                         {triggerError ? 'Could not start pipeline' : 'Realtime connection error'}
                       </p>
                       <p className="text-sm text-muted-foreground mt-1">
@@ -1028,11 +1028,11 @@ export function JournalGenerationModal({ isOpen, onClose, entityId }: JournalGen
                         className={cn(
                           'rounded-xl border px-4 py-3 transition-all',
                           status === 'error'
-                            ? 'border-red-500/20 bg-red-500/5'
+                            ? 'border-destructive/30 bg-destructive/10'
                             : status === 'completed'
                               ? 'border-border/60 bg-muted/30'
                               : status === 'running'
-                                ? 'border-blue-500/30 bg-blue-500/5'
+                                ? 'border-ring/40 bg-accent-tint'
                                 : 'border-border/40 bg-muted/20'
                         )}
                       >
@@ -1067,7 +1067,7 @@ export function JournalGenerationModal({ isOpen, onClose, entityId }: JournalGen
                                 {step.title}
                               </h3>
                               {status === 'running' && (
-                                <span className="text-xs text-blue-400 animate-pulse">
+                                <span className="text-xs text-accent-text animate-pulse">
                                   Running...
                                 </span>
                               )}
@@ -1091,7 +1091,7 @@ export function JournalGenerationModal({ isOpen, onClose, entityId }: JournalGen
                               </div>
                             )}
                             {progress?.step_error && (
-                              <p className="text-xs text-red-400 mt-1">{progress.step_error}</p>
+                              <p className="text-xs text-destructive mt-1">{progress.step_error}</p>
                             )}
                           </div>
 
@@ -1121,7 +1121,7 @@ export function JournalGenerationModal({ isOpen, onClose, entityId }: JournalGen
                                     key={i}
                                     className="rounded-lg bg-background/50 px-3 py-2 text-xs"
                                   >
-                                    <p className="text-red-400">{err.error}</p>
+                                    <p className="text-destructive">{err.error}</p>
                                     {sourceId && (
                                       <p className="text-muted-foreground/60 mt-0.5 font-mono">
                                         ID: {sourceId.slice(0, 8)}...
@@ -1144,7 +1144,7 @@ export function JournalGenerationModal({ isOpen, onClose, entityId }: JournalGen
                               status === 'completed'
                                 ? 'bg-border'
                                 : status === 'running'
-                                  ? 'bg-blue-500/50'
+                                  ? 'bg-accent-tint'
                                   : 'bg-muted/30'
                             )}
                           />
@@ -1183,11 +1183,7 @@ export function JournalGenerationModal({ isOpen, onClose, entityId }: JournalGen
               <Button
                 onClick={isDone ? onClose : handleGenerate}
                 variant={isDone ? 'secondary' : 'default'}
-                className={cn(
-                  'gap-2 text-sm font-medium',
-                  !isDone &&
-                    'bg-violet-600 hover:bg-violet-500 text-white shadow-lg shadow-violet-500/20'
-                )}
+                className="gap-2 text-sm font-medium"
               >
                 {isDone ? (
                   <>Done</>

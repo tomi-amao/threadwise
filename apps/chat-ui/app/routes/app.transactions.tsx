@@ -15,9 +15,5 @@ export const meta: MetaFunction = () => {
 };
 
 export default function TransactionsRoute() {
-  return (
-    <div className="min-h-screen bg-background p-6 lg:p-8">
-      <TransactionsPage />
-    </div>
-  );
+  return <TransactionsPage />;
 }

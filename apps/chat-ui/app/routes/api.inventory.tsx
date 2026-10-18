@@ -5,7 +5,7 @@
  */
 
 import type { ActionFunctionArgs } from 'react-router';
-import { getServerSupabaseClient } from '~/lib/supabase';
+import { getRequestSupabaseClient, requireUser } from '~/lib/supabase-server';
 
 const AI_AGENT_URL = process.env.AI_AGENT_URL || 'http://localhost:8000';
 
@@ -32,16 +32,17 @@ export async function action({ request }: ActionFunctionArgs) {
       return json({ error: 'Quantity must be a positive number' }, { status: 400 });
     }
 
-    const supabase = getServerSupabaseClient();
-    const { data: item, error: itemError } = await supabase
+    // The item is read as the signed-in user, so one that belongs to another business is simply
+    // not found, and the entity sent to the agent is always one the user owns.
+    await requireUser(request);
+    const { data: item, error: itemError } = await getRequestSupabaseClient(request)
       .from('inventory_items')
       .select('entity_id')
       .eq('id', inventoryItemId)
-      .single();
+      .maybeSingle();
 
-    if (itemError || !item?.entity_id) {
-      return json({ error: itemError?.message ?? 'Inventory item not found' }, { status: 404 });
-    }
+    if (itemError) return json({ error: itemError.message }, { status: 500 });
+    if (!item?.entity_id) return json({ error: 'Inventory item not found' }, { status: 404 });
 
     // Recording a disposal writes both the subledger movement and its ledger
     // journal in one atomic step, so this goes through the agent rather than

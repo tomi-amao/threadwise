@@ -12,7 +12,7 @@ Provides endpoints for:
 
 import asyncio
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
@@ -21,6 +21,7 @@ from pydantic import BaseModel, Field
 from ...normalization.utils import extract_rows
 from ...services.reconciliation_service import reconciliation_service
 from ...services.journal_service import journal_service, JournalError
+from ...services.invoice_rules import InvoiceRuleError, VALID_STATUSES
 from ...services.invoice_service import invoice_service
 from ...services.paypal_cleaning_service import paypal_cleaning_service
 
@@ -795,7 +796,7 @@ async def process_invoice(
     entity_id: str = Form(...),
     file: UploadFile = File(...),
     file_path: str = Form(""),
-    create_journal: bool = Form(True),
+    create_journal: bool = Form(False),
     invoice_type: Optional[str] = Form(None),
 ):
     """Process an uploaded invoice document end-to-end.
@@ -806,7 +807,10 @@ async def process_invoice(
     3. Contact upserted (counterparty only, never our own entity)
     4. Invoice record created (source = AI-detected platform e.g. 'paypal', 'revolut')
     5. Invoice line items created (with GL account resolved from chart of accounts)
-    6. Journal posted (purchase or sale depending on invoice_type)
+
+    The invoice is created as a DRAFT and nothing is posted to the ledger: the journal
+    belongs at finalisation (PATCH /invoices/{id}/status). ``create_journal=true`` posts
+    it at upload instead and exists only for scripted backfills.
 
     Returns full result object with invoice, contact, line items, and journal.
     """
@@ -840,11 +844,11 @@ async def list_invoices(
     limit: int = 100,
     offset: int = 0,
 ):
-    """List invoices with embedded contact info."""
+    """List invoices with embedded contact info (newest first, at most 500 per call)."""
     try:
         inv_type = invoice_type  # type: ignore[assignment]
         invoices = await invoice_service.list_invoices(
-            UUID(entity_id), inv_type, status_filter, limit, offset
+            UUID(entity_id), inv_type, status_filter, max(1, min(limit, 500)), max(0, offset)
         )
         return {"entity_id": entity_id, "invoices": invoices, "count": len(invoices)}
     except Exception as e:
@@ -883,14 +887,18 @@ async def update_invoice_status(invoice_id: str, request: UpdateInvoiceStatusReq
     Both journals are idempotent, so repeating a transition will not double-post.
     If the purchase journal fails the status does not move.
 
+    PAID → OPEN voids the payment journal; CANCELLED and VOID void every journal the
+    invoice posted. Moves the lifecycle does not allow (see ``invoice_rules``) are
+    refused with a 409.
+
     Invoices dated before the accounting cutoff are refused with a 400 — their
-    journal would be dated in a restated period. CANCELLED and VOID post nothing
-    and are always allowed.
+    journal would be dated in a restated period. CANCELLED and VOID are never
+    blocked by that rule.
     """
-    valid = {"DRAFT", "OPEN", "PAID", "PARTIALLY_PAID", "OVERDUE", "CANCELLED", "VOID"}
-    if request.status not in valid:
+    if request.status.upper() not in VALID_STATUSES:
         raise HTTPException(
-            status_code=400, detail=f"Invalid status. Must be one of {valid}"
+            status_code=400,
+            detail=f"Invalid status. Must be one of {sorted(VALID_STATUSES)}",
         )
     try:
         return await invoice_service.set_invoice_status(
@@ -899,6 +907,8 @@ async def update_invoice_status(invoice_id: str, request: UpdateInvoiceStatusReq
             request.status,
             allow_prior_period=request.allow_prior_period,
         )
+    except InvoiceRuleError as e:  # before ValueError: it is a subclass
+        raise HTTPException(status_code=409, detail=str(e))
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except JournalError as e:
@@ -911,11 +921,19 @@ async def update_invoice_status(invoice_id: str, request: UpdateInvoiceStatusReq
 
 
 @router.delete("/invoices/{invoice_id}")
-async def delete_invoice(invoice_id: str):
-    """Delete an invoice and its line items."""
+async def delete_invoice(invoice_id: str, entity_id: str):
+    """Delete a draft, cancelled or void invoice, its line items and its stored document.
+
+    Refused (409) for an invoice that is open or paid, or that still has posted journals:
+    void it instead, which reverses them.
+    """
     try:
-        await invoice_service.delete_invoice(UUID(invoice_id))
-        return {"success": True, "invoice_id": invoice_id}
+        result = await invoice_service.delete_invoice(UUID(entity_id), UUID(invoice_id))
+        return {"success": True, "invoice_id": invoice_id, **result}
+    except InvoiceRuleError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         logger.error(f"Error deleting invoice: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -927,7 +945,10 @@ async def delete_invoice(invoice_id: str):
 
 
 class UpdateInvoiceRequest(BaseModel):
-    invoice_type: Optional[str] = Field(None, description="SALE or PURCHASE")
+    entity_id: str = Field(..., description="Entity the invoice belongs to")
+    invoice_type: Optional[str] = Field(
+        None, description="SALE or PURCHASE (only while the invoice is a draft)"
+    )
     notes: Optional[str] = Field(None, description="Invoice notes")
     line_item_gl_accounts: Optional[Dict[str, Optional[str]]] = Field(
         None,
@@ -954,155 +975,68 @@ async def update_invoice(invoice_id: str, request: UpdateInvoiceRequest):
         if request.notes is not None:
             updates["notes"] = request.notes
 
-        result = await invoice_service.update_invoice(
+        return await invoice_service.update_invoice(
+            UUID(request.entity_id),
             UUID(invoice_id),
             updates,
             line_item_gl_updates=request.line_item_gl_accounts,
         )
-        if not result:
-            raise HTTPException(status_code=404, detail="Invoice not found")
-        return result
-    except HTTPException:
-        raise
+    except InvoiceRuleError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         logger.error(f"Error updating invoice: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
 # =============================================================================
-# PRODUCT CREATION FROM INVOICE LINE ITEMS
+# STOCK DECISIONS FOR A PURCHASE INVOICE
 # =============================================================================
 
 
-class CreateProductsFromInvoiceRequest(BaseModel):
-    entity_id: str = Field(..., description="Entity ID")
-    line_item_ids: List[str] = Field(
-        ..., description="IDs of invoice_line_items to create as products"
-    )
-    overrides: Optional[Dict[str, Dict[str, str]]] = Field(
-        None,
-        description=(
-            "Optional per-line-item name/sku overrides keyed by line_item_id. "
-            "e.g. {\"<uuid>\": {\"name\": \"Red Cap\", \"sku\": \"CAP-RED\"}}"
-        ),
-    )
-
-
-@router.post("/invoices/{invoice_id}/products")
-async def create_products_from_invoice(
-    invoice_id: str, request: CreateProductsFromInvoiceRequest
-):
-    """Create product catalog entries from selected invoice line items.
-
-    Products are created with provider='invoice' and can later be enriched
-    when synced with an e-commerce platform (e.g. Squarespace).
-    """
-    if not request.line_item_ids:
-        raise HTTPException(status_code=400, detail="No line items selected")
-    try:
-        products = await invoice_service.create_products_from_line_items(
-            entity_id=UUID(request.entity_id),
-            invoice_id=UUID(invoice_id),
-            line_item_ids=request.line_item_ids,
-            overrides=request.overrides,
-        )
-        return {
-            "success": True,
-            "invoice_id": invoice_id,
-            "products": products,
-            "count": len(products),
-        }
-    except Exception as e:
-        logger.error(f"Error creating products from invoice: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-# =============================================================================
-# LINK INVOICE LINE ITEMS TO EXISTING PRODUCTS (BACKFILL UNIT COSTS)
-# =============================================================================
-
-
-class LinkLineItemsToProductsRequest(BaseModel):
-    entity_id: str = Field(..., description="Entity ID")
-    links: List[Dict[str, str]] = Field(
+class StockDecision(BaseModel):
+    line_item_id: str
+    action: Literal["expense", "link", "new", "track"] = Field(
         ...,
-        description="List of {line_item_id, product_id} pairs to link",
-    )
-
-
-@router.post("/invoices/{invoice_id}/link-to-products")
-async def link_line_items_to_products(
-    invoice_id: str, request: LinkLineItemsToProductsRequest
-):
-    """Backfill unit costs on existing products from invoice line items.
-
-    Matches each line item to an existing product and updates the unit_cost
-    on all inventory_items for that product. Use this when the product catalog
-    already exists (e.g. synced from Squarespace) and costs are sourced from
-    purchase invoices.
-    """
-    if not request.links:
-        raise HTTPException(status_code=400, detail="No links provided")
-    try:
-        result = await invoice_service.link_line_items_to_existing_products(
-            entity_id=UUID(request.entity_id),
-            invoice_id=UUID(invoice_id),
-            links=request.links,
-        )
-        return {
-            "success": True,
-            "invoice_id": invoice_id,
-            **result,
-        }
-    except Exception as e:
-        logger.error(f"Error linking line items to products: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-# =============================================================================
-# INVENTORY MOVEMENTS ONLY (skip expenses that still need stock tracking)
-# =============================================================================
-
-
-class CreateInventoryMovementsRequest(BaseModel):
-    entity_id: str = Field(..., description="Entity ID")
-    line_item_ids: List[str] = Field(
-        ..., description="IDs of invoice_line_items to record stock movements for"
-    )
-    overrides: Optional[Dict[str, Dict[str, str]]] = Field(
-        None,
         description=(
-            "Optional per-line-item overrides keyed by line_item_id. "
-            "Accepted keys: sku, asset_account_id, cogs_account_id"
+            "expense: no stock record. link: set an existing product's cost from this line. "
+            "new: create a draft product. track: record stock without a catalogue product."
         ),
     )
+    product_id: Optional[str] = Field(None, description="Required for 'link'")
+    name: Optional[str] = Field(None, description="Product name for 'new' (defaults to the line)")
+    sku: Optional[str] = None
+    asset_account_id: Optional[str] = None
+    cogs_account_id: Optional[str] = None
 
 
-@router.post("/invoices/{invoice_id}/inventory-movements")
-async def create_inventory_movements(
-    invoice_id: str, request: CreateInventoryMovementsRequest
-):
-    """Create inventory items and PURCHASE movements without a product catalog entry.
+class StockDecisionsRequest(BaseModel):
+    entity_id: str
+    decisions: List[StockDecision] = Field(..., min_length=1)
 
-    Used when the user skips a line item as an expense but still wants the
-    physical stock movement tracked (e.g. raw materials, consumables).
+
+@router.post("/invoices/{invoice_id}/stock")
+async def apply_stock_decisions(invoice_id: str, request: StockDecisionsRequest):
+    """Decide how each line of a purchase invoice is treated as stock, in one call.
+
+    Replaces the separate create-products, link-to-products and inventory-movements
+    endpoints. Validated up front (nothing is written if any line is invalid) and
+    idempotent per line. Returns one result per line, with whether a purchase movement
+    now exists for it.
     """
-    if not request.line_item_ids:
-        raise HTTPException(status_code=400, detail="No line items provided")
     try:
-        result = await invoice_service.create_inventory_movements_only(
-            entity_id=UUID(request.entity_id),
-            invoice_id=UUID(invoice_id),
-            line_item_ids=request.line_item_ids,
-            overrides=request.overrides,
+        return await invoice_service.apply_stock_decisions(
+            UUID(request.entity_id),
+            UUID(invoice_id),
+            [d.model_dump() for d in request.decisions],
         )
-        return {
-            "success": True,
-            "invoice_id": invoice_id,
-            **result,
-        }
+    except InvoiceRuleError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
-        logger.error(f"Error creating inventory movements: {e}", exc_info=True)
+        logger.error(f"Error applying stock decisions: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 

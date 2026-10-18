@@ -9,6 +9,7 @@ import { useLoaderData } from 'react-router';
 import { DashboardView } from '~/components/dashboard/DashboardView';
 import { RouteErrorBoundary } from '~/components/RouteErrorBoundary';
 import { getDashboardData } from '~/lib/api/dashboard.server';
+import { requireUser } from '~/lib/supabase-server';
 import type { DashboardData } from '~/types/dashboard';
 
 export const meta: MetaFunction = () => {
@@ -21,6 +22,7 @@ export const meta: MetaFunction = () => {
 export async function loader({
   request,
 }: LoaderFunctionArgs): Promise<{ dashboard: DashboardData }> {
+  await requireUser(request);
   const dashboard = await getDashboardData(request);
   return { dashboard };
 }

@@ -25,6 +25,7 @@ interface AuthContextType {
   ) => Promise<{ error: AuthError | null }>;
   signIn: (email: string, password: string) => Promise<{ error: AuthError | null }>;
   signOut: () => Promise<void>;
+  updatePassword: (password: string) => Promise<{ error: Error | null }>;
   updateProfile: (updates: Partial<UserProfile>) => Promise<{ error: Error | null }>;
   updateEntity: (updates: Partial<Entity>) => Promise<{ error: Error | null }>;
   refreshProfile: () => Promise<void>;
@@ -50,8 +51,14 @@ let supabaseClient: SupabaseClient | null = null;
 async function getSupabase(): Promise<SupabaseClient> {
   if (supabaseClient) return supabaseClient;
 
-  const { getSupabaseBrowserClient } = await import('~/lib/supabase');
+  const { getSupabaseBrowserClient, migrateLegacySession } = await import('~/lib/supabase-browser');
   supabaseClient = getSupabaseBrowserClient();
+  // People signed in before the move to cookie sessions keep their session.
+  if (await migrateLegacySession(supabaseClient)) {
+    // The loaders ran before the cookie existed and refused; run them again, once (the legacy
+    // copy is gone now, so this cannot loop).
+    window.location.reload();
+  }
   return supabaseClient;
 }
 
@@ -191,8 +198,13 @@ export function AuthProvider({ children }: AuthProviderProps) {
       });
 
       if (entityError) {
-        return { error: entityError as any };
+        // The caller only reads `.message`; the entity insert failure is surfaced the same way.
+        return { error: entityError as unknown as AuthError };
       }
+
+      // The sign-in event fired before the business existed, so the provider has none yet.
+      // Load it now, or the new account would show no business name and skip onboarding.
+      await fetchProfileAndEntity(authData.user);
 
       return { error: null };
     } catch (err) {
@@ -217,6 +229,13 @@ export function AuthProvider({ children }: AuthProviderProps) {
     await supabase.auth.signOut();
     setProfile(null);
     setEntity(null);
+  };
+
+  // Change the signed-in user's password
+  const updatePassword = async (password: string): Promise<{ error: Error | null }> => {
+    const supabase = await getSupabase();
+    const { error } = await supabase.auth.updateUser({ password });
+    return { error: error as Error | null };
   };
 
   // Update profile
@@ -277,6 +296,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
     signUp,
     signIn,
     signOut,
+    updatePassword,
     updateProfile,
     updateEntity,
     refreshProfile,

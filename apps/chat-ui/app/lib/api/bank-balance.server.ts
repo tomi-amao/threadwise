@@ -1,4 +1,5 @@
 import { getServerSupabaseClient } from '~/lib/supabase';
+import { fetchAllRows } from './paginate.server';
 
 type SupabaseClient = ReturnType<typeof getServerSupabaseClient>;
 
@@ -76,23 +77,23 @@ export async function getDerivedBankBalances(
     [balanceAsOf, earliestSnapshot].filter((value): value is string => Boolean(value)).sort()[0] ||
     null;
 
-  let txnsQuery = supabase
-    .from('financial_transactions')
-    .select('bank_account_id, base_amount, amount, direction, occurred_at')
-    .in('bank_account_id', accountIds)
-    .neq('status', 'excluded')
-    .limit(10000);
+  // Every transaction after the snapshot, not just the API's first 1,000 (see paginate.server.ts).
+  // A silently truncated list here understates or overstates the bank balance.
+  const bankTransactions = await fetchAllRows<BankTransactionRow>(
+    'bank transactions',
+    (from, to) => {
+      let query = supabase
+        .from('financial_transactions')
+        .select('bank_account_id, base_amount, amount, direction, occurred_at')
+        .in('bank_account_id', accountIds)
+        .neq('status', 'excluded')
+        .order('id');
+      if (lowerBound) query = query.gt('occurred_at', lowerBound);
+      return query.range(from, to);
+    }
+  );
 
-  if (lowerBound) {
-    txnsQuery = txnsQuery.gt('occurred_at', lowerBound);
-  }
-
-  const { data: bankTransactions, error: bankTransactionsError } = await txnsQuery;
-
-  if (bankTransactionsError) {
-    throw new Error(`Failed to load bank transactions: ${bankTransactionsError.message}`);
-  }
-  const relevantTransactions = (bankTransactions || []) as BankTransactionRow[];
+  const relevantTransactions = bankTransactions;
 
   const snapshotByAccountId = new Map(
     activeBankAccounts.map(account => [

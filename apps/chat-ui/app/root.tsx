@@ -1,25 +1,31 @@
-import { Links, Meta, Outlet, Scripts, ScrollRestoration } from 'react-router';
-import type { LinksFunction } from 'react-router';
+import { Links, Meta, Outlet, Scripts, ScrollRestoration, useRouteLoaderData } from 'react-router';
+import type { LoaderFunctionArgs } from 'react-router';
 import { Toaster } from 'sonner';
+import '@fontsource-variable/fraunces/opsz.css';
+import '@fontsource-variable/geist';
+import '@fontsource-variable/geist-mono';
 import { AuthProvider } from '~/providers/AuthProvider';
+import { ThemeProvider, useTheme } from '~/providers/ThemeProvider';
+import { DEFAULT_THEME, parseTheme } from '~/lib/theme';
 import './globals.css';
 
-export const links: LinksFunction = () => [
-  { rel: 'preconnect', href: 'https://fonts.googleapis.com' },
-  {
-    rel: 'preconnect',
-    href: 'https://fonts.gstatic.com',
-    crossOrigin: 'anonymous',
-  },
-  {
-    rel: 'stylesheet',
-    href: 'https://fonts.googleapis.com/css2?family=Inter:wght@100..900&display=swap',
-  },
-];
+export function loader({ request }: LoaderFunctionArgs) {
+  return { theme: parseTheme(request.headers.get('cookie')) };
+}
+
+/** Sonner needs the theme at render time; this reads it from the provider. */
+function ThemedToaster() {
+  const { theme } = useTheme();
+  return <Toaster position="top-center" richColors theme={theme} className="toaster group" />;
+}
 
 export function Layout({ children }: { children: React.ReactNode }) {
+  // Loader data is undefined when an error boundary renders the layout; fall back to light.
+  const data = useRouteLoaderData<typeof loader>('root');
+  const theme = data?.theme ?? DEFAULT_THEME;
+
   return (
-    <html lang="en" className="dark">
+    <html lang="en" className={theme === 'dark' ? 'dark' : undefined}>
       <head>
         <meta charSet="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -27,8 +33,10 @@ export function Layout({ children }: { children: React.ReactNode }) {
         <Links />
       </head>
       <body className="font-sans">
-        <AuthProvider>{children}</AuthProvider>
-        <Toaster position="top-center" richColors theme="dark" className="toaster group" />
+        <ThemeProvider initialTheme={theme}>
+          <AuthProvider>{children}</AuthProvider>
+          <ThemedToaster />
+        </ThemeProvider>
         <ScrollRestoration />
         <Scripts />
       </body>

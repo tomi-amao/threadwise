@@ -15,7 +15,8 @@
  * submission requires HMRC-recognised software and iXBRL-tagged accounts.
  */
 
-import { getServerSupabaseClient } from '~/lib/supabase';
+import type { SupabaseClient } from '@supabase/supabase-js';
+import { fetchAllRows } from './paginate.server';
 
 // VAT registration becomes compulsory once taxable turnover in any rolling
 // 12-month window exceeds this. Checked monthly, not at year end.
@@ -154,6 +155,75 @@ export interface TaxData {
   provision: TaxProvisionPosition;
 }
 
+// ─── Rows as the queries below select them ────────────────────────────
+
+type Num = number | string | null;
+
+interface PeriodMetaRow {
+  id: string;
+  filed_net_assets: Num;
+  notes: string | null;
+}
+
+/** One row of `compute_corporation_tax`. */
+interface ComputationRow {
+  period_id: string;
+  label: string;
+  start_date: string;
+  end_date: string;
+  status: TaxPeriod['status'];
+  payment_due: string;
+  filing_due: string;
+  ledger_basis: boolean | null;
+  accounting_profit: Num;
+  add_backs: Num;
+  deductions: Num;
+  adjusted_profit: Num;
+  loss_brought_forward: Num;
+  loss_relief_used: Num;
+  taxable_profit: Num;
+  loss_carried_forward: Num;
+  marginal_relief: Num;
+  effective_rate: Num;
+  tax_due: Num;
+}
+
+interface AdjustmentRow {
+  id: string;
+  period_id: string;
+  direction: TaxAdjustment['direction'];
+  category: string;
+  description: string;
+  amount: Num;
+  source: TaxAdjustment['source'];
+  account_number: string | null;
+}
+
+interface ReviewRow {
+  period_id: string;
+  account_number: string;
+  account_name: string;
+  amount: Num;
+  line_count: Num;
+  guidance: string;
+}
+
+interface BreakdownRow {
+  period_id: string;
+  account_id: string;
+  account_number: string;
+  account_name: string;
+  account_type: ProfitBreakdownLine['accountType'];
+  balance: Num;
+  line_count: Num;
+}
+
+interface PositionRow {
+  account_number: string;
+  net_debit: Num;
+  net_credit: Num;
+}
+
 const MONTH_MS = 1000 * 60 * 60 * 24 * 30.44;
 
 function monthsBetween(from: Date, to: Date): number {
@@ -167,9 +237,12 @@ function daysUntil(dateStr: string): number {
   return Math.round((target.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
 }
 
-export async function getTaxData(): Promise<TaxData> {
-  const supabase = getServerSupabaseClient();
-
+/**
+ * The tax position for the signed-in user's business. `supabase` is the user's own client, so
+ * row-level security limits every read (and the views and functions below, which run as the
+ * caller) to their business.
+ */
+export async function getTaxData(supabase: SupabaseClient): Promise<TaxData> {
   const { data: entityRows, error: entityError } = await supabase
     .from('entities')
     .select(
@@ -202,11 +275,10 @@ export async function getTaxData(): Promise<TaxData> {
     ]);
 
   const periodMeta = new Map<string, { filedNetAssets: number | null; notes: string | null }>();
-  for (const r of periodMetaRes.data || []) {
-    periodMeta.set((r as any).id, {
-      filedNetAssets:
-        (r as any).filed_net_assets != null ? Number((r as any).filed_net_assets) : null,
-      notes: (r as any).notes ?? null,
+  for (const r of (periodMetaRes.data || []) as PeriodMetaRow[]) {
+    periodMeta.set(r.id, {
+      filedNetAssets: r.filed_net_assets != null ? Number(r.filed_net_assets) : null,
+      notes: r.notes ?? null,
     });
   }
 
@@ -218,7 +290,7 @@ export async function getTaxData(): Promise<TaxData> {
 
   const num = (v: unknown): number | null => (v == null ? null : Number(v));
 
-  const periods: TaxPeriod[] = (computationRes.data || []).map((row: any) => {
+  const periods: TaxPeriod[] = ((computationRes.data || []) as ComputationRow[]).map(row => {
     const start = new Date(`${row.start_date}T00:00:00Z`);
     const end = new Date(`${row.end_date}T00:00:00Z`);
     const monthsInPeriod = Math.max(1, Math.round(monthsBetween(start, end)));
@@ -255,16 +327,16 @@ export async function getTaxData(): Promise<TaxData> {
   });
 
   const adjustmentsByPeriod: Record<string, TaxAdjustment[]> = {};
-  for (const row of adjustmentsRes.data || []) {
-    const pid = (row as any).period_id as string;
+  for (const row of (adjustmentsRes.data || []) as AdjustmentRow[]) {
+    const pid = row.period_id;
     (adjustmentsByPeriod[pid] ||= []).push({
-      id: (row as any).id,
-      direction: (row as any).direction,
-      category: (row as any).category,
-      description: (row as any).description,
-      amount: Number((row as any).amount ?? 0),
-      source: (row as any).source,
-      accountNumber: (row as any).account_number ?? null,
+      id: row.id,
+      direction: row.direction,
+      category: row.category,
+      description: row.description,
+      amount: Number(row.amount ?? 0),
+      source: row.source,
+      accountNumber: row.account_number ?? null,
     });
   }
 
@@ -272,12 +344,12 @@ export async function getTaxData(): Promise<TaxData> {
   // for that period — whether the engine made it automatically (corporation
   // tax, depreciation) or a human recorded one after judging the split.
   const manualKeys = new Set(
-    (adjustmentsRes.data || [])
-      .filter((a: any) => a.account_number)
-      .map((a: any) => `${a.period_id}:${a.account_number}`)
+    ((adjustmentsRes.data || []) as AdjustmentRow[])
+      .filter(a => a.account_number)
+      .map(a => `${a.period_id}:${a.account_number}`)
   );
 
-  const reviewItems: TaxReviewItem[] = (reviewRes.data || []).map((row: any) => ({
+  const reviewItems: TaxReviewItem[] = ((reviewRes.data || []) as ReviewRow[]).map(row => ({
     periodId: row.period_id,
     accountNumber: row.account_number,
     accountName: row.account_name,
@@ -288,15 +360,15 @@ export async function getTaxData(): Promise<TaxData> {
   }));
 
   const profitBreakdownByPeriod: Record<string, ProfitBreakdownLine[]> = {};
-  for (const row of breakdownRes.data || []) {
-    const pid = (row as any).period_id as string;
+  for (const row of (breakdownRes.data || []) as unknown as BreakdownRow[]) {
+    const pid = row.period_id;
     (profitBreakdownByPeriod[pid] ||= []).push({
-      accountId: (row as any).account_id,
-      accountNumber: (row as any).account_number,
-      accountName: (row as any).account_name,
-      accountType: (row as any).account_type,
-      balance: Number((row as any).balance ?? 0),
-      lineCount: Number((row as any).line_count ?? 0),
+      accountId: row.account_id,
+      accountNumber: row.account_number,
+      accountName: row.account_name,
+      accountType: row.account_type,
+      balance: Number(row.balance ?? 0),
+      lineCount: Number(row.line_count ?? 0),
     });
   }
   // Revenue first, then COGS, then expense — matches the waterfall order the
@@ -357,14 +429,23 @@ export async function getTaxData(): Promise<TaxData> {
   const windowStartStr = windowStart.toISOString().slice(0, 10);
   const windowEndStr = now.toISOString().slice(0, 10);
 
-  const { data: vatRows } = await supabase
-    .from('orders')
-    .select('grand_total_amount, created_at, status')
-    .gte('created_at', windowStartStr);
+  // Read in full: a plain select() stops at the API's 1,000 rows, which would under-state turnover
+  // for any shop with more than 1,000 orders in the year (the threshold test would then pass when it
+  // should not).
+  const vatRows = await fetchAllRows<{ grand_total_amount: number | null; status: string }>(
+    'orders',
+    (from, to) =>
+      supabase
+        .from('orders')
+        .select('grand_total_amount, status')
+        .gte('created_at', windowStartStr)
+        .order('id')
+        .range(from, to)
+  );
 
-  const rollingTurnover = (vatRows || [])
-    .filter((o: any) => o.status !== 'cancelled')
-    .reduce((sum: number, o: any) => sum + Number(o.grand_total_amount || 0), 0);
+  const rollingTurnover = vatRows
+    .filter(o => o.status !== 'cancelled')
+    .reduce((sum, o) => sum + Number(o.grand_total_amount || 0), 0);
 
   const vat: VatPosition = {
     registered: Boolean(entityRow.vat_registered),
@@ -382,10 +463,10 @@ export async function getTaxData(): Promise<TaxData> {
     .select('account_number, net_debit, net_credit');
 
   const positions = new Map<string, { netDebit: number; netCredit: number }>();
-  for (const r of positionRows || []) {
-    positions.set((r as any).account_number, {
-      netDebit: Number((r as any).net_debit ?? 0),
-      netCredit: Number((r as any).net_credit ?? 0),
+  for (const r of (positionRows || []) as PositionRow[]) {
+    positions.set(r.account_number, {
+      netDebit: Number(r.net_debit ?? 0),
+      netCredit: Number(r.net_credit ?? 0),
     });
   }
 

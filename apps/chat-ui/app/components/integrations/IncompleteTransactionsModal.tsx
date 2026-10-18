@@ -108,7 +108,7 @@ function TransactionRow({
         <div
           className={cn(
             'w-8 h-8 rounded-lg flex items-center justify-center shrink-0',
-            isOutgoing ? 'bg-red-500/10 text-red-400' : 'bg-emerald-500/10 text-emerald-400'
+            isOutgoing ? 'bg-destructive/10 text-destructive' : 'bg-income/10 text-income'
           )}
         >
           {isOutgoing ? <ArrowUp size={16} weight="bold" /> : <ArrowDown size={16} weight="bold" />}
@@ -137,8 +137,8 @@ function TransactionRow({
             className={cn(
               'flex items-center gap-1 px-2 py-1 rounded-full text-[10px] font-medium shrink-0',
               suggestion.confidence >= 0.7
-                ? 'bg-emerald-500/10 text-emerald-400'
-                : 'bg-yellow-500/10 text-yellow-400'
+                ? 'bg-income/10 text-income'
+                : 'bg-accent-tint text-accent-text'
             )}
           >
             <Sparkle size={10} weight="fill" />
@@ -150,7 +150,7 @@ function TransactionRow({
         <span
           className={cn(
             'text-sm font-semibold tabular-nums shrink-0',
-            isOutgoing ? 'text-red-400' : 'text-emerald-400'
+            isOutgoing ? 'text-destructive' : 'text-income'
           )}
         >
           {formattedAmount}
@@ -203,8 +203,8 @@ function TransactionRow({
                 'w-full flex items-center gap-3 p-2.5 rounded-lg border text-left transition-all',
                 'hover:ring-1 hover:ring-primary/30',
                 suggestion.confidence >= 0.7
-                  ? 'bg-emerald-500/5 border-emerald-500/20 hover:bg-emerald-500/10'
-                  : 'bg-yellow-500/5 border-yellow-500/20 hover:bg-yellow-500/10'
+                  ? 'bg-income/10 border-income/30 hover:bg-income/10'
+                  : 'bg-accent-tint border-ring/40 hover:bg-accent-tint'
               )}
             >
               <div className="w-7 h-7 rounded-md bg-primary/10 flex items-center justify-center shrink-0">
@@ -305,12 +305,11 @@ function TransactionRow({
 export function IncompleteTransactionsModal({
   isOpen,
   onClose,
-  entityId,
   sourceId,
   onUpdate,
 }: IncompleteTransactionsModalProps) {
   const [transactions, setTransactions] = useState<IncompleteTransaction[]>([]);
-  const [totalCount, setTotalCount] = useState(0);
+  const [, setTotalCount] = useState(0);
   const [categorizedCount, setCategorizedCount] = useState(0);
   const [chartOfAccounts, setChartOfAccounts] = useState<ChartOfAccountsEntry[]>([]);
   const [suggestions, setSuggestions] = useState<Map<string, AISuggestion>>(new Map());
@@ -415,8 +414,8 @@ export function IncompleteTransactionsModal({
         {/* Header */}
         <div className="flex items-center justify-between p-4 border-b border-border shrink-0">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-orange-500/10 flex items-center justify-center">
-              <Warning size={20} weight="fill" className="text-orange-400" />
+            <div className="w-10 h-10 rounded-xl bg-accent-tint flex items-center justify-center">
+              <Warning size={20} weight="fill" className="text-accent-text" />
             </div>
             <div>
               <h2 className="text-lg font-semibold text-foreground">Review Transactions</h2>
@@ -462,8 +461,8 @@ export function IncompleteTransactionsModal({
             </div>
           ) : transactions.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-16">
-              <div className="w-14 h-14 rounded-2xl bg-emerald-500/10 flex items-center justify-center mb-4">
-                <CheckCircle size={28} weight="fill" className="text-emerald-400" />
+              <div className="w-14 h-14 rounded-2xl bg-income/10 flex items-center justify-center mb-4">
+                <CheckCircle size={28} weight="fill" className="text-income" />
               </div>
               <p className="text-foreground font-semibold text-lg">All caught up!</p>
               <p className="text-sm text-muted-foreground mt-1 text-center max-w-xs">
@@ -494,7 +493,7 @@ export function IncompleteTransactionsModal({
             <div className="flex items-center gap-3 text-xs text-muted-foreground">
               {categorizedCount > 0 && (
                 <span className="flex items-center gap-1">
-                  <Check size={12} weight="bold" className="text-emerald-400" />
+                  <Check size={12} weight="bold" className="text-income" />
                   {categorizedCount} categorised this session
                 </span>
               )}

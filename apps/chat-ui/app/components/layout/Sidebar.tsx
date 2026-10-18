@@ -17,21 +17,19 @@ import {
   PlugsConnected,
   User,
   SignOut,
-  X,
   Sparkle,
   CaretLeft,
   CaretRight,
   ShoppingCart,
   Package,
   Users,
-  Wrench,
   BookOpen,
   Scales,
   StackSimple,
 } from 'phosphor-react';
 import { useAuth } from '~/providers/AuthProvider';
 import { useSidebar } from '~/providers/SidebarProvider';
-import { Button } from '~/components/ui/button';
+import { ThemeToggle } from '~/components/ui/theme-toggle';
 import { cn } from '~/lib/utils';
 
 interface NavItemProps {
@@ -50,11 +48,12 @@ function NavItem({ to, icon, label, collapsed, onClick }: NavItemProps) {
       title={collapsed ? label : undefined}
       className={({ isActive }) =>
         cn(
-          'flex items-center gap-3 rounded-xl text-sm font-medium transition-all duration-200',
+          'relative flex items-center gap-3 rounded-xl text-sm font-medium transition-colors duration-200',
           'hover:bg-sidebar-accent hover:text-sidebar-accent-foreground',
+          'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring',
           collapsed ? 'px-3 py-3 justify-center' : 'px-4 py-3',
           isActive
-            ? 'bg-sidebar-primary text-sidebar-primary-foreground shadow-md'
+            ? 'bg-sidebar-accent text-sidebar-accent-foreground before:absolute before:inset-y-2 before:left-0 before:w-0.5 before:rounded-full before:bg-sidebar-primary'
             : 'text-sidebar-foreground/70'
         )
       }
@@ -70,7 +69,7 @@ interface SidebarProps {
 }
 
 export function Sidebar({ className }: SidebarProps) {
-  const { profile, entity, signOut } = useAuth();
+  const { entity, signOut } = useAuth();
   const { collapsed, toggleCollapsed, mobileOpen, setMobileOpen } = useSidebar();
   const navigate = useNavigate();
 
@@ -86,13 +85,15 @@ export function Sidebar({ className }: SidebarProps) {
       {/* Logo / Brand */}
       <div className={cn('border-b border-sidebar-border', collapsed ? 'p-3' : 'p-6')}>
         <div className={cn('flex items-center', collapsed ? 'justify-center' : 'gap-3')}>
-          <div className="w-10 h-10 rounded-xl bg-sidebar-primary/10 flex items-center justify-center shrink-0">
-            <Sparkle size={24} weight="duotone" className="text-sidebar-primary" />
+          <div className="flex size-10 shrink-0 items-center justify-center rounded-xl border border-sidebar-border bg-background">
+            <Sparkle size={22} weight="light" className="text-accent-text" />
           </div>
           {!collapsed && (
             <div className="min-w-0">
-              <h1 className="font-bold text-lg text-sidebar-foreground">ThreadWise</h1>
-              <p className="text-xs text-sidebar-foreground/60 truncate max-w-[140px]">
+              <p className="text-lg font-medium tracking-tight text-sidebar-foreground">
+                ThreadWise
+              </p>
+              <p className="max-w-[140px] truncate text-xs text-muted-foreground">
                 {entity?.name || 'Your Business'}
               </p>
             </div>
@@ -103,21 +104,17 @@ export function Sidebar({ className }: SidebarProps) {
       {/* Navigation Links */}
       <nav className="flex-1 p-4 space-y-1.5 overflow-y-auto">
         <div className="mb-4">
-          {!collapsed && (
-            <p className="px-4 py-2 text-xs font-semibold text-sidebar-foreground/50 uppercase tracking-wider">
-              Overview
-            </p>
-          )}
+          {!collapsed && <p className="eyebrow px-4 py-2">Overview</p>}
           <NavItem
             to="/dashboard"
-            icon={<ChartLine size={20} weight="duotone" />}
+            icon={<ChartLine size={20} weight="light" />}
             label="Dashboard"
             collapsed={collapsed}
             onClick={closeMobile}
           />
           <NavItem
             to="/chat"
-            icon={<ChatCircle size={20} weight="duotone" />}
+            icon={<ChatCircle size={20} weight="light" />}
             label="Ask AI"
             collapsed={collapsed}
             onClick={closeMobile}
@@ -125,42 +122,38 @@ export function Sidebar({ className }: SidebarProps) {
         </div>
 
         <div className="mb-4">
-          {!collapsed && (
-            <p className="px-4 py-2 text-xs font-semibold text-sidebar-foreground/50 uppercase tracking-wider">
-              Finance
-            </p>
-          )}
+          {!collapsed && <p className="eyebrow px-4 py-2">Finance</p>}
           <NavItem
             to="/invoices"
-            icon={<FileText size={20} weight="duotone" />}
+            icon={<FileText size={20} weight="light" />}
             label="Invoices"
             collapsed={collapsed}
             onClick={closeMobile}
           />
           <NavItem
             to="/transactions"
-            icon={<ArrowsLeftRight size={20} weight="duotone" />}
+            icon={<ArrowsLeftRight size={20} weight="light" />}
             label="Transactions"
             collapsed={collapsed}
             onClick={closeMobile}
           />
           <NavItem
             to="/reports"
-            icon={<ChartBar size={20} weight="duotone" />}
+            icon={<ChartBar size={20} weight="light" />}
             label="Financial Reports"
             collapsed={collapsed}
             onClick={closeMobile}
           />
           <NavItem
             to="/journals"
-            icon={<BookOpen size={20} weight="duotone" />}
+            icon={<BookOpen size={20} weight="light" />}
             label="Journal Entries"
             collapsed={collapsed}
             onClick={closeMobile}
           />
           <NavItem
             to="/tax"
-            icon={<Scales size={20} weight="duotone" />}
+            icon={<Scales size={20} weight="light" />}
             label="Tax"
             collapsed={collapsed}
             onClick={closeMobile}
@@ -169,28 +162,24 @@ export function Sidebar({ className }: SidebarProps) {
 
         {/* Commerce Section */}
         <div className="mb-4">
-          {!collapsed && (
-            <p className="px-4 py-2 text-xs font-semibold text-sidebar-foreground/50 uppercase tracking-wider">
-              Commerce
-            </p>
-          )}
+          {!collapsed && <p className="eyebrow px-4 py-2">Commerce</p>}
           <NavItem
             to="/orders"
-            icon={<ShoppingCart size={20} weight="duotone" />}
+            icon={<ShoppingCart size={20} weight="light" />}
             label="Orders"
             collapsed={collapsed}
             onClick={closeMobile}
           />
           <NavItem
             to="/products"
-            icon={<Package size={20} weight="duotone" />}
+            icon={<Package size={20} weight="light" />}
             label="Products"
             collapsed={collapsed}
             onClick={closeMobile}
           />
           <NavItem
             to="/collections"
-            icon={<StackSimple size={20} weight="duotone" />}
+            icon={<StackSimple size={20} weight="light" />}
             label="Collections"
             collapsed={collapsed}
             onClick={closeMobile}
@@ -204,24 +193,8 @@ export function Sidebar({ className }: SidebarProps) {
           />
           <NavItem
             to="/customers"
-            icon={<Users size={20} weight="duotone" />}
+            icon={<Users size={20} weight="light" />}
             label="Customers"
-            collapsed={collapsed}
-            onClick={closeMobile}
-          />
-        </div>
-
-        {/* Tools Section */}
-        <div className="mb-4">
-          {!collapsed && (
-            <p className="px-4 py-2 text-xs font-semibold text-sidebar-foreground/50 uppercase tracking-wider">
-              Tools
-            </p>
-          )}
-          <NavItem
-            to="/reclassification"
-            icon={<Wrench size={20} weight="duotone" />}
-            label="Reclassification"
             collapsed={collapsed}
             onClick={closeMobile}
           />
@@ -229,14 +202,10 @@ export function Sidebar({ className }: SidebarProps) {
 
         {/* Data Sources Section */}
         <div className="mb-4">
-          {!collapsed && (
-            <p className="px-4 py-2 text-xs font-semibold text-sidebar-foreground/50 uppercase tracking-wider">
-              Data Sources
-            </p>
-          )}
+          {!collapsed && <p className="eyebrow px-4 py-2">Data Sources</p>}
           <NavItem
             to="/integrations"
-            icon={<PlugsConnected size={20} weight="duotone" />}
+            icon={<PlugsConnected size={20} weight="light" />}
             label="Integrations"
             collapsed={collapsed}
             onClick={closeMobile}
@@ -246,9 +215,12 @@ export function Sidebar({ className }: SidebarProps) {
 
       {/* User Section */}
       <div className="p-4 border-t border-sidebar-border">
+        <div className={cn('mb-3 flex', collapsed ? 'justify-center' : 'px-1')}>
+          <ThemeToggle compact={collapsed} />
+        </div>
         <NavItem
           to="/account"
-          icon={<User size={20} weight="duotone" />}
+          icon={<User size={20} weight="light" />}
           label="Account"
           collapsed={collapsed}
           onClick={closeMobile}
@@ -262,7 +234,7 @@ export function Sidebar({ className }: SidebarProps) {
             collapsed ? 'px-3 py-3 justify-center' : 'px-4 py-3'
           )}
         >
-          <SignOut size={20} weight="duotone" />
+          <SignOut size={20} weight="light" />
           {!collapsed && <span>Sign out</span>}
         </button>
 
@@ -271,14 +243,14 @@ export function Sidebar({ className }: SidebarProps) {
           onClick={toggleCollapsed}
           className={cn(
             'hidden lg:flex w-full items-center gap-3 rounded-xl text-sm font-medium transition-all duration-200 mt-2',
-            'text-sidebar-foreground/50 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground',
+            'text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground',
             collapsed ? 'px-3 py-3 justify-center' : 'px-4 py-3'
           )}
         >
           {collapsed ? (
-            <CaretRight size={20} weight="duotone" />
+            <CaretRight size={20} weight="light" />
           ) : (
-            <CaretLeft size={20} weight="duotone" />
+            <CaretLeft size={20} weight="light" />
           )}
           {!collapsed && <span>Collapse</span>}
         </button>
@@ -290,7 +262,7 @@ export function Sidebar({ className }: SidebarProps) {
     <>
       {/* Mobile Overlay */}
       {mobileOpen && (
-        <div className="fixed inset-0 bg-black/50 z-50 lg:hidden" onClick={closeMobile} />
+        <div className="fixed inset-0 z-50 bg-foreground/40 lg:hidden" onClick={closeMobile} />
       )}
 
       {/* Sidebar */}

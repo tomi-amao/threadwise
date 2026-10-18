@@ -1,23 +1,14 @@
 /**
- * Invoice Types — aligned with the new DB schema
+ * Invoice types, matching the database.
  *
- * invoices: id, entity_id, invoice_number, net_amount, tax_amount, gross_amount,
- *           currency, invoice_date, due_date, source, notes, created_at, updated_at,
- *           status (DRAFT|OPEN|PAID|PARTIALLY_PAID|OVERDUE|CANCELLED|VOID),
- *           counterparty_id, invoice_type (SALE|PURCHASE), fx_rate
+ * invoices: invoice_number (required), net/tax/gross_amount, currency, invoice_date, due_date,
+ *   status (invoice_status enum), invoice_type (SALE | PURCHASE), counterparty_id, source,
+ *   file_path (the uploaded document in storage), notes.
+ * invoice_line_items: quantity, unit_cost, vat_rate (a fraction: 0.2 is 20%), gl_account_id,
+ *   and generated line_net / line_vat / line_gross.
  *
- * contacts: id, entity_id, contact_type (supplier|customer|both),
- *           name, company_name, email, phone, address_*, currency,
- *           tax_number, payment_terms, is_active, created_at, updated_at
- *
- * invoice_line_items: id, invoice_id, description, quantity, unit_cost,
- *                     gl_account_id, tax_code, vat_rate,
- *                     line_net (generated), line_vat (generated), line_gross (generated)
+ * SALE is money owed to the business (a receivable); PURCHASE is money the business owes.
  */
-
-// =============================================================================
-// ENUMS / LITERALS
-// =============================================================================
 
 export type InvoiceType = 'SALE' | 'PURCHASE';
 
@@ -30,169 +21,96 @@ export type InvoiceStatus =
   | 'CANCELLED'
   | 'VOID';
 
-export type ContactType = 'supplier' | 'customer' | 'both';
-
-// =============================================================================
-// CONTACT
-// =============================================================================
-
-export interface Contact {
-  id: string;
-  entity_id: string;
-  contact_type: ContactType;
-  name: string;
-  company_name: string | null;
-  email: string | null;
-  phone: string | null;
-  address_line_1: string | null;
-  address_line_2: string | null;
-  city: string | null;
-  region: string | null;
-  postal_code: string | null;
-  country: string | null;
-  currency: string | null;
-  tax_number: string | null;
-  payment_terms: number | null;
-  provider: string | null;
-  external_id: string | null;
-  is_active: boolean;
-  created_at: string;
-  updated_at: string;
-}
-
-/** Minimal contact embedded inside invoice rows from JOIN */
 export interface InvoiceContact {
   id: string;
   name: string;
   company_name: string | null;
   email: string | null;
-  contact_type: ContactType;
+  contact_type: 'supplier' | 'customer' | 'both';
 }
-
-// =============================================================================
-// INVOICE LINE ITEM
-// =============================================================================
 
 export interface InvoiceLineItem {
   id: string;
   invoice_id: string;
   description: string;
   sku: string | null;
-  quantity: number | null;
-  unit_cost: number | null;
+  quantity: number;
+  unit_cost: number;
   gl_account_id: string | null;
-  created_at: string;
-  tax_code: string | null;
-  vat_rate: number | null;
-  /** Generated column — quantity * unit_cost */
+  tax_code: string;
+  vat_rate: number;
   line_net: number | null;
-  /** Generated column — line_net * (vat_rate / 100) */
   line_vat: number | null;
-  /** Generated column — line_net + line_vat */
   line_gross: number | null;
 }
 
-// =============================================================================
-// INVOICE
-// =============================================================================
-
-export interface Invoice {
+/** An invoice as the list shows it: no line items. */
+export interface InvoiceRow {
   id: string;
   entity_id: string;
-  invoice_number: string | null;
+  invoice_number: string;
   invoice_type: InvoiceType;
   status: InvoiceStatus;
   currency: string;
-  net_amount: number | null;
-  tax_amount: number | null;
-  gross_amount: number | null;
-  fx_rate: number | null;
-  invoice_date: string | null;
+  net_amount: number;
+  tax_amount: number;
+  gross_amount: number;
+  invoice_date: string;
   due_date: string | null;
-  source: string | null; // Payment platform: 'paypal' | 'revolut' | 'manual' etc.
-  file_path: string | null; // Supabase Storage path for the uploaded document
+  source: string | null;
   notes: string | null;
-  counterparty_id: string | null;
   created_at: string;
-  updated_at: string;
-  // Embedded relations (available when fetched with JOIN)
-  contacts?: InvoiceContact | null;
-  invoice_line_items?: InvoiceLineItem[];
+  has_document: boolean;
+  contacts: InvoiceContact | null;
 }
 
-// =============================================================================
-// INPUT TYPES
-// =============================================================================
-
-export interface CreateContactInput {
-  entity_id: string;
-  contact_type: ContactType;
+export interface GlAccountOption {
+  id: string;
+  account_number: string;
   name: string;
-  company_name?: string;
-  email?: string;
-  phone?: string;
-  address_line_1?: string;
-  city?: string;
-  country?: string;
-  tax_number?: string;
+  account_type: string;
 }
 
-export interface UpdateInvoiceStatusInput {
-  status: InvoiceStatus;
+export interface ProductOption {
+  id: string;
+  name: string;
 }
 
-// =============================================================================
-// FILTER / STATS
-// =============================================================================
-
-export interface InvoiceFilters {
-  invoice_type?: InvoiceType;
-  status?: InvoiceStatus;
-  entity_id?: string;
-  startDate?: string;
-  endDate?: string;
-  search?: string;
+/** A bank transaction that might be the payment for an invoice. */
+export interface PaymentCandidate {
+  id: string;
+  occurred_at: string;
+  description: string | null;
+  counterparty: string | null;
+  amount: number;
+  currency: string;
 }
 
-export interface InvoiceStats {
-  total: number;
-  sales: {
-    total: number;
-    open: number;
-    paid: number;
-    overdue: number;
-    outstanding: number;
-  };
-  purchases: {
-    total: number;
-    open: number;
-    paid: number;
-    overdue: number;
-    payable: number;
-  };
+/** Everything the drawer shows for one invoice. */
+export interface InvoiceDetail {
+  invoice: InvoiceRow & { contacts: InvoiceContact | null };
+  lines: InvoiceLineItem[];
+  /** Journals posted for this invoice (accrual and payment). */
+  journals: { id: string; journal_type: string; journal_date: string; status: string }[];
+  /** A bank transaction already matched to this invoice, if any. */
+  matched_transaction_id: string | null;
+  /** Bank transactions that could be this invoice's payment, nearest in amount first. */
+  payment_candidates: PaymentCandidate[];
+  /** Line items that already have a purchase movement recorded. */
+  stocked_line_ids: string[];
+  gl_accounts: GlAccountOption[];
+  products: ProductOption[];
 }
 
-// =============================================================================
-// UPLOAD / PROCESSING
-// =============================================================================
+/** One line's stock handling, sent to the agent (see POST /accounting/invoices/{id}/stock). */
+export type StockAction = 'expense' | 'link' | 'new' | 'track';
 
-export interface UploadProgress {
-  fileName: string;
-  progress: number;
-  status: 'uploading' | 'processing' | 'complete' | 'error';
-  error?: string;
-}
-
-/** Result returned by the backend invoice processing pipeline */
-export interface InvoiceProcessResult {
-  invoice: Invoice;
-  contact: Contact;
-  line_items: InvoiceLineItem[];
-  journal: Record<string, unknown> | null;
-  journal_error: string | null;
-  extraction: {
-    invoice_type: InvoiceType;
-    confidence_score: number;
-    invoice_number: string | null;
-  };
+export interface StockDecision {
+  line_item_id: string;
+  action: StockAction;
+  product_id?: string;
+  name?: string;
+  sku?: string;
+  asset_account_id?: string;
+  cogs_account_id?: string;
 }

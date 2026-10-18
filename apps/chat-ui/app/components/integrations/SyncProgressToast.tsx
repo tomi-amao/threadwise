@@ -75,13 +75,13 @@ function StatusIndicator({ status }: { status: string }) {
 
   switch (status) {
     case 'completed':
-      return <span className={cn(baseClasses, 'bg-emerald-400')} />;
+      return <span className={cn(baseClasses, 'bg-income/10')} />;
     case 'error':
-      return <span className={cn(baseClasses, 'bg-red-400')} />;
+      return <span className={cn(baseClasses, 'bg-destructive/10')} />;
     case 'syncing':
-      return <span className={cn(baseClasses, 'bg-blue-400 animate-pulse')} />;
+      return <span className={cn(baseClasses, 'bg-accent-tint animate-pulse')} />;
     default:
-      return <span className={cn(baseClasses, 'bg-gray-500')} />;
+      return <span className={cn(baseClasses, 'bg-muted')} />;
   }
 }
 
@@ -144,7 +144,7 @@ export function SyncProgressToast({
   useEffect(() => {
     if (!freshData || freshData.length === 0) return;
 
-    freshData.forEach((message: any) => {
+    freshData.forEach(message => {
       if (message.topic === 'status') {
         setOverallStatus(prev => {
           const incoming = message.data as SyncStatusData;
@@ -269,11 +269,11 @@ export function SyncProgressToast({
         {/* Status icon */}
         <div className="relative">
           {isCompleted ? (
-            <CheckCircle size={24} weight="fill" className="text-emerald-400" />
+            <CheckCircle size={24} weight="fill" className="text-income" />
           ) : hasError ? (
-            <WarningCircle size={24} weight="fill" className="text-red-400" />
+            <WarningCircle size={24} weight="fill" className="text-destructive" />
           ) : (
-            <ArrowsClockwise size={24} className="text-blue-400 animate-spin" />
+            <ArrowsClockwise size={24} className="text-accent-text animate-spin" />
           )}
         </div>
 
@@ -330,7 +330,7 @@ export function SyncProgressToast({
         <div
           className={cn(
             'h-full transition-all duration-300',
-            isCompleted ? 'bg-emerald-500' : hasError ? 'bg-red-500' : 'bg-blue-500'
+            isCompleted ? 'bg-income/10' : hasError ? 'bg-destructive/10' : 'bg-accent-tint'
           )}
           style={{ width: `${progressPercent}%` }}
         />
@@ -341,8 +341,8 @@ export function SyncProgressToast({
         <div className="animate-in fade-in slide-in-from-top-2 duration-200">
           {/* Error message */}
           {(error || overallStatus?.error) && (
-            <div className="mx-3 mt-3 p-2.5 bg-red-500/10 border border-red-500/20 rounded-lg">
-              <p className="text-xs text-red-400">{error?.message || overallStatus?.error}</p>
+            <div className="mx-3 mt-3 p-2.5 bg-destructive/10 border border-destructive/30 rounded-lg">
+              <p className="text-xs text-destructive">{error?.message || overallStatus?.error}</p>
             </div>
           )}
 
@@ -381,7 +381,7 @@ function EndpointProgressCard({
       className={cn(
         'flex items-center gap-3 p-2.5 rounded-lg transition-all duration-200',
         'bg-muted/50 animate-in fade-in slide-in-from-bottom-2',
-        isActive && 'ring-1 ring-blue-500/30 bg-blue-500/5'
+        isActive && 'ring-1 ring-ring/40 bg-accent-tint'
       )}
     >
       {/* Icon */}
@@ -389,10 +389,10 @@ function EndpointProgressCard({
         className={cn(
           'flex items-center justify-center w-8 h-8 rounded-lg',
           progress.status === 'completed'
-            ? 'bg-emerald-500/10 text-emerald-400'
+            ? 'bg-income/10 text-income'
             : progress.status === 'error'
-              ? 'bg-red-500/10 text-red-400'
-              : 'bg-blue-500/10 text-blue-400'
+              ? 'bg-destructive/10 text-destructive'
+              : 'bg-accent-tint text-accent-text'
         )}
       >
         {icon}
@@ -414,19 +414,21 @@ function EndpointProgressCard({
             </span>
           )}
         </div>
-        {progress.error && <p className="text-xs text-red-400 mt-1 truncate">{progress.error}</p>}
+        {progress.error && (
+          <p className="text-xs text-destructive mt-1 truncate">{progress.error}</p>
+        )}
       </div>
 
       {/* Status icon */}
       <div className="shrink-0">
         {progress.status === 'completed' && (
-          <CheckCircle size={18} weight="fill" className="text-emerald-400" />
+          <CheckCircle size={18} weight="fill" className="text-income" />
         )}
         {progress.status === 'error' && (
-          <WarningCircle size={18} weight="fill" className="text-red-400" />
+          <WarningCircle size={18} weight="fill" className="text-destructive" />
         )}
         {(progress.status === 'syncing' || progress.status === 'starting') && (
-          <ArrowsClockwise size={18} className="text-blue-400 animate-spin" />
+          <ArrowsClockwise size={18} className="text-accent-text animate-spin" />
         )}
       </div>
     </div>

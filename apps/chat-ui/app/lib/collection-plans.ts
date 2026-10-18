@@ -50,8 +50,6 @@ export const COLLABORATION_TYPES = [
   { value: 'pop_up', label: 'Pop-up / retail takeover' },
 ] as const;
 
-export type CollaborationType = (typeof COLLABORATION_TYPES)[number]['value'];
-
 export function collaborationTypeLabel(value: string): string {
   return COLLABORATION_TYPES.find(type => type.value === value)?.label ?? value;
 }
@@ -272,6 +270,11 @@ export interface CollectionPlanCost {
   /** Null means "to be determined" — a disclosed category with no figure
    * yet, not a cost of zero. Excluded from projected totals until set. */
   plannedAmount: number | null;
+  /** True means plannedAmount is a rough guess, not a firm quote/invoice —
+   * still counted in every total (it's a real number, just a soft one),
+   * but flagged everywhere it's shown so a reader doesn't mistake it for
+   * confirmed. Distinct from plannedAmount being null (no number at all). */
+  isEstimated: boolean;
   notes: string | null;
 }
 
@@ -375,13 +378,10 @@ export interface CollectionPlanProjections {
   // total above, so this is how a reader knows the real figure can still
   // go up, not just a cosmetic footnote.
   costsPendingCount: number;
-}
-
-export interface CollectionPlanWithProjections {
-  plan: CollectionPlanRecord;
-  lines: CollectionPlanLine[];
-  costs: CollectionPlanCost[];
-  projections: CollectionPlanProjections;
+  // Costs with a figure that's a rough guess rather than a firm quote —
+  // still counted in every total above (unlike pending costs), but a
+  // reader should know some of what's in those totals isn't locked in.
+  costsEstimatedCount: number;
 }
 
 // ─── Projection math ────────────────────────────────────────────────────────
@@ -466,6 +466,9 @@ export function computePlanProjections(
 
   let projectedOtherCost = costs.reduce((sum, cost) => sum + (cost.plannedAmount ?? 0), 0);
   const costsPendingCount = costs.filter(cost => cost.plannedAmount == null).length;
+  const costsEstimatedCount = costs.filter(
+    cost => cost.plannedAmount != null && cost.isEstimated
+  ).length;
 
   // pop_up's venue/staffing/fixtures costs are entered as collaboration
   // terms (metadata), not plan cost lines — but they're real planned costs
@@ -637,6 +640,7 @@ export function computePlanProjections(
     partnerPaymentDue,
     entityUpfrontCost,
     costsPendingCount,
+    costsEstimatedCount,
   };
 }
 

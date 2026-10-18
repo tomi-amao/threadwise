@@ -42,11 +42,12 @@ function AppLayoutContent() {
                 size="icon"
                 onClick={() => setMobileOpen(true)}
                 className="h-8 w-8"
+                aria-label="Open navigation menu"
                 title="Open navigation menu"
               >
-                <List size={20} weight="bold" />
+                <List size={20} weight="light" />
               </Button>
-              <h1 className="text-lg font-semibold">ThreadWise</h1>
+              <p className="text-lg font-medium tracking-tight">ThreadWise</p>
             </div>
           </div>
         )}

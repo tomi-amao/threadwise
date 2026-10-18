@@ -7,19 +7,11 @@
 
 import React, { useState } from 'react';
 import { useNavigate, Link } from 'react-router';
-import {
-  EnvelopeSimple,
-  Lock,
-  User,
-  Buildings,
-  SpinnerGap,
-  UserPlus,
-  CheckCircle,
-} from 'phosphor-react';
 import { useAuth } from '~/providers/AuthProvider';
 import { Button } from '~/components/ui/button';
+import { Field } from '~/components/ui/field';
 import { Input } from '~/components/ui/input';
-import { Label } from '~/components/ui/label';
+import { PasswordInput } from '~/components/ui/password-input';
 
 export function SignupForm() {
   const navigate = useNavigate();
@@ -33,7 +25,6 @@ export function SignupForm() {
   });
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-  const [success, setSuccess] = useState(false);
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setFormData(prev => ({
@@ -84,196 +75,102 @@ export function SignupForm() {
       if (error) {
         setError(error.message);
       } else {
-        setSuccess(true);
-        // Redirect after a brief delay to show success message
-        setTimeout(() => {
-          navigate('/dashboard');
-        }, 1500);
+        navigate('/dashboard');
       }
-    } catch (err) {
+    } catch {
       setError('An unexpected error occurred');
     } finally {
       setLoading(false);
     }
   };
 
-  if (success) {
-    return (
-      <div className="w-full max-w-md">
-        <div className="rounded-2xl border border-border bg-card/50 backdrop-blur-sm p-8 shadow-xl text-center">
-          <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-green-500/10 mb-4">
-            <CheckCircle size={40} className="text-green-500" weight="duotone" />
-          </div>
-          <h2 className="text-2xl font-bold text-foreground mb-2">Welcome aboard!</h2>
-          <p className="text-muted-foreground">
-            Your account has been created successfully. Redirecting to your dashboard...
-          </p>
-        </div>
-      </div>
-    );
-  }
-
   return (
-    <div className="w-full max-w-md">
-      <div className="rounded-2xl border border-border bg-card/50 backdrop-blur-sm p-8 shadow-xl">
-        <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-primary/10 mb-4">
-            <UserPlus size={32} className="text-primary" weight="duotone" />
-          </div>
-          <h1 className="text-2xl font-bold text-foreground">Create your account</h1>
-          <p className="text-muted-foreground mt-2">
-            Start managing your business intelligence today
-          </p>
+    <div className="w-full max-w-[400px]">
+      <div className="eyebrow">Create an account</div>
+      <h1 className="mt-3 font-serif text-[clamp(34px,4vw,44px)] font-light leading-[1.05] tracking-[-0.03em]">
+        Start your books.
+      </h1>
+      <p className="mt-3 text-[16px] text-text-2">
+        Your business, set up in a minute. Connect a store when you are ready.
+      </p>
+
+      <form onSubmit={handleSubmit} className="mt-8 space-y-5" noValidate>
+        <Field label="Your name">
+          <Input
+            name="fullName"
+            autoComplete="name"
+            placeholder="Ada Lovelace"
+            value={formData.fullName}
+            onChange={handleChange}
+            required
+          />
+        </Field>
+        <Field label="Business name" hint="This becomes your business in ThreadWise.">
+          <Input
+            name="companyName"
+            autoComplete="organization"
+            placeholder="Atelier North"
+            value={formData.companyName}
+            onChange={handleChange}
+            required
+          />
+        </Field>
+        <Field label="Email">
+          <Input
+            type="email"
+            name="email"
+            autoComplete="email"
+            placeholder="you@company.com"
+            value={formData.email}
+            onChange={handleChange}
+            required
+          />
+        </Field>
+        <div className="grid gap-5 sm:grid-cols-2">
+          <Field label="Password" hint="At least 6 characters.">
+            <PasswordInput
+              name="password"
+              autoComplete="new-password"
+              value={formData.password}
+              onChange={handleChange}
+              required
+              minLength={6}
+            />
+          </Field>
+          <Field label="Confirm password">
+            <PasswordInput
+              name="confirmPassword"
+              autoComplete="new-password"
+              value={formData.confirmPassword}
+              onChange={handleChange}
+              required
+            />
+          </Field>
         </div>
 
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div className="space-y-2">
-            <Label htmlFor="fullName" className="text-sm font-medium">
-              Full name
-            </Label>
-            <div className="relative">
-              <User
-                size={20}
-                className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground"
-              />
-              <Input
-                id="fullName"
-                name="fullName"
-                type="text"
-                placeholder="John Doe"
-                value={formData.fullName}
-                onChange={handleChange}
-                className="pl-10"
-                required
-              />
-            </div>
-          </div>
-
-          <div className="space-y-2">
-            <Label htmlFor="companyName" className="text-sm font-medium">
-              Company name
-            </Label>
-            <div className="relative">
-              <Buildings
-                size={20}
-                className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground"
-              />
-              <Input
-                id="companyName"
-                name="companyName"
-                type="text"
-                placeholder="Acme Inc."
-                value={formData.companyName}
-                onChange={handleChange}
-                className="pl-10"
-                required
-              />
-            </div>
-            <p className="text-xs text-muted-foreground">
-              This will be your organization in ThreadWise
-            </p>
-          </div>
-
-          <div className="space-y-2">
-            <Label htmlFor="email" className="text-sm font-medium">
-              Email address
-            </Label>
-            <div className="relative">
-              <EnvelopeSimple
-                size={20}
-                className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground"
-              />
-              <Input
-                id="email"
-                name="email"
-                type="email"
-                placeholder="you@company.com"
-                value={formData.email}
-                onChange={handleChange}
-                className="pl-10"
-                required
-              />
-            </div>
-          </div>
-
-          <div className="space-y-2">
-            <Label htmlFor="password" className="text-sm font-medium">
-              Password
-            </Label>
-            <div className="relative">
-              <Lock
-                size={20}
-                className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground"
-              />
-              <Input
-                id="password"
-                name="password"
-                type="password"
-                placeholder="••••••••"
-                value={formData.password}
-                onChange={handleChange}
-                className="pl-10"
-                required
-                minLength={6}
-              />
-            </div>
-          </div>
-
-          <div className="space-y-2">
-            <Label htmlFor="confirmPassword" className="text-sm font-medium">
-              Confirm password
-            </Label>
-            <div className="relative">
-              <Lock
-                size={20}
-                className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground"
-              />
-              <Input
-                id="confirmPassword"
-                name="confirmPassword"
-                type="password"
-                placeholder="••••••••"
-                value={formData.confirmPassword}
-                onChange={handleChange}
-                className="pl-10"
-                required
-              />
-            </div>
-          </div>
-
-          {error && (
-            <div className="p-3 rounded-lg bg-destructive/10 border border-destructive/20 text-destructive text-sm">
-              {error}
-            </div>
-          )}
-
-          <Button type="submit" className="w-full" size="lg" disabled={loading}>
-            {loading ? (
-              <>
-                <SpinnerGap size={20} className="animate-spin" />
-                Creating account...
-              </>
-            ) : (
-              <>
-                <UserPlus size={20} />
-                Create account
-              </>
-            )}
-          </Button>
-        </form>
-
-        <div className="mt-6 text-center">
-          <p className="text-sm text-muted-foreground">
-            Already have an account?{' '}
-            <Link
-              to="/login"
-              className="text-primary hover:text-primary/80 font-medium transition-colors"
-            >
-              Sign in
-            </Link>
+        {error && (
+          <p
+            role="alert"
+            className="rounded-xl border border-destructive/30 bg-destructive/5 px-4 py-3 text-[14px] text-destructive"
+          >
+            {error}
           </p>
-        </div>
-      </div>
+        )}
+
+        <Button type="submit" size="lg" className="w-full" disabled={loading}>
+          {loading ? 'Creating your account…' : 'Create account'}
+        </Button>
+      </form>
+
+      <p className="mt-8 text-[15px] text-text-2">
+        Already have an account?{' '}
+        <Link
+          to="/login"
+          className="text-accent-text underline underline-offset-4 hover:text-foreground"
+        >
+          Sign in
+        </Link>
+      </p>
     </div>
   );
 }

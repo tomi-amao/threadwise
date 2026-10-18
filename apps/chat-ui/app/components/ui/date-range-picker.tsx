@@ -17,6 +17,7 @@ import { createPortal } from 'react-dom';
 import { computePosition, autoUpdate, offset, flip, shift } from '@floating-ui/react-dom';
 import { DayPicker, type DateRange, type ChevronProps } from 'react-day-picker';
 import { CalendarBlank, CaretDown, CaretLeft, CaretRight } from 'phosphor-react';
+import { cn } from '~/lib/utils';
 
 const VIEWPORT_PADDING = 8;
 
@@ -174,6 +175,13 @@ export interface DateRangePickerProps {
   onApply: (from: string, to: string) => void;
   fiscalYearEnd?: FiscalYearEnd;
   className?: string;
+  /**
+   * Where the floating panel is mounted. Defaults to document.body; pass an
+   * element to keep the panel inside a themed subtree (e.g. a page that
+   * overrides the colour tokens), since portalled content otherwise inherits
+   * only the root theme.
+   */
+  portalContainer?: HTMLElement | null;
 }
 
 export function DateRangePicker({
@@ -182,6 +190,7 @@ export function DateRangePicker({
   onApply,
   fiscalYearEnd,
   className = '',
+  portalContainer,
 }: DateRangePickerProps) {
   const [open, setOpen] = useState(false);
   const today = useMemo(() => new Date(), []);
@@ -331,7 +340,10 @@ export function DateRangePicker({
         ref={triggerRef}
         type="button"
         onClick={() => (open ? closePanel() : openPanel())}
-        className={`flex items-center gap-2 rounded-lg border border-border bg-muted px-3 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-muted/70 ${className}`}
+        className={cn(
+          'flex items-center gap-2 rounded-lg border border-border bg-muted px-3 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-muted/70',
+          className
+        )}
       >
         <CalendarBlank size={14} />
         {triggerLabel}
@@ -467,7 +479,7 @@ export function DateRangePicker({
               </div>
             </div>
           </div>,
-          document.body
+          portalContainer ?? document.body
         )}
     </div>
   );

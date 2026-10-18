@@ -110,13 +110,13 @@ function StatusIndicator({ status }: { status: string }) {
 
   switch (status) {
     case 'completed':
-      return <span className={cn(baseClasses, 'bg-emerald-400')} />;
+      return <span className={cn(baseClasses, 'bg-income/10')} />;
     case 'error':
-      return <span className={cn(baseClasses, 'bg-red-400')} />;
+      return <span className={cn(baseClasses, 'bg-destructive/10')} />;
     case 'processing':
-      return <span className={cn(baseClasses, 'bg-purple-400 animate-pulse')} />;
+      return <span className={cn(baseClasses, 'bg-income/10 animate-pulse')} />;
     default:
-      return <span className={cn(baseClasses, 'bg-gray-500')} />;
+      return <span className={cn(baseClasses, 'bg-muted')} />;
   }
 }
 
@@ -185,7 +185,7 @@ export function NormalizationProgressToast({
   useEffect(() => {
     if (!freshData || freshData.length === 0) return;
 
-    freshData.forEach((message: any) => {
+    freshData.forEach(message => {
       if (message.topic === 'status') {
         setOverallStatus(prev => {
           const incoming = message.data as NormalizationStatusData;
@@ -327,11 +327,11 @@ export function NormalizationProgressToast({
         {/* Status icon */}
         <div className="relative">
           {isCompleted ? (
-            <CheckCircle size={24} weight="fill" className="text-emerald-400" />
+            <CheckCircle size={24} weight="fill" className="text-income" />
           ) : hasError ? (
-            <WarningCircle size={24} weight="fill" className="text-red-400" />
+            <WarningCircle size={24} weight="fill" className="text-destructive" />
           ) : (
-            <Database size={24} className="text-purple-400 animate-pulse" />
+            <Database size={24} className="text-income animate-pulse" />
           )}
         </div>
 
@@ -345,8 +345,8 @@ export function NormalizationProgressToast({
               className={cn(
                 'text-[10px] font-medium px-1.5 py-0.5 rounded-full uppercase',
                 mode === 'hard'
-                  ? 'bg-orange-500/10 text-orange-400'
-                  : 'bg-blue-500/10 text-blue-400'
+                  ? 'bg-accent-tint text-accent-text'
+                  : 'bg-accent-tint text-accent-text'
               )}
             >
               {mode}
@@ -358,7 +358,7 @@ export function NormalizationProgressToast({
             )}
             <span className="text-xs text-muted-foreground">
               {totalSucceeded.toLocaleString()} processed
-              {totalFailed > 0 && <span className="text-red-400"> · {totalFailed} failed</span>}
+              {totalFailed > 0 && <span className="text-destructive"> · {totalFailed} failed</span>}
             </span>
           </div>
         </div>
@@ -391,7 +391,7 @@ export function NormalizationProgressToast({
         <div
           className={cn(
             'h-full transition-all duration-300',
-            isCompleted ? 'bg-emerald-500' : hasError ? 'bg-red-500' : 'bg-purple-500'
+            isCompleted ? 'bg-income/10' : hasError ? 'bg-destructive/10' : 'bg-income/10'
           )}
           style={{ width: `${progressPercent}%` }}
         />
@@ -402,8 +402,8 @@ export function NormalizationProgressToast({
         <div className="animate-in fade-in slide-in-from-top-2 duration-200">
           {/* Error message */}
           {(error || overallStatus?.error) && (
-            <div className="mx-3 mt-3 p-2.5 bg-red-500/10 border border-red-500/20 rounded-lg">
-              <p className="text-xs text-red-400">{error?.message || overallStatus?.error}</p>
+            <div className="mx-3 mt-3 p-2.5 bg-destructive/10 border border-destructive/30 rounded-lg">
+              <p className="text-xs text-destructive">{error?.message || overallStatus?.error}</p>
             </div>
           )}
 
@@ -417,7 +417,7 @@ export function NormalizationProgressToast({
             ) : (
               Array.from(entityProgress.entries())
                 .filter(
-                  ([_, progress]) => progress.events_total > 0 || progress.status === 'processing'
+                  ([, progress]) => progress.events_total > 0 || progress.status === 'processing'
                 )
                 .map(([entityType, progress]) => (
                   <EntityTypeProgressCard
@@ -472,7 +472,7 @@ function EntityTypeProgressCard({
       className={cn(
         'flex items-center gap-3 p-2.5 rounded-lg transition-all duration-200',
         'bg-muted/50 animate-in fade-in slide-in-from-bottom-2',
-        isActive && 'ring-1 ring-purple-500/30 bg-purple-500/5'
+        isActive && 'ring-1 ring-income/30 bg-income/10'
       )}
     >
       {/* Icon */}
@@ -480,10 +480,10 @@ function EntityTypeProgressCard({
         className={cn(
           'flex items-center justify-center w-8 h-8 rounded-lg',
           progress.status === 'completed'
-            ? 'bg-emerald-500/10 text-emerald-400'
+            ? 'bg-income/10 text-income'
             : progress.status === 'error'
-              ? 'bg-red-500/10 text-red-400'
-              : 'bg-purple-500/10 text-purple-400'
+              ? 'bg-destructive/10 text-destructive'
+              : 'bg-income/10 text-income'
         )}
       >
         {icon}
@@ -500,31 +500,33 @@ function EntityTypeProgressCard({
             {progress.events_succeeded}/{progress.events_total} events
           </span>
           {progress.events_failed > 0 && (
-            <span className="text-xs text-red-400">{progress.events_failed} failed</span>
+            <span className="text-xs text-destructive">{progress.events_failed} failed</span>
           )}
         </div>
         {/* Mini progress bar */}
         {isActive && progress.events_total > 0 && (
           <div className="h-0.5 bg-muted rounded-full mt-1.5 overflow-hidden">
             <div
-              className="h-full bg-purple-500 rounded-full transition-all duration-300"
+              className="h-full bg-income/10 rounded-full transition-all duration-300"
               style={{ width: `${entityPercent}%` }}
             />
           </div>
         )}
-        {progress.error && <p className="text-xs text-red-400 mt-1 truncate">{progress.error}</p>}
+        {progress.error && (
+          <p className="text-xs text-destructive mt-1 truncate">{progress.error}</p>
+        )}
       </div>
 
       {/* Status icon */}
       <div className="shrink-0">
         {progress.status === 'completed' && (
-          <CheckCircle size={18} weight="fill" className="text-emerald-400" />
+          <CheckCircle size={18} weight="fill" className="text-income" />
         )}
         {progress.status === 'error' && (
-          <WarningCircle size={18} weight="fill" className="text-red-400" />
+          <WarningCircle size={18} weight="fill" className="text-destructive" />
         )}
         {progress.status === 'processing' && (
-          <ArrowsClockwise size={18} className="text-purple-400 animate-spin" />
+          <ArrowsClockwise size={18} className="text-income animate-spin" />
         )}
       </div>
     </div>

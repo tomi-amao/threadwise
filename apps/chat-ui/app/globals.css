@@ -4,65 +4,117 @@
 
 @custom-variant dark (&:is(.dark *));
 
+/*
+ * Design tokens. See docs/design-language.md and docs/frontend-redesign-plan.md.
+ *
+ * Light is the default (white page, cream surfaces, plum ink, one amber accent). Dark
+ * is a first-class peer: every token below has both values, and components use tokens
+ * only, never raw colours, so a theme can never be missed.
+ *
+ * Deviations from the design doc, each verified against WCAG AA (4.5:1) for small text:
+ *  - muted text is darker than the doc's #8c7f88 (which is 3.5:1 on cream)
+ *  - accent text is #96590f, not the doc's #a16215: that is 4.24:1 on the active-chip tint
+ *    (the contrast test in e2e/contrast.spec.ts caught it)
+ *  - card cream is #fcf8f4, a step lighter than the doc's #fbf6f1, on a white page
+ *  - amber is reserved for actions and active state; money-in uses --income (plum)
+ *    and problems use --destructive (brick), never amber
+ *
+ * The shadcn-style names (background, card, muted, border...) are kept so existing
+ * components re-theme without edits.
+ */
 :root {
-  --background: oklch(0.98 0.005 106.5);
-  --foreground: oklch(0.15 0.01 106.5);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.15 0.01 106.5);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.15 0.01 106.5);
-  --primary: oklch(0.45 0.18 264);
-  --primary-foreground: oklch(0.98 0.005 106.5);
-  --secondary: oklch(0.96 0.01 106.5);
-  --secondary-foreground: oklch(0.15 0.01 106.5);
-  --muted: oklch(0.96 0.01 106.5);
-  --muted-foreground: oklch(0.55 0.01 106.5);
-  --accent: oklch(0.96 0.01 106.5);
-  --accent-foreground: oklch(0.15 0.01 106.5);
-  --destructive: oklch(0.62 0.25 29);
-  --destructive-foreground: oklch(0.98 0.005 106.5);
-  --border: oklch(0.92 0.01 106.5);
-  --input: oklch(0.96 0.01 106.5);
-  --ring: oklch(0.45 0.18 264);
-  --radius: 0.5rem;
-  --sidebar: oklch(0.98 0.005 106.5);
-  --sidebar-foreground: oklch(0.15 0.01 106.5);
-  --sidebar-primary: oklch(0.45 0.18 264);
-  --sidebar-primary-foreground: oklch(0.98 0.005 106.5);
-  --sidebar-accent: oklch(0.96 0.01 106.5);
-  --sidebar-accent-foreground: oklch(0.15 0.01 106.5);
-  --sidebar-border: oklch(0.92 0.01 106.5);
-  --sidebar-ring: oklch(0.45 0.18 264);
+  --background: #ffffff;
+  --foreground: #241b2c;
+  --card: #fcf8f4;
+  --card-foreground: #241b2c;
+  --popover: #ffffff;
+  --popover-foreground: #241b2c;
+  --primary: #f59520;
+  --primary-foreground: #241b2c;
+  --secondary: #fcf8f4;
+  --secondary-foreground: #241b2c;
+  --muted: #f8f1ea;
+  --muted-foreground: #756872;
+  --accent: #f595201f;
+  --accent-foreground: #241b2c;
+  --destructive: #a8432c;
+  --destructive-foreground: #ffffff;
+  --border: #58436c1f;
+  --input: #58436c38;
+  --ring: #f59520;
+  --radius: 0.875rem;
+
+  /* Beyond shadcn */
+  --text-2: #5e5360;
+  --accent-text: #96590f;
+  --accent-hover: #f7a94d;
+  --accent-tint: #f595201f;
+  --plum: #a98fc4;
+  --plum-tint: #a98fc426;
+  --income: #5f4682;
+  --border-strong: #58436c38;
+  /* Table rows: a hair warmer than the white page, lighter than the cream cards */
+  --row: #fdfaf6;
+  --ramp-1: #f59520;
+  --ramp-2: #f5b465;
+  --ramp-3: #f4c690;
+  --ramp-4: #f4d3ad;
+  --ramp-5: #f4dcc2;
+
+  --sidebar: #fcf8f4;
+  --sidebar-foreground: #241b2c;
+  --sidebar-primary: #f59520;
+  --sidebar-primary-foreground: #241b2c;
+  --sidebar-accent: #f595201f;
+  --sidebar-accent-foreground: #241b2c;
+  --sidebar-border: #58436c1f;
+  --sidebar-ring: #f59520;
 }
 
 .dark {
-  --background: oklch(0.11 0.01 106.5);
-  --foreground: oklch(0.95 0.01 106.5);
-  --card: oklch(0.13 0.01 106.5);
-  --card-foreground: oklch(0.95 0.01 106.5);
-  --popover: oklch(0.13 0.01 106.5);
-  --popover-foreground: oklch(0.95 0.01 106.5);
-  --primary: oklch(0.55 0.2 264);
-  --primary-foreground: oklch(0.11 0.01 106.5);
-  --secondary: oklch(0.18 0.01 106.5);
-  --secondary-foreground: oklch(0.95 0.01 106.5);
-  --muted: oklch(0.18 0.01 106.5);
-  --muted-foreground: oklch(0.65 0.01 106.5);
-  --accent: oklch(0.18 0.01 106.5);
-  --accent-foreground: oklch(0.95 0.01 106.5);
-  --destructive: oklch(0.58 0.22 29);
-  --destructive-foreground: oklch(0.95 0.01 106.5);
-  --border: oklch(0.18 0.01 106.5);
-  --input: oklch(0.18 0.01 106.5);
-  --ring: oklch(0.55 0.2 264);
-  --sidebar: oklch(0.13 0.01 106.5);
-  --sidebar-foreground: oklch(0.95 0.01 106.5);
-  --sidebar-primary: oklch(0.55 0.2 264);
-  --sidebar-primary-foreground: oklch(0.11 0.01 106.5);
-  --sidebar-accent: oklch(0.18 0.01 106.5);
-  --sidebar-accent-foreground: oklch(0.95 0.01 106.5);
-  --sidebar-border: oklch(0.18 0.01 106.5);
-  --sidebar-ring: oklch(0.55 0.2 264);
+  --background: #0e0e0f;
+  --foreground: #f2f2f3;
+  --card: #191a1c;
+  --card-foreground: #f2f2f3;
+  --popover: #191a1c;
+  --popover-foreground: #f2f2f3;
+  --primary: #f59520;
+  --primary-foreground: #241b2c;
+  --secondary: #191a1c;
+  --secondary-foreground: #f2f2f3;
+  --muted: #141416;
+  --muted-foreground: #8e8e94;
+  --accent: #f5952029;
+  --accent-foreground: #f2f2f3;
+  --destructive: #e0806a;
+  --destructive-foreground: #0e0e0f;
+  --border: #ffffff12;
+  --input: #ffffff26;
+  --ring: #f59520;
+
+  --text-2: #b4b4b9;
+  --accent-text: #f59520;
+  --accent-hover: #f7a94d;
+  --accent-tint: #f5952029;
+  --plum: #a98fc4;
+  --plum-tint: #a98fc426;
+  --income: #b9a2d4;
+  --border-strong: #ffffff26;
+  --row: #191a1c;
+  --ramp-1: #f59520;
+  --ramp-2: #c27a1f;
+  --ramp-3: #8f5d1f;
+  --ramp-4: #664420;
+  --ramp-5: #473321;
+
+  --sidebar: #141416;
+  --sidebar-foreground: #f2f2f3;
+  --sidebar-primary: #f59520;
+  --sidebar-primary-foreground: #241b2c;
+  --sidebar-accent: #f5952029;
+  --sidebar-accent-foreground: #f2f2f3;
+  --sidebar-border: #ffffff12;
+  --sidebar-ring: #f59520;
 }
 
 @theme inline {
@@ -97,6 +149,26 @@
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-ring: var(--sidebar-ring);
+
+  --color-text-2: var(--text-2);
+  --color-accent-text: var(--accent-text);
+  --color-accent-hover: var(--accent-hover);
+  --color-accent-tint: var(--accent-tint);
+  --color-plum: var(--plum);
+  --color-plum-tint: var(--plum-tint);
+  --color-income: var(--income);
+  --color-border-strong: var(--border-strong);
+  --color-row: var(--row);
+  --color-ramp-1: var(--ramp-1);
+  --color-ramp-2: var(--ramp-2);
+  --color-ramp-3: var(--ramp-3);
+  --color-ramp-4: var(--ramp-4);
+  --color-ramp-5: var(--ramp-5);
+
+  /* Fraunces for headlines, Geist for UI, Geist Mono for labels and numbers. */
+  --font-serif: 'Fraunces Variable', Georgia, serif;
+  --font-sans: 'Geist Variable', system-ui, sans-serif;
+  --font-mono: 'Geist Mono Variable', ui-monospace, monospace;
 }
 
 @layer base {
@@ -112,6 +184,8 @@
 
   body {
     @apply bg-background text-foreground font-sans antialiased;
+    font-size: 15px;
+    line-height: 1.5;
     font-feature-settings:
       'rlig' 1,
       'calt' 1;
@@ -120,82 +194,98 @@
   html {
     scroll-behavior: smooth;
   }
+
+  /* Editorial headlines: light serif with tight tracking. Opt in with .font-serif or <Heading>. */
+  .font-serif {
+    font-weight: 300;
+    letter-spacing: -0.03em;
+    line-height: 1.05;
+    font-variation-settings: 'opsz' 72;
+  }
 }
 
 @layer utilities {
-  .shadow-inner-right {
-    box-shadow: inset -9px 0 6px -1px rgb(0 0 0 / 0.02);
+  /* Mono eyebrow label used above every section. */
+  .eyebrow {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    line-height: 1.5;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--muted-foreground);
   }
 
-  .shadow-inner-left {
-    box-shadow: inset 9px 0 6px -1px rgb(0 0 0 / 0.02);
+  /* Soft peach and lilac wash behind a hero. */
+  .hero-glow {
+    background:
+      radial-gradient(
+        60% 70% at 62% 0%,
+        color-mix(in srgb, var(--ramp-2) 24%, transparent) 0%,
+        transparent 70%
+      ),
+      radial-gradient(
+        40% 50% at 0% 20%,
+        color-mix(in srgb, var(--plum) 18%, transparent) 0%,
+        transparent 70%
+      );
   }
 
-  .gradient-bg {
-    background: linear-gradient(135deg, hsl(var(--primary) / 0.1) 0%, transparent 50%);
-  }
-
-  .glass-effect {
-    backdrop-filter: blur(12px);
-    background: hsl(var(--background) / 0.8);
-    border: 1px solid hsl(var(--border) / 0.5);
-  }
-
-  .gradient-text {
-    background: linear-gradient(
-      135deg,
-      hsl(var(--primary)) 0%,
-      hsl(var(--primary)) 60%,
-      hsl(var(--foreground)) 100%
+  /* Ledger paper: faint horizontal rules, like the page of an account book. */
+  .ledger-paper {
+    background-image: repeating-linear-gradient(
+      to bottom,
+      transparent 0,
+      transparent 39px,
+      color-mix(in srgb, var(--plum) 16%, transparent) 39px,
+      color-mix(in srgb, var(--plum) 16%, transparent) 40px
     );
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    background-clip: text;
   }
 
-  /* Onboarding slide animations */
-  .animate-slide-in {
-    animation: slideIn 0.3s ease-out forwards;
+  /* Accounting convention: a single rule under a subtotal, a double rule under a total. */
+  .rule-double {
+    border-bottom: 4px double var(--foreground);
   }
 
-  .animate-slide-out-left {
-    animation: slideOutLeft 0.3s ease-in forwards;
+  /* A posted entry gets stamped. */
+  .stamp {
+    transform: rotate(-6deg);
+    animation: stampIn 0.35s cubic-bezier(0.2, 0.9, 0.3, 1.3) both;
   }
 
-  .animate-slide-out-right {
-    animation: slideOutRight 0.3s ease-in forwards;
+  .rise {
+    animation: rise 0.6s ease-out both;
   }
 }
 
-@keyframes slideIn {
+@keyframes stampIn {
   from {
     opacity: 0;
-    transform: translateX(20px);
+    transform: rotate(-6deg) scale(1.7);
   }
   to {
     opacity: 1;
-    transform: translateX(0);
+    transform: rotate(-6deg) scale(1);
   }
 }
 
-@keyframes slideOutLeft {
+@keyframes rise {
   from {
-    opacity: 1;
-    transform: translateX(0);
+    opacity: 0;
+    transform: translateY(14px);
   }
   to {
-    opacity: 0;
-    transform: translateX(-20px);
+    opacity: 1;
+    transform: translateY(0);
   }
 }
 
-@keyframes slideOutRight {
-  from {
-    opacity: 1;
-    transform: translateX(0);
-  }
-  to {
-    opacity: 0;
-    transform: translateX(20px);
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
   }
 }

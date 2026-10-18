@@ -1,261 +1,116 @@
 /**
  * TransactionDrawer
  *
- * Right-side slide-over panel that shows:
- * 1. Transaction details (amount, source, type, date, counterparty)
- * 2. Associated journal and line items
- * 3. Inline edit form (description, counterparty, account code, exclude)
+ * Right-hand slide-over for one transaction: details, its journal (the double entry), and an
+ * edit form. Behaviour is unchanged from the previous drawer: saving always asks the API to
+ * re-journal, changing the ledger account on a posted journal reverses and recreates it, and
+ * excluding a transaction reverses any journal.
  */
 
-import React, { useState, useEffect, useCallback } from 'react';
-import {
-  X,
-  Receipt,
-  BookOpen,
-  PencilSimple,
-  Check,
-  ArrowCounterClockwise,
-  Warning,
-  CheckCircle,
-  Prohibit,
-  ArrowRight,
-  ArrowLeft,
-  CurrencyCircleDollar,
-  ClockClockwise,
-  Info,
-  CaretDown,
-  CaretUp,
-} from 'phosphor-react';
+import { useCallback, useEffect, useState } from 'react';
+import { CaretDown, CaretUp, CircleNotch } from 'phosphor-react';
+import { toast } from 'sonner';
 import { Button } from '~/components/ui/button';
+import { Chip, type ChipTone } from '~/components/ui/chip';
+import { DataTable } from '~/components/ui/data-table';
+import { Drawer } from '~/components/ui/drawer';
+import { Eyebrow } from '~/components/ui/eyebrow';
+import { Field } from '~/components/ui/field';
 import { Input } from '~/components/ui/input';
-import { Label } from '~/components/ui/label';
 import { SearchableSelect } from '~/components/ui/searchable-select';
-import { cn } from '~/lib/utils';
+import type { ChartOfAccountEntry } from '~/lib/api/accounting';
 import {
   getTransaction,
   updateTransaction,
   type FinancialTransaction,
-  type TransactionJournal,
   type JournalLineItemWithAccount,
+  type TransactionJournal,
   type UpdateTransactionPayload,
 } from '~/lib/api/transactions';
-import type { ChartOfAccountEntry } from '~/lib/api/accounting';
-import { toast } from 'sonner';
+import { cn } from '~/lib/utils';
+import {
+  FILING,
+  SOURCE_LABEL,
+  baseAmount,
+  dateTime,
+  filingOf,
+  money,
+  shortDate,
+  typeLabel,
+} from './format';
 
-// ─── Helpers ─────────────────────────────────────────────────────────────────
+const JOURNAL_STATUS: Record<string, { label: string; tone: ChipTone }> = {
+  posted: { label: 'Posted', tone: 'done' },
+  draft: { label: 'Draft', tone: 'active' },
+  reversed: { label: 'Reversed', tone: 'plain' },
+};
 
-function formatMoney(amount: number, currency = 'GBP') {
-  return new Intl.NumberFormat('en-GB', {
-    style: 'currency',
-    currency,
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  }).format(Math.abs(amount));
-}
-
-function formatDate(iso: string) {
-  return new Date(iso).toLocaleDateString('en-GB', {
-    day: '2-digit',
-    month: 'short',
-    year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
-}
-
-// ─── Badges ──────────────────────────────────────────────────────────────────
-
-function DirectionBadge({ direction }: { direction: string }) {
-  const isIn = direction === 'in';
+function Detail({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <span
-      className={cn(
-        'inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold border',
-        isIn
-          ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30'
-          : 'bg-rose-500/15 text-rose-400 border-rose-500/30'
-      )}
-    >
-      {isIn ? <ArrowLeft size={11} weight="bold" /> : <ArrowRight size={11} weight="bold" />}
-      {isIn ? 'Inbound' : 'Outbound'}
-    </span>
-  );
-}
-
-function SourceBadge({ source }: { source: string }) {
-  const isRevolut = source === 'revolut';
-  return (
-    <span
-      className={cn(
-        'inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold border',
-        isRevolut
-          ? 'bg-violet-500/15 text-violet-400 border-violet-500/30'
-          : 'bg-blue-500/15 text-blue-400 border-blue-500/30'
-      )}
-    >
-      {isRevolut ? 'Revolut' : 'PayPal'}
-    </span>
-  );
-}
-
-function JournalStatusBadge({ status }: { status: string }) {
-  const cfg: Record<string, { label: string; className: string; icon: React.ReactNode }> = {
-    posted: {
-      label: 'Posted',
-      className: 'bg-green-500/15 text-green-400 border-green-500/30',
-      icon: <CheckCircle size={11} weight="fill" />,
-    },
-    draft: {
-      label: 'Draft',
-      className: 'bg-amber-500/15 text-amber-400 border-amber-500/30',
-      icon: <Warning size={11} weight="fill" />,
-    },
-    reversed: {
-      label: 'Reversed',
-      className: 'bg-slate-500/15 text-slate-400 border-slate-500/30',
-      icon: <ArrowCounterClockwise size={11} weight="bold" />,
-    },
-  };
-  const c = cfg[status] ?? cfg.draft;
-  return (
-    <span
-      className={cn(
-        'inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold border',
-        c.className
-      )}
-    >
-      {c.icon}
-      {c.label}
-    </span>
-  );
-}
-
-function ExcludedBadge() {
-  return (
-    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold border bg-red-500/15 text-red-400 border-red-500/30">
-      <Prohibit size={11} weight="fill" />
-      Excluded
-    </span>
-  );
-}
-
-// ─── Section Header ───────────────────────────────────────────────────────────
-
-function SectionHeader({
-  icon,
-  title,
-  action,
-  collapsible,
-  collapsed,
-  onToggle,
-}: {
-  icon: React.ReactNode;
-  title: string;
-  action?: React.ReactNode;
-  collapsible?: boolean;
-  collapsed?: boolean;
-  onToggle?: () => void;
-}) {
-  return (
-    <div
-      className={cn(
-        'flex items-center justify-between py-3 border-b border-white/8',
-        collapsible && 'cursor-pointer select-none'
-      )}
-      onClick={collapsible ? onToggle : undefined}
-    >
-      <div className="flex items-center gap-2">
-        <span className="text-muted-foreground">{icon}</span>
-        <span className="text-sm font-semibold text-foreground">{title}</span>
-      </div>
-      <div className="flex items-center gap-2">
-        {action}
-        {collapsible && (
-          <span className="text-muted-foreground">
-            {collapsed ? <CaretDown size={14} /> : <CaretUp size={14} />}
-          </span>
-        )}
-      </div>
+    <div className="flex items-start justify-between gap-6 py-3">
+      <dt className="shrink-0 text-text-2">{label}</dt>
+      <dd className="min-w-0 break-words text-right">{children}</dd>
     </div>
   );
 }
 
-// ─── Detail Row ───────────────────────────────────────────────────────────────
-
-function DetailRow({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div className="flex items-start justify-between gap-3 py-2 text-sm border-b border-white/5 last:border-0">
-      <span className="text-muted-foreground shrink-0 w-36">{label}</span>
-      <span className="text-foreground text-right">{children}</span>
-    </div>
-  );
-}
-
-// ─── Line Items Table ─────────────────────────────────────────────────────────
-
-function LineItemsTable({ items }: { items: JournalLineItemWithAccount[] }) {
-  const totalDebit = items.reduce((s, i) => s + Number(i.debit), 0);
-  const totalCredit = items.reduce((s, i) => s + Number(i.credit), 0);
+function JournalTable({ items }: { items: JournalLineItemWithAccount[] }) {
+  const debit = items.reduce((s, i) => s + Number(i.debit), 0);
+  const credit = items.reduce((s, i) => s + Number(i.credit), 0);
   const currency = items[0]?.currency ?? 'GBP';
-
   return (
-    <div className="mt-3 rounded-lg border border-white/10 overflow-hidden text-xs">
-      <table className="w-full">
-        <thead>
-          <tr className="bg-white/5 text-muted-foreground">
-            <th className="text-left px-3 py-2 font-medium">Account</th>
-            <th className="text-right px-3 py-2 font-medium">Debit</th>
-            <th className="text-right px-3 py-2 font-medium">Credit</th>
-          </tr>
-        </thead>
-        <tbody>
-          {items.map(item => (
-            <tr key={item.id} className="border-t border-white/8 hover:bg-white/3">
-              <td className="px-3 py-2">
-                <div className="font-medium text-foreground">
-                  {item.account_number} — {item.account_name ?? item.account_id.slice(0, 8)}
+    <DataTable label="Journal lines" dense className="mt-3">
+      <thead>
+        <tr>
+          <th>Account</th>
+          <th className="text-right">Debit</th>
+          <th className="text-right">Credit</th>
+        </tr>
+      </thead>
+      <tbody>
+        {items.map(item => (
+          <tr key={item.id}>
+            <td>
+              <div>
+                {item.account_number} — {item.account_name ?? item.account_id.slice(0, 8)}
+              </div>
+              {item.description && (
+                <div className="max-w-[200px] truncate text-[13px] text-muted-foreground">
+                  {item.description}
                 </div>
-                {item.description && (
-                  <div className="text-muted-foreground mt-0.5 truncate max-w-[200px]">
-                    {item.description}
-                  </div>
-                )}
-              </td>
-              <td className="px-3 py-2 text-right font-mono text-emerald-400">
-                {Number(item.debit) > 0 ? formatMoney(Number(item.debit), item.currency) : '—'}
-              </td>
-              <td className="px-3 py-2 text-right font-mono text-rose-400">
-                {Number(item.credit) > 0 ? formatMoney(Number(item.credit), item.currency) : '—'}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-        <tfoot>
-          <tr className="bg-white/5 border-t border-white/10 font-semibold">
-            <td className="px-3 py-2 text-muted-foreground">Total</td>
-            <td className="px-3 py-2 text-right font-mono text-emerald-400">
-              {formatMoney(totalDebit, currency)}
+              )}
             </td>
-            <td className="px-3 py-2 text-right font-mono text-rose-400">
-              {formatMoney(totalCredit, currency)}
+            <td className="text-right tabular-nums">
+              {Number(item.debit) > 0 ? money(Number(item.debit), item.currency) : '—'}
+            </td>
+            <td className="text-right tabular-nums">
+              {Number(item.credit) > 0 ? money(Number(item.credit), item.currency) : '—'}
             </td>
           </tr>
-        </tfoot>
-      </table>
-    </div>
+        ))}
+      </tbody>
+      <tfoot>
+        <tr>
+          <td>Total</td>
+          <td className="text-right tabular-nums">{money(debit, currency)}</td>
+          <td className="text-right tabular-nums">{money(credit, currency)}</td>
+        </tr>
+      </tfoot>
+    </DataTable>
   );
 }
 
-// ─── Edit Form ────────────────────────────────────────────────────────────────
-
-interface EditFormProps {
+function EditForm({
+  txn,
+  chartOfAccounts,
+  onSave,
+  isSaving,
+}: {
   txn: FinancialTransaction;
   chartOfAccounts: ChartOfAccountEntry[];
   onSave: (payload: UpdateTransactionPayload) => Promise<void>;
   isSaving: boolean;
-}
-
-function EditForm({ txn, chartOfAccounts, onSave, isSaving }: EditFormProps) {
+}) {
   const [description, setDescription] = useState(txn.description ?? '');
   const [counterparty, setCounterparty] = useState(txn.counterparty_name ?? '');
   const [accountCode, setAccountCode] = useState((txn.metadata?.account_code as string) ?? '');
@@ -265,7 +120,7 @@ function EditForm({ txn, chartOfAccounts, onSave, isSaving }: EditFormProps) {
   const [isExcluded, setIsExcluded] = useState(!!txn.excluded_reason);
   const [excludeReason, setExcludeReason] = useState(txn.excluded_reason ?? '');
 
-  // Sync if txn prop changes (e.g. after save)
+  // Reset when a different transaction is shown.
   useEffect(() => {
     setDescription(txn.description ?? '');
     setCounterparty(txn.counterparty_name ?? '');
@@ -273,14 +128,12 @@ function EditForm({ txn, chartOfAccounts, onSave, isSaving }: EditFormProps) {
     setExpenseCategory((txn.metadata?.expense_category as string) ?? '');
     setIsExcluded(!!txn.excluded_reason);
     setExcludeReason(txn.excluded_reason ?? '');
+    // Only the identity matters: re-syncing on every field would fight the user's typing.
   }, [txn.id]);
 
   const accountOptions = chartOfAccounts
     .filter(a => !a.is_header)
-    .map(a => ({
-      value: a.account_number,
-      label: `${a.account_number} — ${a.name}`,
-    }));
+    .map(a => ({ value: a.account_number, label: `${a.account_number} — ${a.name}` }));
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -291,102 +144,76 @@ function EditForm({ txn, chartOfAccounts, onSave, isSaving }: EditFormProps) {
     };
     if (accountCode) payload.account_code = accountCode;
     if (expenseCategory) payload.expense_category = expenseCategory;
-    // excluded_reason: '' means un-exclude
+    // '' means "un-exclude" to the API.
     payload.excluded_reason = isExcluded ? excludeReason || 'Manually excluded' : '';
     await onSave(payload);
   };
 
   return (
-    <form onSubmit={handleSubmit} className="space-y-4 pt-2">
-      {/* Description */}
-      <div className="space-y-1.5">
-        <Label htmlFor="edit-description" className="text-xs text-muted-foreground">
-          Description
-        </Label>
-        <Input
-          id="edit-description"
-          value={description}
-          onChange={e => setDescription(e.target.value)}
-          className="h-8 text-sm bg-white/5 border-white/15"
-          placeholder="Transaction description"
-        />
-      </div>
+    <form onSubmit={handleSubmit} className="grid gap-4 pt-4">
+      <Field label="Description">
+        <Input value={description} onChange={e => setDescription(e.target.value)} />
+      </Field>
+      <Field label="Counterparty">
+        <Input value={counterparty} onChange={e => setCounterparty(e.target.value)} />
+      </Field>
 
-      {/* Counterparty */}
-      <div className="space-y-1.5">
-        <Label htmlFor="edit-counterparty" className="text-xs text-muted-foreground">
-          Counterparty / Merchant
-        </Label>
-        <Input
-          id="edit-counterparty"
-          value={counterparty}
-          onChange={e => setCounterparty(e.target.value)}
-          className="h-8 text-sm bg-white/5 border-white/15"
-          placeholder="Vendor or counterparty name"
-        />
-      </div>
-
-      {/* Account Code */}
-      <div className="space-y-1.5">
-        <Label className="text-xs text-muted-foreground">GL Account</Label>
+      <div className="grid gap-1.5">
+        <span className="eyebrow" id="ledger-account-label">
+          Ledger account
+        </span>
         <SearchableSelect
+          aria-label="Ledger account"
           options={accountOptions}
           value={accountCode}
           onChange={setAccountCode}
-          placeholder="Select account..."
-          className="h-8 text-sm bg-white/5 border-white/15"
+          placeholder="Select account…"
+          className="h-10 w-full rounded-xl border-input bg-card px-3.5 text-[15px]"
         />
         {accountCode && (
-          <p className="text-[11px] text-muted-foreground">
-            Changing this will reverse and recreate the journal entry.
+          <p className="text-[13px] text-muted-foreground">
+            Changing this reverses and recreates the journal entry.
           </p>
         )}
       </div>
 
-      {/* Exclude toggle */}
-      <div className="rounded-lg border border-white/10 p-3 space-y-3">
-        <label className="flex items-center gap-3 cursor-pointer">
+      <div className="grid gap-3 rounded-xl border p-4">
+        <label className="flex cursor-pointer items-start gap-3">
           <input
             type="checkbox"
-            className="w-4 h-4 rounded accent-red-500"
             checked={isExcluded}
             onChange={e => setIsExcluded(e.target.checked)}
+            className="mt-1 size-4 accent-[var(--primary)]"
           />
-          <div>
-            <span className="text-sm font-medium text-foreground">Exclude transaction</span>
-            <p className="text-[11px] text-muted-foreground mt-0.5">
-              Excluded transactions won't be journalled. Existing journals will be reversed.
-            </p>
-          </div>
+          <span>
+            Exclude from the ledger
+            <span className="block text-[13px] text-muted-foreground">
+              Excluded transactions are not journalled, and any existing journal is reversed.
+            </span>
+          </span>
         </label>
         {isExcluded && (
           <Input
             value={excludeReason}
             onChange={e => setExcludeReason(e.target.value)}
-            className="h-8 text-sm bg-white/5 border-white/15"
-            placeholder="Reason for exclusion (e.g. 'Internal transfer')"
+            placeholder="Reason, e.g. Internal transfer"
+            aria-label="Reason for exclusion"
           />
         )}
       </div>
 
-      <Button type="submit" disabled={isSaving} className="w-full h-9 text-sm">
+      <Button type="submit" disabled={isSaving} className="w-full">
         {isSaving ? (
           <>
-            <ClockClockwise size={16} className="animate-spin" />
-            Saving…
+            <CircleNotch size={16} weight="light" className="animate-spin" aria-hidden /> Saving…
           </>
         ) : (
-          <>
-            <Check size={16} />
-            Save Changes
-          </>
+          'Save changes'
         )}
       </Button>
     </form>
   );
 }
-
-// ─── Main Drawer ─────────────────────────────────────────────────────────────
 
 export interface TransactionDrawerProps {
   entityId: string;
@@ -408,27 +235,27 @@ export function TransactionDrawer({
   const [isLoading, setIsLoading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
-  const [journalCollapsed, setJournalCollapsed] = useState(false);
 
-  // Load transaction + journal whenever ID changes
   useEffect(() => {
     if (!transactionId) {
       setTxn(null);
       setJournal(null);
       return;
     }
+    let current = true;
     setIsLoading(true);
     setEditOpen(false);
-    setJournalCollapsed(false);
     getTransaction(entityId, transactionId)
       .then(data => {
+        if (!current) return;
         setTxn(data.transaction);
         setJournal(data.journal);
       })
-      .catch(err => {
-        toast.error(`Failed to load transaction: ${err.message}`);
-      })
-      .finally(() => setIsLoading(false));
+      .catch(err => toast.error(`Failed to load transaction: ${err.message}`))
+      .finally(() => current && setIsLoading(false));
+    return () => {
+      current = false;
+    };
   }, [transactionId, entityId]);
 
   const handleSave = useCallback(
@@ -440,32 +267,29 @@ export function TransactionDrawer({
         setTxn(result.transaction);
         if (result.new_journal) {
           setJournal(result.new_journal);
-        } else if (result.journal_action === 'reversed') {
-          // Journal was reversed — refetch to show updated state
-          const fresh = await getTransaction(entityId, transactionId);
-          setJournal(fresh.journal);
-        } else if (result.journal_action === 'reversed_and_recreated') {
+        } else if (
+          result.journal_action === 'reversed' ||
+          result.journal_action === 'reversed_and_recreated'
+        ) {
+          // The journal changed state: refetch so the table shows what is now true.
           const fresh = await getTransaction(entityId, transactionId);
           setJournal(fresh.journal);
         }
         onTransactionUpdated?.(result.transaction);
 
-        const actionMessages: Record<string, string> = {
+        const messages: Record<string, string> = {
           reversed: 'Transaction updated — journal reversed.',
           reversed_and_recreated: 'Transaction updated — journal reversed and recreated.',
           reversed_only: 'Transaction updated — journal reversed (recreate failed, check logs).',
           none: 'Transaction updated.',
         };
-        toast.success(actionMessages[result.journal_action] ?? 'Transaction updated.');
-
+        toast.success(messages[result.journal_action] ?? 'Transaction updated.');
         if (result.re_journal_needed) {
           toast.info('Transaction un-excluded. You can now generate a new journal for it.');
         }
-
         setEditOpen(false);
       } catch (err: unknown) {
-        const msg = err instanceof Error ? err.message : String(err);
-        toast.error(`Failed to save: ${msg}`);
+        toast.error(`Failed to save: ${err instanceof Error ? err.message : String(err)}`);
       } finally {
         setIsSaving(false);
       }
@@ -473,207 +297,140 @@ export function TransactionDrawer({
     [transactionId, entityId, onTransactionUpdated]
   );
 
-  const isOpen = !!transactionId;
+  const filing = txn ? filingOf(txn) : null;
+  const foreign = !!txn && !!txn.base_currency_code && txn.currency_code !== txn.base_currency_code;
+  const title = txn ? txn.counterparty_name || txn.description || 'Transaction' : 'Transaction';
 
   return (
-    <>
-      {/* Backdrop */}
-      <div
-        className={cn(
-          'fixed inset-0 bg-black/40 backdrop-blur-sm z-40 transition-opacity duration-300',
-          isOpen ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none'
-        )}
-        onClick={onClose}
-      />
-
-      {/* Drawer panel */}
-      <div
-        className={cn(
-          'fixed top-0 right-0 h-full w-full sm:w-[520px] z-50 flex flex-col',
-          'bg-card border-l border-white/10 shadow-2xl',
-          'transition-transform duration-300 ease-in-out',
-          isOpen ? 'translate-x-0' : 'translate-x-full'
-        )}
-      >
-        {/* Header */}
-        <div className="flex items-center justify-between px-5 py-4 border-b border-white/10 shrink-0">
-          <div className="flex items-center gap-2">
-            <CurrencyCircleDollar size={20} weight="duotone" className="text-primary" />
-            <span className="font-semibold text-foreground">Transaction Detail</span>
-          </div>
-          <Button variant="ghost" size="icon" onClick={onClose} className="h-8 w-8 -mr-1">
-            <X size={18} />
-          </Button>
+    <Drawer
+      open={!!transactionId}
+      onOpenChange={open => !open && onClose()}
+      eyebrow={
+        txn
+          ? `${typeLabel(txn.transaction_type)} · ${SOURCE_LABEL[txn.source] ?? txn.source}`
+          : 'Transaction'
+      }
+      title={title}
+      description="Transaction details, journal and edit form"
+      footer={
+        <Button variant="outline" onClick={onClose}>
+          Close
+        </Button>
+      }
+    >
+      {isLoading && (
+        <div role="status" className="flex items-center gap-3 py-16 text-text-2">
+          <CircleNotch size={20} weight="light" className="animate-spin" aria-hidden /> Loading…
         </div>
+      )}
 
-        {/* Scrollable body */}
-        <div className="flex-1 overflow-y-auto px-5 py-4 space-y-0">
-          {isLoading && (
-            <div className="flex items-center justify-center py-20 text-muted-foreground">
-              <ClockClockwise size={24} className="animate-spin mr-3" />
-              Loading…
+      {!isLoading && txn && filing && (
+        <>
+          <div>
+            <div
+              className={cn(
+                'font-serif text-[52px] leading-[1.05] tabular-nums',
+                txn.direction === 'in' && !txn.excluded_reason && 'text-income'
+              )}
+            >
+              {txn.direction === 'in' ? '+' : '−'}
+              {money(baseAmount(txn), txn.base_currency_code ?? 'GBP')}
             </div>
-          )}
+            {foreign && (
+              <div className="mt-1.5 font-mono text-xs text-muted-foreground">
+                {money(txn.amount, txn.currency_code)}
+                {txn.fx_rate ? ` · RATE ${Number(txn.fx_rate).toFixed(4)}` : ''}
+              </div>
+            )}
+            <div className="mt-3.5 flex flex-wrap gap-2">
+              <Chip tone={txn.direction === 'in' ? 'income' : 'plain'}>
+                {txn.direction === 'in' ? 'Inbound' : 'Outbound'}
+              </Chip>
+              <Chip tone={FILING[filing].tone} dot>
+                {filing === 'pending' ? 'Not journalled' : FILING[filing].label}
+              </Chip>
+            </div>
+          </div>
 
-          {!isLoading && txn && (
-            <>
-              {/* ── Amount Hero ── GBP base amount is primary (GBP is the
-                  trading currency); original-currency amount, if
-                  different, shows underneath. */}
-              <div className="text-center py-5">
-                <div
-                  className={cn(
-                    'text-3xl font-bold font-mono',
-                    txn.direction === 'in' ? 'text-emerald-400' : 'text-rose-400'
-                  )}
-                >
-                  {txn.direction === 'in' ? '+' : '−'}
-                  {formatMoney(txn.base_amount ?? txn.amount, txn.base_currency_code ?? 'GBP')}
+          <dl className="divide-y border-y">
+            <Detail label="Date">{dateTime(txn.occurred_at)}</Detail>
+            <Detail label="Counterparty">{txn.counterparty_name || '—'}</Detail>
+            <Detail label="Description">{txn.description || '—'}</Detail>
+            <Detail label="Reference">
+              <span className="font-mono text-[13px] text-text-2">
+                {txn.external_transaction_id}
+              </span>
+            </Detail>
+            {!!txn.metadata?.account_code && (
+              <Detail label="Ledger account">
+                <span className="font-mono">{String(txn.metadata.account_code)}</span>
+              </Detail>
+            )}
+            {txn.excluded_reason && <Detail label="Excluded because">{txn.excluded_reason}</Detail>}
+          </dl>
+
+          <div>
+            <Eyebrow>{journal ? 'Associated journal' : 'Journal'}</Eyebrow>
+            {journal ? (
+              <>
+                <div className="mt-3 flex flex-wrap items-center gap-2 text-[13px] text-text-2">
+                  <Chip tone={(JOURNAL_STATUS[journal.status] ?? JOURNAL_STATUS.draft).tone} dot>
+                    {(JOURNAL_STATUS[journal.status] ?? JOURNAL_STATUS.draft).label}
+                  </Chip>
+                  <span className="capitalize">
+                    {journal.journal_type.replace('_', ' ')} journal
+                  </span>
+                  <span>· {shortDate(journal.journal_date)}</span>
                 </div>
-                {txn.base_currency_code && txn.currency_code !== txn.base_currency_code && (
-                  <div className="text-sm font-mono text-muted-foreground mt-0.5">
-                    {formatMoney(txn.amount, txn.currency_code)}
-                    {txn.fx_rate && ` · rate ${txn.fx_rate.toFixed(4)}`}
-                  </div>
+                {journal.description && <p className="mt-3 text-text-2">{journal.description}</p>}
+                {journal.line_items && journal.line_items.length > 0 ? (
+                  <JournalTable items={journal.line_items} />
+                ) : (
+                  <p className="mt-3 text-sm text-muted-foreground">No line items found.</p>
                 )}
-                <div className="flex items-center justify-center gap-2 mt-2 flex-wrap">
-                  <DirectionBadge direction={txn.direction} />
-                  <SourceBadge source={txn.source} />
-                  {txn.excluded_reason && <ExcludedBadge />}
-                  {txn.journalised_at && !txn.excluded_reason && (
-                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold border bg-green-500/15 text-green-400 border-green-500/30">
-                      <CheckCircle size={11} weight="fill" />
-                      Journalled
-                    </span>
-                  )}
-                  {!txn.journalised_at && !txn.excluded_reason && (
-                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold border bg-amber-500/15 text-amber-400 border-amber-500/30">
-                      <Warning size={11} weight="fill" />
-                      Not journalled
-                    </span>
-                  )}
-                </div>
-              </div>
+              </>
+            ) : (
+              <p className="mt-3 text-text-2">
+                {filing === 'excluded'
+                  ? 'Excluded transactions never reach the ledger.'
+                  : 'No journal entry exists for this transaction yet.'}
+              </p>
+            )}
+          </div>
 
-              {/* ── Transaction Details ── */}
-              <div>
-                <SectionHeader icon={<Info size={16} />} title="Transaction Details" />
-                <div className="pt-1">
-                  <DetailRow label="Date">{formatDate(txn.occurred_at)}</DetailRow>
-                  <DetailRow label="Source">
-                    <span className="capitalize">{txn.source}</span>
-                  </DetailRow>
-                  <DetailRow label="Type">
-                    <span className="capitalize">{txn.transaction_type?.replace('_', ' ')}</span>
-                  </DetailRow>
-                  <DetailRow label="Counterparty">
-                    {txn.counterparty_name || (
-                      <span className="text-muted-foreground italic">—</span>
-                    )}
-                  </DetailRow>
-                  <DetailRow label="Description">
-                    {txn.description || <span className="text-muted-foreground italic">—</span>}
-                  </DetailRow>
-                  <DetailRow label="Reference">
-                    <span className="font-mono text-[11px] text-muted-foreground">
-                      {txn.external_transaction_id}
-                    </span>
-                  </DetailRow>
-                  {!!txn.metadata?.account_code && (
-                    <DetailRow label="GL Account">
-                      <span className="font-mono">{String(txn.metadata.account_code)}</span>
-                    </DetailRow>
-                  )}
-                  {txn.excluded_reason && (
-                    <DetailRow label="Excluded reason">
-                      <span className="text-red-400">{txn.excluded_reason}</span>
-                    </DetailRow>
-                  )}
-                </div>
-              </div>
-
-              {/* ── Journal ── */}
-              <div className="mt-4">
-                <SectionHeader
-                  icon={<BookOpen size={16} />}
-                  title={journal ? 'Associated Journal' : 'Journal'}
-                  collapsible={!!journal}
-                  collapsed={journalCollapsed}
-                  onToggle={() => setJournalCollapsed(v => !v)}
+          <div className="border-t pt-4">
+            <button
+              type="button"
+              onClick={() => setEditOpen(v => !v)}
+              aria-expanded={editOpen}
+              className="flex w-full items-center justify-between rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              <Eyebrow>Edit transaction</Eyebrow>
+              {editOpen ? (
+                <CaretUp size={14} weight="light" aria-hidden />
+              ) : (
+                <CaretDown size={14} weight="light" aria-hidden />
+              )}
+            </button>
+            {editOpen && (
+              <>
+                {journal?.status === 'posted' && (
+                  <p className="mt-4 rounded-xl border bg-muted px-4 py-3 text-sm text-text-2">
+                    This transaction has a posted journal. Changing the ledger account reverses it
+                    and creates a corrected entry.
+                  </p>
+                )}
+                <EditForm
+                  txn={txn}
+                  chartOfAccounts={chartOfAccounts}
+                  onSave={handleSave}
+                  isSaving={isSaving}
                 />
-
-                {!journalCollapsed && (
-                  <div className="pt-2">
-                    {journal ? (
-                      <>
-                        <div className="flex flex-wrap items-center gap-2 mb-3">
-                          <JournalStatusBadge status={journal.status} />
-                          <span className="text-xs text-muted-foreground capitalize">
-                            {journal.journal_type.replace('_', ' ')} journal
-                          </span>
-                          <span className="text-xs text-muted-foreground">
-                            · {formatDate(journal.journal_date)}
-                          </span>
-                        </div>
-                        {journal.description && (
-                          <p className="text-sm text-foreground/80 mb-3">{journal.description}</p>
-                        )}
-                        {journal.line_items && journal.line_items.length > 0 ? (
-                          <LineItemsTable items={journal.line_items} />
-                        ) : (
-                          <p className="text-xs text-muted-foreground italic">
-                            No line items found.
-                          </p>
-                        )}
-                      </>
-                    ) : (
-                      <div className="flex items-center gap-2 py-4 text-sm text-muted-foreground">
-                        <Warning size={16} className="text-amber-400" />
-                        No journal entry exists for this transaction yet.
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
-
-              {/* ── Edit Section ── */}
-              <div className="mt-4 rounded-lg border border-white/10 overflow-hidden">
-                <button
-                  type="button"
-                  className="w-full flex items-center justify-between px-4 py-3 text-sm font-semibold text-foreground hover:bg-white/5 transition-colors"
-                  onClick={() => setEditOpen(v => !v)}
-                >
-                  <div className="flex items-center gap-2">
-                    <PencilSimple size={16} weight="duotone" className="text-primary" />
-                    Edit Transaction
-                  </div>
-                  {editOpen ? <CaretUp size={14} /> : <CaretDown size={14} />}
-                </button>
-
-                {editOpen && (
-                  <div className="px-4 pb-4 border-t border-white/10">
-                    {journal && journal.status === 'posted' && (
-                      <div className="flex items-start gap-2 my-3 p-3 rounded-lg bg-amber-500/10 border border-amber-500/20 text-xs text-amber-300">
-                        <Warning size={14} className="shrink-0 mt-0.5" />
-                        <span>
-                          This transaction has a posted journal. Changing the GL account will
-                          reverse it and create a corrected entry.
-                        </span>
-                      </div>
-                    )}
-                    <EditForm
-                      txn={txn}
-                      chartOfAccounts={chartOfAccounts}
-                      onSave={handleSave}
-                      isSaving={isSaving}
-                    />
-                  </div>
-                )}
-              </div>
-            </>
-          )}
-        </div>
-      </div>
-    </>
+              </>
+            )}
+          </div>
+        </>
+      )}
+    </Drawer>
   );
 }
