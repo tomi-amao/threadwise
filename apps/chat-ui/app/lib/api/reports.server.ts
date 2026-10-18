@@ -460,6 +460,95 @@ function classifyContraAccount(accountNumber: string, accountType: string): CfSe
   return 'operating';
 }
 
+// ─── Rows as the queries below select them ────────────────────────────
+
+type Num = number | string | null;
+
+interface TxnRow {
+  id: string;
+  amount: Num;
+  base_amount: Num;
+  direction: string | null;
+  transaction_type: string | null;
+  status: string | null;
+  occurred_at: string | null;
+  description: string | null;
+  excluded_reason: string | null;
+  bank_account_id: string | null;
+}
+
+interface OrderLineRow {
+  id: string;
+  order_id: string;
+  product_id: string | null;
+  product_name: string | null;
+  quantity: Num;
+  created_at: string | null;
+}
+
+interface MovementRow {
+  id: string;
+  inventory_item_id: string | null;
+  reference_id: string | null;
+  reference_table: string | null;
+  transaction_type: string;
+  quantity: Num;
+  unit_cost: Num;
+  movement_date: string | null;
+}
+
+interface JournalHeadRow {
+  id: string;
+  journal_date: string;
+  status: string;
+  source_type: string | null;
+  source_id: string | null;
+}
+
+interface JournalLineRow {
+  journal_id: string;
+  account_id: string;
+  debit: Num;
+  credit: Num;
+  currency: string | null;
+  gbp_equivalent: Num;
+}
+
+interface TaxPeriodRow {
+  status: string;
+  ledger_basis: boolean;
+  tax_due: Num;
+  label: string;
+  effective_rate: Num;
+  taxable_profit: Num;
+  payment_due: string;
+}
+
+/** A journal as the account drill-down selects it (more columns than the statements need). */
+interface DrilldownJournalRow extends JournalHeadRow {
+  journal_type: string | null;
+  description: string | null;
+  posted_at: string | null;
+  created_at: string | null;
+}
+
+interface DrilldownLineRow extends JournalLineRow {
+  id: string;
+  description: string | null;
+}
+
+/** A row from a lookup table (orders, payments, transactions) where only some columns are read. */
+type LookupRow = Record<string, string | null>;
+
+interface AccountRow {
+  id: string;
+  name: string;
+  account_type: string;
+  account_number: string | number;
+  normal_balance: string;
+  is_header: boolean;
+}
+
 // ─── Main Function ────────────────────────────────────────────────────
 
 export async function getReportsData(
@@ -474,7 +563,7 @@ export async function getReportsData(
   // period in memory. The cash insights below always look at a trailing window regardless of
   // which period the statement is showing, so both need the full set. Read in full (paged by id):
   // PostgREST caps a response at 1,000 rows whatever .limit() says.
-  const txnsQ = fetchAllRows<any>('financial transactions', (from, to) =>
+  const txnsQ = fetchAllRows<TxnRow>('financial transactions', (from, to) =>
     supabase
       .from('financial_transactions')
       .select(
@@ -486,7 +575,7 @@ export async function getReportsData(
 
   // Order line items for order-driven monthly grouping. (This used `.limit(50000)`, which the API
   // cuts to 1,000, so COGS was silently computed from the first 1,000 lines only.)
-  const orderLineItemsQ = fetchAllRows<any>('order line items', (from, to) =>
+  const orderLineItemsQ = fetchAllRows<OrderLineRow>('order line items', (from, to) =>
     supabase
       .from('order_line_items')
       .select('id, order_id, product_id, product_name, quantity, created_at')
@@ -500,7 +589,7 @@ export async function getReportsData(
   // RETURN carries a full-refund's stock coming back, at the same unit_cost as
   // the SALE it reverses, so netting SALE+RETURN per line naturally zeroes out
   // a refunded line's cost — no separate refund-handling logic needed here.
-  const inventoryMovementsQ = fetchAllRows<any>('inventory movements', (from, to) =>
+  const inventoryMovementsQ = fetchAllRows<MovementRow>('inventory movements', (from, to) =>
     supabase
       .from('inventory_movements')
       .select(
@@ -527,7 +616,7 @@ export async function getReportsData(
     ]);
 
   // Posted journals, all of them (paged by id: see above).
-  const allPostedJournals = await fetchAllRows<any>('journals', (from, to) =>
+  const allPostedJournals = await fetchAllRows<JournalHeadRow>('journals', (from, to) =>
     supabase
       .from('journals')
       .select('id, journal_date, status, source_type, source_id')
@@ -546,11 +635,11 @@ export async function getReportsData(
     .eq('status', 'draft')
     .eq('source_type', 'financial_transaction');
   const txnIdsWithDraftJournal = new Set(
-    (draftJournalRows || []).map((row: any) => String(row.source_id || '')).filter(Boolean)
+    (draftJournalRows || []).map(row => String(row.source_id || '')).filter(Boolean)
   );
 
   // Every journal line (paged by id: see above).
-  const allLineItems = await fetchAllRows<any>('journal lines', (from, to) =>
+  const allLineItems = await fetchAllRows<JournalLineRow>('journal lines', (from, to) =>
     supabase
       .from('journal_line_items')
       .select('journal_id, account_id, debit, credit, currency, gbp_equivalent')
@@ -558,11 +647,11 @@ export async function getReportsData(
       .range(from, to)
   );
   const orders = revenueData.orders;
-  const accounts = accountsRes.data || [];
+  const accounts = (accountsRes.data || []) as unknown as AccountRow[];
   const postedJournals = allPostedJournals;
   const allTxns = txnsRes.data || [];
   // The statement covers the selected period; the insights use allTxns.
-  const txns = allTxns.filter((txn: any) => {
+  const txns = allTxns.filter(txn => {
     const occurred = txn.occurred_at as string | null;
     if (!occurred) return false;
     if (from && occurred < dateGte(from)) return false;
@@ -573,25 +662,25 @@ export async function getReportsData(
   const inventoryMovements = inventoryMovementsRes.data || [];
 
   // Build lookup maps
-  const accountMap = new Map(accounts.map((a: any) => [a.id, a]));
-  const orderIds = new Set(orders.map((o: any) => o.id));
+  const accountMap = new Map(accounts.map(a => [a.id, a]));
+  const orderIds = new Set(orders.map(o => o.id));
 
-  const sortedInventoryMovements = [...inventoryMovements].sort((a: any, b: any) =>
-    String((a as any).movement_date || '').localeCompare(String((b as any).movement_date || ''))
+  const sortedInventoryMovements = [...inventoryMovements].sort((a, b) =>
+    String(a.movement_date || '').localeCompare(String(b.movement_date || ''))
   );
   const lastKnownUnitCostByInventoryItemId = new Map<string, number>();
   const saleSnapshotCogsByLineItemId = new Map<string, number>();
   let giftedStockCost = 0;
 
   for (const movement of sortedInventoryMovements) {
-    const inventoryItemId = (movement as any).inventory_item_id as string | null;
-    const rawUnitCost = Number((movement as any).unit_cost || 0);
+    const inventoryItemId = movement.inventory_item_id as string | null;
+    const rawUnitCost = Number(movement.unit_cost || 0);
     const knownUnitCost = inventoryItemId
       ? (lastKnownUnitCostByInventoryItemId.get(inventoryItemId) ?? 0)
       : 0;
     const effectiveUnitCost = rawUnitCost > 0 ? rawUnitCost : knownUnitCost;
-    const signedQuantity = Number((movement as any).quantity || 0);
-    const transactionType = (movement as any).transaction_type;
+    const signedQuantity = Number(movement.quantity || 0);
+    const transactionType = movement.transaction_type;
 
     if (inventoryItemId && rawUnitCost > 0) {
       lastKnownUnitCostByInventoryItemId.set(inventoryItemId, rawUnitCost);
@@ -607,9 +696,9 @@ export async function getReportsData(
     // so this and the accounting P&L agree by construction, not coincidence.
     if (
       (transactionType === 'SALE' || transactionType === 'RETURN') &&
-      (movement as any).reference_table === 'order_line_items'
+      movement.reference_table === 'order_line_items'
     ) {
-      const lineItemId = (movement as any).reference_id as string | null;
+      const lineItemId = movement.reference_id as string | null;
       if (lineItemId) {
         const contribution = -signedQuantity * effectiveUnitCost;
         saleSnapshotCogsByLineItemId.set(
@@ -619,10 +708,7 @@ export async function getReportsData(
       }
     }
 
-    if (
-      transactionType === 'GIFT' &&
-      isTimestampInRange((movement as any).movement_date, from, to)
-    ) {
+    if (transactionType === 'GIFT' && isTimestampInRange(movement.movement_date, from, to)) {
       giftedStockCost += Math.abs(signedQuantity) * effectiveUnitCost;
     }
   }
@@ -633,18 +719,18 @@ export async function getReportsData(
   // estimate — a line with no movement is uncosted, full stop, and shows as
   // such rather than as an invented number. Uncosted lines are tracked
   // separately by the accounting_health_checks sales_costed_* views.
-  function resolveLineItemCogs(lineItem: any): {
+  function resolveLineItemCogs(lineItem: OrderLineRow): {
     amount: number;
     source: 'sale_snapshot' | 'none';
   } {
-    const lineItemId = (lineItem as any).id as string | null;
+    const lineItemId = lineItem.id as string | null;
     if (lineItemId && saleSnapshotCogsByLineItemId.has(lineItemId)) {
       return { amount: saleSnapshotCogsByLineItemId.get(lineItemId) || 0, source: 'sale_snapshot' };
     }
     return { amount: 0, source: 'none' };
   }
 
-  function getLineItemCogs(lineItem: any): number {
+  function getLineItemCogs(lineItem: OrderLineRow): number {
     return resolveLineItemCogs(lineItem).amount;
   }
 
@@ -675,7 +761,7 @@ export async function getReportsData(
   // ── 8. Sold COGS and gifted inventory cost for Revenue Analysis ──
 
   // Filter order_line_items to orders in this period
-  const periodLineItems = orderLineItems.filter((li: any) => orderIds.has(li.order_id));
+  const periodLineItems = orderLineItems.filter(li => orderIds.has(li.order_id));
 
   let soldCogs = 0;
   for (const li of periodLineItems) {
@@ -691,18 +777,18 @@ export async function getReportsData(
   const orderCreatedAtById = new Map<string, string>();
   const orderNumberById = new Map<string, string>();
   for (const o of orders) {
-    if ((o as any).order_number) orderNumberById.set((o as any).id, String((o as any).order_number));
-    if (!(o as any).created_at) continue;
-    const month = ((o as any).created_at as string).substring(0, 7);
-    orderMonthById.set((o as any).id, month);
-    orderCreatedAtById.set((o as any).id, String((o as any).created_at));
+    if (o.order_number) orderNumberById.set(o.id, String(o.order_number));
+    if (!o.created_at) continue;
+    const month = (o.created_at as string).substring(0, 7);
+    orderMonthById.set(o.id, month);
+    orderCreatedAtById.set(o.id, String(o.created_at));
   }
 
   const monthCogsMap = new Map<string, number>();
   const cogsDetailsByMonth = new Map<string, MonthlyCogsDetails>();
   for (const li of periodLineItems) {
-    const lineItemId = (li as any).id as string | null;
-    const orderId = (li as any).order_id as string;
+    const lineItemId = li.id as string | null;
+    const orderId = li.order_id as string;
     const resolved = resolveLineItemCogs(li);
     const lineCogs = resolved.amount;
     const month = orderMonthById.get(orderId);
@@ -724,11 +810,11 @@ export async function getReportsData(
       month,
       orderId,
       orderNumber: orderNumberById.get(orderId) ?? null,
-      productName: ((li as any).product_name as string | null) || null,
+      productName: (li.product_name as string | null) || null,
       orderCreatedAt: orderCreatedAtById.get(orderId) || '',
       lineItemId,
-      productId: ((li as any).product_id as string | null) || null,
-      quantity: Number((li as any).quantity || 0),
+      productId: (li.product_id as string | null) || null,
+      quantity: Number(li.quantity || 0),
       resolvedCogs: lineCogs,
       source: 'sale_snapshot',
     });
@@ -765,20 +851,20 @@ export async function getReportsData(
   }
 
   for (const txn of txns) {
-    const dir = (txn as any).direction;
-    const type = (txn as any).transaction_type;
-    const occurred = (txn as any).occurred_at as string | null;
+    const dir = txn.direction;
+    const type = txn.transaction_type ?? '';
+    const occurred = txn.occurred_at as string | null;
     if (dir !== 'out' || !occurred) continue;
     const month = occurred.substring(0, 7);
-    const amount = Number((txn as any).base_amount || 0);
+    const amount = Number(txn.base_amount || 0);
     if (amount <= 0) continue;
-    const isExcluded = String((txn as any).status || '').toLowerCase() === 'excluded';
-    const isShipping = isShippingVendor((txn as any).description);
+    const isExcluded = String(txn.status || '').toLowerCase() === 'excluded';
+    const isShipping = isShippingVendor(txn.description);
     const detailLine: ExpenseDetailLine = {
       month,
-      transactionId: String((txn as any).id || ''),
+      transactionId: String(txn.id || ''),
       occurredAt: occurred,
-      description: ((txn as any).description as string | null) || null,
+      description: (txn.description as string | null) || null,
       transactionType: String(type || 'other'),
       amount,
       bucket: 'other_outbound',
@@ -910,46 +996,43 @@ export async function getReportsData(
   // P&L journals: within the date range
   const pnlJournalIds = new Set(
     postedJournals
-      .filter((j: any) => {
+      .filter(j => {
         const d = j.journal_date as string;
         if (from && d < dateGte(from)) return false;
         if (to && d > dateLte(to)) return false;
         return true;
       })
-      .map((j: any) => j.id)
+      .map(j => j.id)
   );
 
   // Balance sheet journals: ALL posted journals up to the 'to' date (cumulative from inception)
   // NOTE: 'from' is intentionally NOT applied — balance sheet is always cumulative from inception.
   // Only the end date matters: it shows the company's position "as of" that date.
   const bsJournalIds = new Set(
-    postedJournals
-      .filter((j: any) => !to || (j.journal_date as string) <= dateLte(to))
-      .map((j: any) => j.id)
+    postedJournals.filter(j => !to || (j.journal_date as string) <= dateLte(to)).map(j => j.id)
   );
 
   // ── Accounting P&L ──
 
   const pnlBalanceMap = new Map<string, { debit: number; credit: number }>();
   for (const li of allLineItems) {
-    if (!pnlJournalIds.has((li as any).journal_id)) continue;
+    if (!pnlJournalIds.has(li.journal_id)) continue;
     // For non-GBP entries: use gbp_equivalent if available, otherwise skip.
     // NULL currency is treated as GBP (legacy rows before currency column was added).
-    const liCurrency: string | null = (li as any).currency;
-    const gbpEquiv: number | null =
-      (li as any).gbp_equivalent != null ? Number((li as any).gbp_equivalent) : null;
+    const liCurrency: string | null = li.currency;
+    const gbpEquiv: number | null = li.gbp_equivalent != null ? Number(li.gbp_equivalent) : null;
     const isNonGbp = liCurrency && liCurrency.toUpperCase() !== 'GBP';
     if (isNonGbp && gbpEquiv == null) continue;
-    const acctId = (li as any).account_id;
+    const acctId = li.account_id;
     const existing = pnlBalanceMap.get(acctId) || { debit: 0, credit: 0 };
     if (isNonGbp && gbpEquiv != null) {
       // Use GBP equivalent, preserving the debit/credit direction
-      const isDebit = Number((li as any).debit || 0) > 0;
+      const isDebit = Number(li.debit || 0) > 0;
       existing.debit += isDebit ? gbpEquiv : 0;
       existing.credit += isDebit ? 0 : gbpEquiv;
     } else {
-      existing.debit += Number((li as any).debit || 0);
-      existing.credit += Number((li as any).credit || 0);
+      existing.debit += Number(li.debit || 0);
+      existing.credit += Number(li.credit || 0);
     }
     pnlBalanceMap.set(acctId, existing);
   }
@@ -1025,22 +1108,21 @@ export async function getReportsData(
 
   const bsBalanceMap = new Map<string, { debit: number; credit: number }>();
   for (const li of allLineItems) {
-    if (!bsJournalIds.has((li as any).journal_id)) continue;
+    if (!bsJournalIds.has(li.journal_id)) continue;
     // For non-GBP entries: use gbp_equivalent if available, otherwise skip.
-    const liCurrencyBs: string | null = (li as any).currency;
-    const gbpEquivBs: number | null =
-      (li as any).gbp_equivalent != null ? Number((li as any).gbp_equivalent) : null;
+    const liCurrencyBs: string | null = li.currency;
+    const gbpEquivBs: number | null = li.gbp_equivalent != null ? Number(li.gbp_equivalent) : null;
     const isNonGbpBs = liCurrencyBs && liCurrencyBs.toUpperCase() !== 'GBP';
     if (isNonGbpBs && gbpEquivBs == null) continue;
-    const acctId = (li as any).account_id;
+    const acctId = li.account_id;
     const existing = bsBalanceMap.get(acctId) || { debit: 0, credit: 0 };
     if (isNonGbpBs && gbpEquivBs != null) {
-      const isDebit = Number((li as any).debit || 0) > 0;
+      const isDebit = Number(li.debit || 0) > 0;
       existing.debit += isDebit ? gbpEquivBs : 0;
       existing.credit += isDebit ? 0 : gbpEquivBs;
     } else {
-      existing.debit += Number((li as any).debit || 0);
-      existing.credit += Number((li as any).credit || 0);
+      existing.debit += Number(li.debit || 0);
+      existing.credit += Number(li.credit || 0);
     }
     bsBalanceMap.set(acctId, existing);
   }
@@ -1144,24 +1226,24 @@ export async function getReportsData(
 
   // Must mirror getDerivedBankBalances' own filter exactly (status <> 'excluded',
   // active bank account) or the closing balance won't tie to the movement.
-  const cashTxns = txns.filter((txn: any) => {
+  const cashTxns = txns.filter(txn => {
     if (String(txn.status || '').toLowerCase() === 'excluded') return false;
     const bankAccountId = txn.bank_account_id;
-    return Boolean(bankAccountId) && perimeterAccountIds.has(bankAccountId);
+    return bankAccountId != null && perimeterAccountIds.has(bankAccountId);
   });
 
-  const postedJournalIds = new Set(postedJournals.map((journal: any) => journal.id));
+  const postedJournalIds = new Set(postedJournals.map(journal => journal.id));
   const journalIdByTxnId = new Map<string, string>();
   for (const journal of postedJournals) {
-    const sourceId = (journal as any).source_id;
-    if ((journal as any).source_type === 'financial_transaction' && sourceId) {
-      journalIdByTxnId.set(String(sourceId), String((journal as any).id));
+    const sourceId = journal.source_id;
+    if (journal.source_type === 'financial_transaction' && sourceId) {
+      journalIdByTxnId.set(String(sourceId), String(journal.id));
     }
   }
 
-  const cashFlowLinesByJournal = new Map<string, any[]>();
+  const cashFlowLinesByJournal = new Map<string, JournalLineRow[]>();
   for (const lineItem of allLineItems) {
-    const journalId = String((lineItem as any).journal_id || '');
+    const journalId = String(lineItem.journal_id || '');
     if (!postedJournalIds.has(journalId)) continue;
     const existing = cashFlowLinesByJournal.get(journalId);
     if (existing) existing.push(lineItem);
@@ -1181,10 +1263,10 @@ export async function getReportsData(
     | {
         kind: 'classified';
         signed: number;
-        shares: Array<{ section: CfSection; account: any; share: number }>;
+        shares: Array<{ section: CfSection; account: AccountRow; share: number }>;
       };
 
-  const classifyCashTxn = (txn: any): CashTxnClassification | null => {
+  const classifyCashTxn = (txn: TxnRow): CashTxnClassification | null => {
     const amount = Number(txn.base_amount || txn.amount || 0);
     const signed = txn.direction === 'in' ? amount : -amount;
     if (Math.round(signed * 100) === 0) return null;
@@ -1209,15 +1291,13 @@ export async function getReportsData(
     // The contra side is everything that isn't cash. Weighting by its absolute
     // value lets a mixed journal (say a payout that also books a fee) split
     // across sections in proportion to what it actually paid for.
-    const contra: Array<{ account: any; weight: number }> = [];
+    const contra: Array<{ account: AccountRow; weight: number }> = [];
     let contraWeightTotal = 0;
     for (const lineItem of lines) {
-      const account = accountMap.get(String((lineItem as any).account_id));
+      const account = accountMap.get(String(lineItem.account_id));
       if (!account) continue;
       if (CASH_ACCOUNT_NUMBERS.has(String(account.account_number))) continue;
-      const weight = Math.abs(
-        Number((lineItem as any).debit || 0) - Number((lineItem as any).credit || 0)
-      );
+      const weight = Math.abs(Number(lineItem.debit || 0) - Number(lineItem.credit || 0));
       if (weight === 0) continue;
       contra.push({ account, weight });
       contraWeightTotal += weight;
@@ -1387,10 +1467,10 @@ export async function getReportsData(
   // is showing. Same classification as the statement, so a month here is the
   // same arithmetic as that month there.
 
-  const insightCashTxns = allTxns.filter((txn: any) => {
+  const insightCashTxns = allTxns.filter(txn => {
     if (String(txn.status || '').toLowerCase() === 'excluded') return false;
     const bankAccountId = txn.bank_account_id;
-    return Boolean(bankAccountId) && perimeterAccountIds.has(bankAccountId);
+    return bankAccountId != null && perimeterAccountIds.has(bankAccountId);
   });
 
   const now = new Date();
@@ -1402,7 +1482,7 @@ export async function getReportsData(
   let directorCumulative = 0;
 
   for (const txn of insightCashTxns) {
-    const occurred = (txn as any).occurred_at as string | null;
+    const occurred = txn.occurred_at as string | null;
     if (!occurred) continue;
     const monthKey = occurred.slice(0, 7);
 
@@ -1525,8 +1605,8 @@ export async function getReportsData(
       const { data: taxRows } = await supabase.rpc('compute_corporation_tax', {
         p_entity_id: entityRow.id,
       });
-      const openPeriod = (taxRows || []).find(
-        (row: any) => row.status === 'open' && row.ledger_basis
+      const openPeriod = ((taxRows || []) as TaxPeriodRow[]).find(
+        row => row.status === 'open' && row.ledger_basis
       );
       if (openPeriod?.tax_due != null) {
         taxReserve = round2(Number(openPeriod.tax_due));
@@ -1547,7 +1627,7 @@ export async function getReportsData(
     .eq('invoice_type', 'PURCHASE')
     .not('status', 'in', '("PAID","CANCELLED","VOID","DRAFT")');
   for (const bill of openBills || []) {
-    unpaidBills += Number((bill as any).gross_amount || 0);
+    unpaidBills += Number(bill.gross_amount || 0);
   }
   unpaidBills = round2(unpaidBills);
 
@@ -1647,41 +1727,44 @@ export async function getAccountDrilldown({
   }
 
   // Paged by id: an unordered range() can repeat or skip rows between pages.
-  const relevantJournals = await fetchAllRows<any>('journals', (rangeFrom, rangeTo) => {
-    let query = supabase
-      .from('journals')
-      .select(
-        'id, journal_date, journal_type, description, source_type, source_id, status, posted_at, created_at'
-      )
-      .eq('status', 'posted');
-    if (statement === 'pnl') {
-      if (from) query = query.gte('journal_date', dateGte(from));
-      if (to) query = query.lte('journal_date', dateLte(to));
-    } else if (to) {
-      query = query.lte('journal_date', dateLte(to));
+  const relevantJournals = await fetchAllRows<DrilldownJournalRow>(
+    'journals',
+    (rangeFrom, rangeTo) => {
+      let query = supabase
+        .from('journals')
+        .select(
+          'id, journal_date, journal_type, description, source_type, source_id, status, posted_at, created_at'
+        )
+        .eq('status', 'posted');
+      if (statement === 'pnl') {
+        if (from) query = query.gte('journal_date', dateGte(from));
+        if (to) query = query.lte('journal_date', dateLte(to));
+      } else if (to) {
+        query = query.lte('journal_date', dateLte(to));
+      }
+      return query.order('id').range(rangeFrom, rangeTo);
     }
-    return query.order('id').range(rangeFrom, rangeTo);
-  });
-
-  const journalMap = new Map(relevantJournals.map((journal: any) => [journal.id, journal]));
-
-  const selectedAccountLines = await fetchAllRows<any>('account lines', (rangeFrom, rangeTo) =>
-    supabase
-      .from('journal_line_items')
-      .select('id, journal_id, account_id, debit, credit, currency, gbp_equivalent, description')
-      .eq('account_id', accountId)
-      .order('id')
-      .range(rangeFrom, rangeTo)
   );
 
-  const relevantAccountLines = selectedAccountLines.filter((line: any) =>
-    journalMap.has((line as any).journal_id)
+  const journalMap = new Map(relevantJournals.map(journal => [journal.id, journal]));
+
+  const selectedAccountLines = await fetchAllRows<DrilldownLineRow>(
+    'account lines',
+    (rangeFrom, rangeTo) =>
+      supabase
+        .from('journal_line_items')
+        .select('id, journal_id, account_id, debit, credit, currency, gbp_equivalent, description')
+        .eq('account_id', accountId)
+        .order('id')
+        .range(rangeFrom, rangeTo)
   );
 
-  const accountCode = Number((account as any).account_number || 0);
-  const accountName = String((account as any).name || 'Unknown Account');
-  const normalBalance = String((account as any).normal_balance || 'debit');
-  const accountType = String((account as any).account_type || 'other');
+  const relevantAccountLines = selectedAccountLines.filter(line => journalMap.has(line.journal_id));
+
+  const accountCode = Number(account.account_number || 0);
+  const accountName = String(account.name || 'Unknown Account');
+  const normalBalance = String(account.normal_balance || 'debit');
+  const accountType = String(account.account_type || 'other');
 
   const rangeLabel =
     statement === 'balance'
@@ -1712,7 +1795,7 @@ export async function getAccountDrilldown({
   }
 
   const relatedJournalIds = Array.from(
-    new Set(relevantAccountLines.map((line: any) => String((line as any).journal_id)))
+    new Set(relevantAccountLines.map(line => String(line.journal_id)))
   );
 
   const { data: accounts, error: accountsError } = await supabase
@@ -1725,8 +1808,8 @@ export async function getAccountDrilldown({
     throw new Error(`Failed to load chart of accounts: ${accountsError.message}`);
   }
 
-  const detailAccountMap = new Map((accounts || []).map((entry: any) => [entry.id, entry]));
-  const relatedJournalLines: any[] = [];
+  const detailAccountMap = new Map((accounts || []).map(entry => [entry.id, entry]));
+  const relatedJournalLines: DrilldownLineRow[] = [];
 
   for (const batch of chunkArray(relatedJournalIds, 100)) {
     const { data: batchLines, error: batchError } = await supabase
@@ -1749,8 +1832,8 @@ export async function getAccountDrilldown({
 
   for (const journalId of relatedJournalIds) {
     const journal = journalMap.get(journalId);
-    const sourceType = (journal as any)?.source_type as string | null | undefined;
-    const sourceId = (journal as any)?.source_id ? String((journal as any).source_id) : null;
+    const sourceType = journal?.source_type;
+    const sourceId = journal?.source_id ? String(journal.source_id) : null;
 
     if (!sourceType || !sourceId) continue;
     if (sourceType === 'order') sourceIdsByType.order.add(sourceId);
@@ -1761,15 +1844,15 @@ export async function getAccountDrilldown({
   }
 
   async function fetchLookupRows(table: string, select: string, ids: string[]) {
-    if (ids.length === 0) return [] as any[];
+    if (ids.length === 0) return [] as LookupRow[];
 
-    const rows: any[] = [];
+    const rows: LookupRow[] = [];
     for (const batch of chunkArray(ids, 200)) {
       const { data, error } = await supabase.from(table).select(select).in('id', batch);
       if (error) {
         throw new Error(`Failed to load ${table} lookup data: ${error.message}`);
       }
-      rows.push(...(data || []));
+      rows.push(...((data || []) as unknown as LookupRow[]));
     }
 
     return rows;
@@ -1793,29 +1876,28 @@ export async function getAccountDrilldown({
     ),
   ]);
 
-  const orderMap = new Map(orders.map((row: any) => [row.id, row]));
-  const paymentMap = new Map(payments.map((row: any) => [row.id, row]));
-  const financialTransactionMap = new Map(financialTransactions.map((row: any) => [row.id, row]));
+  const orderMap = new Map(orders.map(row => [row.id, row]));
+  const paymentMap = new Map(payments.map(row => [row.id, row]));
+  const financialTransactionMap = new Map(financialTransactions.map(row => [row.id, row]));
 
   const linesByJournalId = new Map<string, AccountDrilldownLine[]>();
   for (const line of relatedJournalLines) {
-    const detailAccount = detailAccountMap.get((line as any).account_id);
-    const normalized = getStatementLineAmounts(line as any);
+    const detailAccount = detailAccountMap.get(line.account_id);
+    const normalized = getStatementLineAmounts(line);
 
     const detailLine: AccountDrilldownLine = {
-      id: String((line as any).id),
-      accountId: String((line as any).account_id),
+      id: String(line.id),
+      accountId: String(line.account_id),
       accountName: detailAccount?.name || 'Unknown Account',
       accountCode: Number(detailAccount?.account_number || 0),
       debit: normalized.debit,
       credit: normalized.credit,
-      currency: ((line as any).currency as string | null) ?? null,
-      gbpEquivalent:
-        (line as any).gbp_equivalent != null ? Number((line as any).gbp_equivalent) : null,
-      description: ((line as any).description as string | null) ?? null,
+      currency: (line.currency as string | null) ?? null,
+      gbpEquivalent: line.gbp_equivalent != null ? Number(line.gbp_equivalent) : null,
+      description: (line.description as string | null) ?? null,
     };
 
-    const journalId = String((line as any).journal_id);
+    const journalId = String(line.journal_id);
     const existing = linesByJournalId.get(journalId) || [];
     existing.push(detailLine);
     linesByJournalId.set(journalId, existing);
@@ -1825,16 +1907,16 @@ export async function getAccountDrilldown({
     lines.sort((left, right) => left.accountCode - right.accountCode);
   }
 
-  const selectedLinesByJournalId = new Map<string, any[]>();
+  const selectedLinesByJournalId = new Map<string, DrilldownLineRow[]>();
   for (const line of relevantAccountLines) {
-    const journalId = String((line as any).journal_id);
+    const journalId = String(line.journal_id);
     const existing = selectedLinesByJournalId.get(journalId) || [];
     existing.push(line);
     selectedLinesByJournalId.set(journalId, existing);
   }
 
   function getSourceSummary(
-    journal: any
+    journal: DrilldownJournalRow | undefined
   ): Pick<
     AccountDrilldownEntry,
     | 'sourceKind'
@@ -1935,12 +2017,12 @@ export async function getAccountDrilldown({
     let lineDescription: string | null = null;
 
     for (const line of selectedLines) {
-      const normalized = getStatementLineAmounts(line as any);
+      const normalized = getStatementLineAmounts(line);
       if (normalized.skipped) continue;
       debit += normalized.debit;
       credit += normalized.credit;
-      if (!lineDescription && (line as any).description) {
-        lineDescription = String((line as any).description);
+      if (!lineDescription && line.description) {
+        lineDescription = String(line.description);
       }
     }
 
@@ -1949,12 +2031,12 @@ export async function getAccountDrilldown({
 
     const entry: AccountDrilldownEntry = {
       journalId,
-      journalDate: String((journal as any).journal_date),
-      journalType: String((journal as any).journal_type || 'journal'),
-      journalDescription: ((journal as any).description as string | null) ?? null,
-      postedAt: ((journal as any).posted_at as string | null) ?? null,
-      createdAt: ((journal as any).created_at as string | null) ?? null,
-      sourceType: ((journal as any).source_type as string | null) ?? null,
+      journalDate: String(journal.journal_date),
+      journalType: String(journal.journal_type || 'journal'),
+      journalDescription: (journal.description as string | null) ?? null,
+      postedAt: (journal.posted_at as string | null) ?? null,
+      createdAt: (journal.created_at as string | null) ?? null,
+      sourceType: (journal.source_type as string | null) ?? null,
       amount,
       debit,
       credit,

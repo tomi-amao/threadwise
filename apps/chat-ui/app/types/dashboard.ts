@@ -116,30 +116,3 @@ export interface DashboardData {
   customerStats: CustomerStats;
   lastUpdated: string;
 }
-
-// ─── Legacy types for reports page compatibility ──────────────────────
-
-export interface HealthIndicator {
-  name: string;
-  status: 'healthy' | 'warning' | 'critical';
-  value: number;
-  target: number;
-  unit: string;
-  description: string;
-}
-
-export interface AccountBalance {
-  code: number;
-  name: string;
-  type: 'asset' | 'liability' | 'equity' | 'revenue' | 'expense';
-  balance: number;
-}
-
-export interface MonthlyFinancials {
-  month: string;
-  revenue: number;
-  cogs: number;
-  gross_profit: number;
-  operating_expenses: number;
-  net_income: number;
-}

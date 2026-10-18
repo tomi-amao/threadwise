@@ -205,40 +205,6 @@
 }
 
 @layer utilities {
-  .shadow-inner-right {
-    box-shadow: inset -9px 0 6px -1px rgb(0 0 0 / 0.02);
-  }
-
-  .shadow-inner-left {
-    box-shadow: inset 9px 0 6px -1px rgb(0 0 0 / 0.02);
-  }
-
-  .gradient-bg {
-    background: linear-gradient(
-      135deg,
-      color-mix(in srgb, var(--primary) 10%, transparent) 0%,
-      transparent 50%
-    );
-  }
-
-  .glass-effect {
-    backdrop-filter: blur(12px);
-    background: color-mix(in srgb, var(--background) 80%, transparent);
-    border: 1px solid color-mix(in srgb, var(--border) 50%, transparent);
-  }
-
-  .gradient-text {
-    background: linear-gradient(
-      135deg,
-      var(--accent-text) 0%,
-      var(--accent-text) 60%,
-      var(--foreground) 100%
-    );
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    background-clip: text;
-  }
-
   /* Mono eyebrow label used above every section. */
   .eyebrow {
     font-family: var(--font-mono);
@@ -289,19 +255,6 @@
   .rise {
     animation: rise 0.6s ease-out both;
   }
-
-  /* Onboarding slide animations */
-  .animate-slide-in {
-    animation: slideIn 0.3s ease-out forwards;
-  }
-
-  .animate-slide-out-left {
-    animation: slideOutLeft 0.3s ease-in forwards;
-  }
-
-  .animate-slide-out-right {
-    animation: slideOutRight 0.3s ease-in forwards;
-  }
 }
 
 @keyframes stampIn {
@@ -323,39 +276,6 @@
   to {
     opacity: 1;
     transform: translateY(0);
-  }
-}
-
-@keyframes slideIn {
-  from {
-    opacity: 0;
-    transform: translateX(20px);
-  }
-  to {
-    opacity: 1;
-    transform: translateX(0);
-  }
-}
-
-@keyframes slideOutLeft {
-  from {
-    opacity: 1;
-    transform: translateX(0);
-  }
-  to {
-    opacity: 0;
-    transform: translateX(-20px);
-  }
-}
-
-@keyframes slideOutRight {
-  from {
-    opacity: 1;
-    transform: translateX(0);
-  }
-  to {
-    opacity: 0;
-    transform: translateX(20px);
   }
 }
 

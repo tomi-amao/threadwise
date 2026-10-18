@@ -27,22 +27,30 @@ The seed refuses to run twice; that is what `db:fresh` is for.
 
 ## Layout
 
-| Path            | Purpose                                                                               |
-| --------------- | ------------------------------------------------------------------------------------- |
-| `env.ts`        | Loads `.env.test`; the local-only safety guard                                        |
-| `seed/seed.ts`  | Deterministic seed (random seed fixed; dates are relative to the run)                 |
-| `write-env.ts`  | Builds `.env.test` from the running local stack                                       |
-| `auth.setup.ts` | Signs in once through the UI and saves the session                                    |
-| `fixtures.ts`   | `test` with the no-hosted-traffic guard, `expectNoHorizontalOverflow`, `readManifest` |
-| `*.spec.ts`     | Tests, run at desktop (1280), tablet (768) and mobile (390)                           |
+| Path                        | Purpose                                                                                                                                               |
+| --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `env.ts`                    | Loads `.env.test`; the local-only safety guard                                                                                                        |
+| `seed/seed.ts`, `ledger.ts` | Deterministic seed: a business with orders, payments, bank lines, invoices, a ledger, collections, and a rival business. Writes `.seed-manifest.json` |
+| `write-env.ts`              | Builds `.env.test` from the running local stack                                                                                                       |
+| `auth.setup.ts`             | Signs in once through the UI and saves the session                                                                                                    |
+| `fixtures.ts`               | `test` with the no-hosted-traffic guard, `expectNoHorizontalOverflow`, `readManifest`                                                                 |
+| `helpers/db.ts`             | Service-role reads, snapshots and restores for tests that change data                                                                                 |
+| `stand-in-agent.ts`         | Answers the server-side calls to the AI agent (invoices, stock, journals)                                                                             |
+| `*.spec.ts`                 | Read-only tests, run at desktop (1280), tablet (768) and mobile (390), in light and dark                                                              |
+| `*-edit.spec.ts`            | Tests that change data: run last, in the `mutations` project, and restore what they changed                                                           |
 
 ## Writing a page's tests
 
 Import `test` and `expect` from `./fixtures`, not `@playwright/test`. Assert on counts and
-structure from `readManifest()`, not on dates or exact money (server code uses the real
-clock). Theme projects (light and dark) are added with the Phase 0 theme switch.
+structure from `readManifest()`, not on dates or exact money (server code uses the real clock).
+Every page spec also runs axe and `expectNoHorizontalOverflow`, with each drawer open too.
 
-## Known issues the tests document
-
-`test.fixme` marks real defects found while writing tests. Currently: the dashboard header
-shows "Your Business" because loaders can't see the browser's `localStorage` session.
+- Pages that fade content in are checked at rest: `page.emulateMedia({ reducedMotion: 'reduce' })`,
+  and for dialogs wait for `document.getAnimations()` to finish, or axe reads blended colours.
+- While a drawer is open the page behind it is hidden from assistive technology, so wait for the
+  dialog rather than the page heading.
+- A mutation test restores what it changed (see `helpers/db.ts`) and must never remove a seeded
+  row or change the seeded user's password (that signs every session out; use a throwaway user).
+- The browser's own calls to the agent (Integrations) are mocked in the spec with `page.route`,
+  limited to the agent's address (the app's own modules also live under `/integrations/`).
+- `pnpm db:fresh` after changing the seed; it refuses to run twice otherwise.

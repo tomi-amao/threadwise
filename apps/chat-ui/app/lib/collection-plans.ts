@@ -50,8 +50,6 @@ export const COLLABORATION_TYPES = [
   { value: 'pop_up', label: 'Pop-up / retail takeover' },
 ] as const;
 
-export type CollaborationType = (typeof COLLABORATION_TYPES)[number]['value'];
-
 export function collaborationTypeLabel(value: string): string {
   return COLLABORATION_TYPES.find(type => type.value === value)?.label ?? value;
 }
@@ -384,13 +382,6 @@ export interface CollectionPlanProjections {
   // still counted in every total above (unlike pending costs), but a
   // reader should know some of what's in those totals isn't locked in.
   costsEstimatedCount: number;
-}
-
-export interface CollectionPlanWithProjections {
-  plan: CollectionPlanRecord;
-  lines: CollectionPlanLine[];
-  costs: CollectionPlanCost[];
-  projections: CollectionPlanProjections;
 }
 
 // ─── Projection math ────────────────────────────────────────────────────────

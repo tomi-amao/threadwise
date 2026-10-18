@@ -19,21 +19,21 @@ The principles that make it feel distinctive:
 
 The palette is cream, plum and amber. Neutrals are tinted purple rather than grey, which is what gives the page its warmth.
 
-| Role                    | Light theme | Dark theme | Used for                               |
-| ----------------------- | ----------- | ---------- | -------------------------------------- |
-| Page background         | #FBF6F1     | #0E0E0F    | Body and most sections                 |
-| Secondary background    | #FBF4EE     | #141416    | Alternating bands                      |
-| Surface / card          | #FFFFFF     | #191A1C    | Cards, search box, mock panels         |
-| Text primary            | #241B2C     | #F2F2F3    | Headlines, body, nav active            |
-| Text secondary          | #5E5360     | #B4B4B9    | Nav links, supporting paragraphs       |
-| Text muted              | #8C7F88     | #7C7C82    | Eyebrows, captions, footnotes          |
-| Accent (text)           | #A16215     | #F59520    | Headline highlight, links, version tag |
-| Accent fill             | #F59520     | #F59520    | Primary button (hover #F7A94D)         |
-| Accent tint             | #F595201F   | #F5952029  | Soft badges, highlights                |
-| Secondary accent (plum) | #A98FC4     | #A98FC4    | Illustrations, decorative shapes       |
-| Border default          | #58436C1F   | #FFFFFF12  | Card and section hairlines             |
-| Border strong           | #58436C38   | #FFFFFF26  | Hover and emphasis                     |
-| Button outline          | #241B2C26   | n/a        | Secondary pill buttons                 |
+| Role                    | Light theme | Dark theme | Used for                                                        |
+| ----------------------- | ----------- | ---------- | --------------------------------------------------------------- |
+| Page background         | #FFFFFF     | #0E0E0F    | Body and most sections (as built: white, with cream cards)      |
+| Secondary background    | #FCF8F4     | #141416    | Cards, panels, sidebar (as built)                               |
+| Surface / card          | #FCF8F4     | #191A1C    | Cards, search box, mock panels (as built)                       |
+| Text primary            | #241B2C     | #F2F2F3    | Headlines, body, nav active                                     |
+| Text secondary          | #5E5360     | #B4B4B9    | Nav links, supporting paragraphs                                |
+| Text muted              | #756872     | #8E8E94    | Eyebrows, captions, footnotes (darkened for contrast)           |
+| Accent (text)           | #96590F     | #F59520    | Headline highlight, links, active chips (darkened for contrast) |
+| Accent fill             | #F59520     | #F59520    | Primary button (hover #F7A94D)                                  |
+| Accent tint             | #F595201F   | #F5952029  | Soft badges, highlights                                         |
+| Secondary accent (plum) | #A98FC4     | #A98FC4    | Illustrations, decorative shapes                                |
+| Border default          | #58436C1F   | #FFFFFF12  | Card and section hairlines                                      |
+| Border strong           | #58436C38   | #FFFFFF26  | Hover and emphasis                                              |
+| Button outline          | #241B2C26   | n/a        | Secondary pill buttons                                          |
 
 Amber also has a five-step tint ramp for data and charts: #F59520, #F5B465, #F4C690, #F4D3ad, #F4DCC2. The hero has a soft peach radial glow behind the headline and a faint lilac wash at the left edge, which keeps the cream background from feeling flat.
 
@@ -81,7 +81,7 @@ The layout is generous and calm: wide containers, big vertical gaps, and a centr
 | Numbered column      | Mono "01 / 02 / 03", serif title with a full stop ("Agents guess."), grey explanatory paragraph                                                                                                                                                               |
 | Feature card         | White or transparent card, 14px radius, 1px plum hairline, mini-UI illustration on top, serif H3, one-line description, "See ..." link                                                                                                                        |
 | Mock UI panels       | Small white panels with mono headers (docs, pull request, code health), tiny status chips (stale, updating, fresh), a code snippet with line numbers, and a score such as 7.4 / 10                                                                            |
-| Agent prompt list    | Rows prefixed with a "›" prompt in mono, followed by a muted "calls tool\_name" line                                                                                                                                                                          |
+| Agent prompt list    | Rows prefixed with a "›" prompt in mono, followed by a muted "calls tool_name" line                                                                                                                                                                           |
 | Code / command block | Mono text on a white or inset surface with a $ prompt, used in the 3-step How it works section                                                                                                                                                                |
 | FAQ                  | Question rows with expand chevrons, hairline dividers, no card backgrounds                                                                                                                                                                                    |
 | Final CTA            | Repeats the hero input pattern with a short serif headline, "Index a repo free."                                                                                                                                                                              |
@@ -177,3 +177,87 @@ section {
 ```
 
 Recipe: cream page, serif light headline with the last phrase in amber-brown, mono eyebrow above every section, hairline-bordered white cards, one amber button per view, and numbers with sources. Fraunces, Geist and Geist Mono are all free on Google Fonts. Do not copy the logo, owl mark, illustrations or wording; reuse only the system.
+
+## As built: decisions made during the redesign
+
+The sections above describe the reference site. This section records where the app deliberately
+differs, and the rules the pages follow. Tokens live in `apps/chat-ui/app/globals.css` and are the
+source of truth; components use tokens only, never raw colours, so a theme can never be missed.
+
+### Colour
+
+- **White page, cream cards.** The page is `#FFFFFF`; cards, panels and the sidebar are `#FCF8F4`;
+  table rows sit on the page, in `--row` (`#FDFAF6`), so a table reads as lines on paper rather
+  than a second card. A row the colour of the page vanishes into it, which is why `--row` exists.
+- **Contrast is a gate, not a preference.** Every page test runs axe at three widths in both
+  themes. Three values moved from the reference to pass WCAG AA (4.5:1) for small text: muted text
+  (`#756872`; the reference's `#8C7F88` is 3.5:1 on cream), accent text (`#96590F`; `#A16215` is
+  4.24:1 on the active-chip tint), and the dark theme's muted text.
+- **One job per colour.** Amber is for actions and active state only. Money in uses plum
+  (`--income`, a deep plum for text, a light one in dark mode). Problems use brick
+  (`--destructive`), never amber. Translucent tints are laid over a solid card colour (a gradient
+  of the tint on `bg-card`), because a translucent chip picks up the hovered row's own tint and
+  can fall below 4.5:1.
+- **Dark is a peer, not a skin.** Every token has both values. Amber ramp steps darken toward
+  brown in dark mode so charts keep their order.
+
+### Headers
+
+- **Compact header** (eyebrow, modest serif title, inline actions) on every dense tool page, so
+  the table or panels start near the top.
+- **Hero** only where one sentence is the point: the Collections index, the Reports page, the
+  landing page. The Dashboard began with a hero and was reworked, because it is a tool you glance
+  at.
+- Part of the title in `<em>` takes the accent text colour. Never a gradient on text.
+
+### The kit (`app/components/ui`)
+
+Panel, KpiTile, Stat and StatStrip, DataTable (`surface="page"` for rows on the page, with an
+amber-tinted header band), Statement (label left, amount right, brackets for deductions, a double
+rule under a total), Tabs, Segmented, Chip, JumpTo, Pager, Term, Field, NativeSelect,
+SearchableSelect, PasswordInput, SplitMenu, Drawer, Dialog, EmptyState, Meter, Sparkline,
+DateRangePicker, ThemeToggle. `/ui-kit` (development and tests only) shows each of them. Build a
+page from these before inventing a component; if one is missing, add it to the kit.
+
+### Patterns every page follows
+
+- **State in the URL.** Tab, filters, search, page, sort and the open drawer are search params, so
+  a view can be shared, survives a refresh, and the back button means something.
+- **Drawers for detail and edits; dialogs only to confirm.** Nothing destructive happens without a
+  dialog that says what will happen. No `window.confirm`.
+- **Every figure explains itself.** Accounting words are wrapped in `Term` (a definition one hover
+  or focus away, real text in the page, Escape dismisses it). Every total can be opened down to
+  the entries behind it.
+- **Honest empty, loading and error states.** An empty list says what to do next. A projection is
+  labelled as one wherever it appears. A failed load shows an error, never zeros that look like
+  results.
+- **Read as the user.** Pages read through the signed-in user's session so row-level security
+  decides what they see; see `CLAUDE.md`.
+
+### Accessibility rules that came out of testing
+
+- A control's accessible name must contain its visible text (axe `label-content-name-mismatch`),
+  so a button that opens "Online sales" is named "Online sales, view journals", not "View entries".
+- A screen-reader-only table header is positioned against its table's scroll box, not the page,
+  or it widens the page on a phone when the table scrolls sideways.
+- Hidden tooltips are `display: none`, not just transparent: an invisible popup near the right
+  edge still makes a phone scroll sideways.
+- Entrance animations fade text in, and axe reads the blended colour. Tests check at rest (reduced
+  motion, and wait for animations to finish). `prefers-reduced-motion` turns animation off.
+- Radix hides the page from assistive technology while a drawer is open, so tests wait for the
+  dialog, not the page heading, in that state.
+
+### Motion
+
+Subtle and functional: a short fade or rise on entrance, a stamp on a posted entry, a bar filling.
+Hover raises the border to the strong colour. Nothing loops except a spinner.
+
+### Landing page
+
+The reference site is a developer tool; this one is books for people who make things, so the page
+is laid out like the account book it is about: ruled paper, an amber margin line, a double rule
+under every total. Its centrepiece is a sale you can follow from the order to the profit figure,
+and it ends in three small instruments built on the real engine (the collection planner, UK
+corporation tax, the VAT threshold) so a visitor can test the claims by hand. Copy follows the
+reference's rules: plain, specific, and honest about limits ("what it does not do"). Figures are
+labelled as sample; there are no logos, testimonials or invented statistics.
