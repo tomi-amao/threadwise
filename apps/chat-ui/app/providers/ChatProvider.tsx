@@ -10,6 +10,8 @@ import {
 } from '@langchain/langgraph-sdk/react-ui';
 import { useNavigate, useSearchParams } from 'react-router';
 import { v4 as uuidv4 } from 'uuid';
+import { agentFetch } from '~/lib/api/agent-auth';
+import { getSupabaseBrowserClient } from '~/lib/supabase-browser';
 import type { Base64ContentBlock } from '~/lib/multimodal-utils';
 
 /**
@@ -118,6 +120,22 @@ async function updateThreadMetadata(
   }
 }
 
+/** The LangGraph client, created once. The agent only answers a signed-in user. */
+function ensureLangGraphClient(): Client {
+  if (!langGraphClient) {
+    langGraphClient = new Client({
+      apiUrl: API_URL,
+      onRequest: async (_url, init) => {
+        const { data } = await getSupabaseBrowserClient().auth.getSession();
+        const headers = new Headers(init.headers);
+        if (data.session) headers.set('Authorization', `Bearer ${data.session.access_token}`);
+        return { ...init, headers };
+      },
+    });
+  }
+  return langGraphClient;
+}
+
 interface ChatProviderProps {
   children: React.ReactNode;
 }
@@ -129,11 +147,7 @@ export function ChatProvider({ children }: ChatProviderProps) {
 
   // Initialize LangGraph client once
   useEffect(() => {
-    if (!langGraphClient) {
-      langGraphClient = new Client({
-        apiUrl: API_URL,
-      });
-    }
+    ensureLangGraphClient();
   }, []);
 
   // Threads state
@@ -158,7 +172,7 @@ export function ChatProvider({ children }: ChatProviderProps) {
   useEffect(() => {
     async function fetchDataSources() {
       try {
-        const response = await fetch(`${AI_AGENT_API_URL}/chat/data-sources`);
+        const response = await agentFetch(`${AI_AGENT_API_URL}/chat/data-sources`);
         if (response.ok) {
           const data = await response.json();
           if (data.data_sources && data.data_sources.length > 0) {
@@ -204,6 +218,7 @@ export function ChatProvider({ children }: ChatProviderProps) {
     }
   >({
     apiUrl: API_URL,
+    client: ensureLangGraphClient(),
     assistantId: ASSISTANT_ID,
     messagesKey: 'messages',
     threadId: threadIdFromUrl,
