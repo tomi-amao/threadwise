@@ -1,6 +1,6 @@
 """Agents module for ThreadWise AI Agent.
 
-Contains LangGraph agents, middleware, prompts, and graph configurations.
+Contains LangGraph agents, prompts, and graph configurations.
 """
 
 from .prompts import (
@@ -15,13 +15,6 @@ from .prompts import (
     invoice_extraction_prompt,
     check_financial_prompt,
     validate_financial_prompt_against_database,
-)
-from .middleware import (
-    classify_query,
-    route_and_configure,
-    QueryState,
-    QueryTypeClassification,
-    FinancialQueryValidation,
 )
 
 # Import agent graphs (lazy to avoid circular imports)
@@ -40,10 +33,4 @@ __all__ = [
     "invoice_extraction_prompt",
     "check_financial_prompt",
     "validate_financial_prompt_against_database",
-    # Middleware
-    "classify_query",
-    "route_and_configure",
-    "QueryState",
-    "QueryTypeClassification",
-    "FinancialQueryValidation",
 ]
