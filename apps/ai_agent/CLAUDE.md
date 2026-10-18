@@ -21,6 +21,10 @@ This service does three distinct jobs:
 3. **Accounting engine** — turns normalized payments/transactions/invoices into
    double-entry journals against a chart of accounts.
 
+Longer explanations for people are in `docs/` (start at `docs/README.md`): architecture,
+security, chat agent, data pipeline, accounting, the route list, development. Update the matching
+page when you change one of those areas.
+
 ## Commands
 
 All commands run from `apps/ai_agent/` (Poetry is _not_ usable from the repo root).
@@ -194,7 +198,10 @@ is Inngest-orchestrated, under `integrations/inngest/`:
   logic belongs in the Inngest functions, not here.
 - Per-provider normalizers (`normalization/<provider>_normalizer.py`) all implement
   the same `normalize(entity_type, external_id, payload, raw_event_id) -> NormalizationResult`
-  contract and are registered in `NORMALIZER_REGISTRY` (`normalization/service.py`).
+  contract and are registered in `PROVIDER_NORMALIZERS`
+  (`normalization/inngest_functions.py`, the processing path; all five providers).
+  `NORMALIZER_REGISTRY` in `normalization/service.py` is the synchronous fallback and
+  lists only Squarespace, Revolut and PayPal.
   Canonical output tables include `customers`, `orders`, `products`,
   `inventory_items`, `payments`, `bank_accounts`, `financial_transactions`,
   `calendar_events`.
@@ -272,6 +279,12 @@ Double-entry journals are generated from normalized records:
 - **Expense journal**: from an outbound financial transaction — debits the resolved
   expense account, credits cash.
 - Purchase/Sale/Payment journals are created from invoices.
+- Also: funding (inbound personal transfer), sales receipt (direct PayPal sale), refund
+  and refund reversal, FX conversion, inventory cost of goods sold, and stock disposal.
+  All 13 types, with their `JournalService` methods, are in `docs/accounting.md`.
+- Journals follow the same rules throughout: debits equal credits, one journal per source
+  record (idempotent), and `reverse_journal` is a soft void (`status = 'reversed'`), not an
+  opposite entry.
 
 `account_mapping.py` is the single source of truth for resolving logical account
 purposes to real `chart_of_accounts.account_number` values — **all** journal code

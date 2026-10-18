@@ -557,8 +557,14 @@ Open, for later phases:
 
 - Two smoke turns took 40 s and 21 s against about 5 s for the others, likely model retries
   with backoff; Phase 6 tracing should show which.
-- `components/products/ProductInsights.tsx` calls the LangGraph server with a plain `fetch`
-  and no token, so it has been refused (401) since Phase 1. It should use the panel's client
-  in Phase 4, or `agentFetch` now.
-- `docs/ai-agent.md` and `docs/api-reference.md` still describe the old graph and tool names
-  (Phase 6 docs).
+- Fixed after Phase 2: `components/products/ProductInsights.tsx` called the LangGraph server with
+  a plain `fetch` (so it was refused with 401 from Phase 1 on); it now uses `agentFetch`, and the
+  products spec's stand-in refuses a request without a token, as the real server does. The
+  stale `docs/ai-agent.md` and `docs/api-reference.md` now point to `apps/ai_agent/docs/`, and
+  `docs/architecture.md` no longer describes the old graph.
+- Still to do: remove the legacy chat REST routes (`api/routes/chat.py` except `/data-sources`),
+  `services/langgraph_service.py`, and the `process_chat_message` Inngest function with its event
+  sender. They call the LangGraph server without a user token, so the auth layer refuses them;
+  nothing uses them. It touches `main.py`, `health.py`, `integrations/` and the schemas, so do it
+  as its own change, with `/chat/data-sources` going when the chat panel replaces the old page
+  (Phase 4).

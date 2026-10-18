@@ -8,9 +8,9 @@ Welcome to the ThreadWise documentation! ThreadWise is an AI-powered conversatio
 | --------------------------------------- | ------------------------------------------ |
 | [Getting Started](./getting-started.md) | Quick start guide for development setup    |
 | [Architecture](./architecture.md)       | System architecture and component overview |
-| [AI Agent](./ai-agent.md)               | Python AI agent with LangGraph             |
+| [AI Agent](./ai-agent.md)               | Chat agent, data pipeline, accounting      |
 | [Chat UI](./chat-ui.md)                 | React frontend documentation               |
-| [API Reference](./api-reference.md)     | REST and WebSocket API documentation       |
+| [API Reference](./api-reference.md)     | REST API (lives next to the code)          |
 | [Development Notes](./README.md)        | Original development timeline and notes    |
 
 ## Quick Links

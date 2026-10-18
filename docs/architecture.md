@@ -80,93 +80,67 @@ The Python-based backend that handles all AI processing, data analysis, and data
 
 **Key Features:**
 
-- Multi-node graph-based agent architecture
-- Query classification (analytics, generic, document extraction)
-- SQL-powered data exploration
-- Document extraction from PDFs/images
-- Semantic search with vector embeddings
-- Generative UI message streaming
+- A tool-calling chat agent over the signed-in user's own data (read-only)
+- Typed tools for the common questions, with checked SQL as a fallback
+- Provider sync and normalisation (Shopify, Revolut, PayPal, Squarespace, Zoho Calendar)
+- A double-entry ledger generated from that data
+- Document search with vector embeddings
+
+Details: [apps/ai_agent/docs](../apps/ai_agent/docs/README.md).
 
 ## Data Flow
 
 ### Chat Message Flow
 
 ```
-User Input → Chat UI → LangGraph SDK → AI Agent Graph
+User Input → Chat UI → LangGraph SDK (Supabase token) → LangGraph server
+                                                              │
+                                                  auth.py: verify the token,
+                                                  find the user's business
+                                                              │
+                                                              ▼
+                                            Chat agent (one tool-calling loop)
+                                                              │
+                              ┌───────────────────────────────┼─────────────────────┐
+                              ▼                               ▼                     ▼
+                     typed data tools                    run_sql (fallback)   search_documents
+                     (fixed SQL)                         (parsed, checked)    (own namespace)
+                              └───────────────┬───────────────┘
+                                              ▼
+                       Postgres as the signed-in user, row-level security on
                                               │
                                               ▼
-                               ┌──────────────────────────┐
-                               │   classify_query_node    │
-                               │   (analytics/generic/    │
-                               │    document_extraction)  │
-                               └────────────┬─────────────┘
-                                            │
-                               ┌────────────▼─────────────┐
-                               │  retrieve_context_node   │
-                               │  (Semantic Search)       │
-                               └────────────┬─────────────┘
-                                            │
-                    ┌───────────────────────┼───────────────────────┐
-                    ▼                       ▼                       ▼
-          ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
-          │ generic_response│    │ analytics_agent │    │extract_document │
-          │     (chat)      │    │   (SQL tools)   │    │   (multimodal)  │
-          └────────┬────────┘    └────────┬────────┘    └────────┬────────┘
-                   │                      │                      │
-                   │             ┌────────▼────────┐             │
-                   │             │push_visualization│             │
-                   │             │  (Generative UI) │             │
-                   │             └────────┬────────┘             │
-                   │                      │                      │
-                   └──────────────────────┼──────────────────────┘
-                                          │
-                                          ▼
-                              AI Response + UI Messages
-                                          │
-                                          ▼
-                                Chat UI (Renders Response)
+                                     AI response (streamed)
+                                              │
+                                              ▼
+                                    Chat UI (renders the response)
 ```
 
-## Agent Graph Architecture
+## Agent Architecture
 
-The AI agent uses a LangGraph StateGraph with the following nodes:
+The agent is a single `create_agent` loop: the model decides which tools to call, with middleware
+for the cross-cutting parts (refusing anonymous runs, business context in the prompt, summarising
+long threads, call limits, retries, a fallback model). It cannot write anything. Every figure it
+states comes from a tool result, and the tools use the same definitions as the app's pages.
 
-| Node                 | Purpose                                     | Output                |
-| -------------------- | ------------------------------------------- | --------------------- |
-| `classify_query`     | Routes user queries to appropriate handlers | `query_type`          |
-| `retrieve_context`   | Fetches relevant context from vector store  | `retrieved_context`   |
-| `generic_response`   | Handles conversational queries              | AI message            |
-| `analytics_agent`    | Executes SQL queries and data analysis      | AI message + data     |
-| `extract_document`   | Processes uploaded files (PDF/images)       | Structured extraction |
-| `push_visualization` | Generates UI components for data            | UI messages           |
+See [chat-agent.md](../apps/ai_agent/docs/chat-agent.md) for the tools and middleware, and
+[security.md](../apps/ai_agent/docs/security.md) for how the database access is scoped.
 
 ## Integration Points
 
 ### Database Connection
 
-The agent connects to Supabase PostgreSQL using the `SQLDatabaseToolkit`:
-
-```python
-# Connection via environment variable
-database_url = os.getenv("DATABASE_URL", "postgresql://...")
-db = SQLDatabase.from_uri(database_url)
-toolkit = SQLDatabaseToolkit(db=db, llm=model)
-```
+The agent's SQL runs as the signed-in user inside a read-only transaction with row-level security
+on (`core/scoped_sql.py`), so it can only see that user's business. The rest of the backend uses
+the Supabase service-role client, which bypasses RLS and is only used after the caller has been
+checked. See [architecture.md](../apps/ai_agent/docs/architecture.md#two-database-paths-do-not-mix-them-up).
 
 ### LLM Configuration
 
-The system supports multiple LLM backends:
-
-- **Local LLM**: LM Studio compatible (Qwen, Llama, etc.)
-- **Google Gemini**: Cloud-based via LangChain
-
-```python
-# Local model via LM Studio
-local_model = get_local_llm("qwen/qwen3-vl-4b")
-
-# Gemini via Google AI
-gemini = get_chat_model("google_genai:gemini-2.5-flash-lite")
-```
+Models are settings (`AGENT_MODEL`, `AGENT_FALLBACK_MODEL`, `AGENT_SMALL_MODEL`), written as
+provider-prefixed ids for LangChain's `init_chat_model`; the default is Gemini
+(`google_genai:gemini-3.5-flash`, with `gemini-2.5-flash` as the fallback). A local OpenAI-compatible
+server (LM Studio) remains available for development.
 
 ### Embedding Service
 
