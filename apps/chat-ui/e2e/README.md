@@ -40,6 +40,7 @@ The seed refuses to run twice; that is what `db:fresh` is for.
 | `fixtures.ts`               | `test` with the no-hosted-traffic guard, `expectNoHorizontalOverflow`, `readManifest`                                                                 |
 | `helpers/db.ts`             | Service-role reads, snapshots and restores for tests that change data                                                                                 |
 | `stand-in-agent.ts`         | Answers the server-side calls to the AI agent (invoices, stock, journals)                                                                             |
+| `helpers/fake-langgraph.ts` | The LangGraph API the assistant panel talks to from the browser: threads, history, streamed runs, interrupts, answered per question from a plan       |
 | `*.spec.ts`                 | Read-only tests, run at desktop (1280), tablet (768) and mobile (390), in light and dark                                                              |
 | `*-edit.spec.ts`            | Tests that change data: run last, in the `mutations` project, and restore what they changed                                                           |
 
@@ -57,6 +58,11 @@ Every page spec also runs axe and `expectNoHorizontalOverflow`, with each drawer
   row or change the seeded user's password (that signs every session out; use a throwaway user).
 - The browser's own calls to the agent (Integrations) are mocked in the spec with `page.route`,
   limited to the agent's address (the app's own modules also live under `/integrations/`).
+- The assistant's LangGraph calls go to `http://127.0.0.1:8098` in tests, where nothing listens:
+  call `mockAgent(page, plans)` (`helpers/fake-langgraph.ts`) first. Its cards are the UI
+  contract's own examples (`example('summary-list')`), so they are what the backend would send.
+- `assistant-contract.spec.ts` checks the frontend's Zod schemas against the contract file the
+  backend generates; it needs no browser and runs in one project.
 - `pnpm db:fresh` after changing the seed; it refuses to run twice otherwise.
 
 ## CI

@@ -110,10 +110,10 @@ export default defineConfig<{ theme: ThemeOption }>({
         VITE_SUPABASE_PUBLISHABLE_KEY: anonKey,
         // Server-side calls to the agent go to the stand-in below, never a real agent.
         AI_AGENT_URL: STAND_IN_URL,
-        // The browser's own calls to the agent default to :2024, where a developer may have their
-        // real dev server running (it can hang the page's network). Point them at the stand-in too:
-        // specs that exercise those calls mock them, the rest fail fast.
-        VITE_AI_AGENT_URL: STAND_IN_URL,
+        // The browser's LangGraph calls (the assistant) go to an address where nothing listens,
+        // answered by each spec's mock (e2e/helpers/fake-langgraph.ts): an unmocked call fails
+        // instead of reaching a real agent a developer has running on :2024.
+        VITE_LANGGRAPH_API_URL: 'http://127.0.0.1:8098',
       },
     },
     {

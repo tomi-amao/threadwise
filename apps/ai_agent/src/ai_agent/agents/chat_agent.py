@@ -197,8 +197,20 @@ def tool_error_message(exc: Exception, request: Any) -> str:
     return f"Error: {name} failed unexpectedly. Tell the user it is not available now."
 
 
+# The provider client's own retries are kept short. It retries a quota error (HTTP 429)
+# for minutes by default (Gemini: 6 retries, backing off to 16s), which holds a turn up
+# while the fallback model sits idle. Retrying does not clear a daily quota; the retry
+# middleware and the fallback model (its own quota) take over within seconds instead.
+CLIENT_MAX_RETRIES = 1
+CLIENT_TIMEOUT_S = 90
+
+
 def _model(model: str | BaseChatModel) -> BaseChatModel:
-    return init_chat_model(model) if isinstance(model, str) else model
+    if not isinstance(model, str):
+        return model
+    return init_chat_model(
+        model, max_retries=CLIENT_MAX_RETRIES, timeout=CLIENT_TIMEOUT_S
+    )
 
 
 def build_agent(

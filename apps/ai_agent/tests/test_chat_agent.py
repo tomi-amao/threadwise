@@ -113,6 +113,21 @@ def test_financial_year(on, month, day, expected):
     assert (start.isoformat(), end.isoformat()) == expected
 
 
+def test_models_are_built_with_short_client_retries(monkeypatch):
+    seen = {}
+
+    def fake_init(model, **kwargs):
+        seen[model] = kwargs
+        return ScriptedModel(script=[])
+
+    monkeypatch.setattr(chat_agent, "init_chat_model", fake_init)
+    chat_agent._model("google_genai:gemini-3.5-flash")
+    # A quota error must reach the fallback in seconds, not after minutes of backoff.
+    assert seen["google_genai:gemini-3.5-flash"] == {"max_retries": 1, "timeout": 90}
+    ready = ScriptedModel(script=[])
+    assert chat_agent._model(ready) is ready
+
+
 def test_the_model_never_sees_identity_arguments():
     for tool in TOOLS:
         properties = tool.tool_call_schema.model_json_schema().get("properties", {})

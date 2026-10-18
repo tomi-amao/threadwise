@@ -247,6 +247,23 @@ page from these before inventing a component; if one is missing, add it to the k
 - Radix hides the page from assistive technology while a drawer is open, so tests wait for the
   dialog, not the page heading, in that state.
 
+### The assistant panel
+
+- **A panel, not a page.** It docks on the right where the page can keep its designed width
+  (1700px and wider: sidebar, 1024px of page, panel), and the page makes room. Narrower, it
+  overlays the page with a scrim (a modal: focus stays inside, Escape closes it); on a phone it is
+  a full-height sheet. Pages lay out by viewport breakpoints, so pushing one narrower than it was
+  designed for squeezes a desktop layout into a tablet-sized box. `/chat` is the same
+  conversation full width.
+- **Open state and width are a cookie**, like the theme, so the first render already makes room.
+  Width is resizable by dragging the left edge or with the arrow keys on it.
+- **Focus**: opening moves it to the composer; closing returns it to what opened the panel.
+  ⌘/Ctrl+J toggles it from anywhere.
+- **Cards under an answer** are built from tool results, never from the model's text, on the kit
+  (Statement, DataTable, the chart theme) with pence shown. Every card ends with a quiet Source
+  row: what was read, the period, and a link to the page. Follow-up chips show under the latest
+  answer only.
+
 ### Motion
 
 Subtle and functional: a short fade or rise on entrance, a stamp on a posted entry, a bar filling.

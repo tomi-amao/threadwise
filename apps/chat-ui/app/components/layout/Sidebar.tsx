@@ -10,7 +10,6 @@ import React from 'react';
 import { NavLink, useNavigate } from 'react-router';
 import {
   ChartLine,
-  ChatCircle,
   FileText,
   ChartBar,
   ArrowsLeftRight,
@@ -30,6 +29,7 @@ import {
 import { useAuth } from '~/providers/AuthProvider';
 import { useSidebar } from '~/providers/SidebarProvider';
 import { ThemeToggle } from '~/components/ui/theme-toggle';
+import { AssistantLauncher } from '~/components/assistant/Launcher';
 import { cn } from '~/lib/utils';
 
 interface NavItemProps {
@@ -112,13 +112,7 @@ export function Sidebar({ className }: SidebarProps) {
             collapsed={collapsed}
             onClick={closeMobile}
           />
-          <NavItem
-            to="/chat"
-            icon={<ChatCircle size={20} weight="light" />}
-            label="Ask AI"
-            collapsed={collapsed}
-            onClick={closeMobile}
-          />
+          <AssistantLauncher variant="sidebar" collapsed={collapsed} onActivate={closeMobile} />
         </div>
 
         <div className="mb-4">

@@ -605,3 +605,79 @@ Found on the way: in Phase 2 I reported bandit as clean, but that check ran on d
 code-chosen fragments; values are parameters). They are now marked `nosec B608` with the reason in
 the module docstring. `bandit -r src/ -ll` still reports one pre-existing High
 (`services/embedding_service.py`, MD5), part of the backlog in 9.3.
+
+## 12. Phase 4 result (2026-10-18)
+
+Done on `feat/chat-agent-redesign`. The old chat (`ChatProvider`, `ChatInterface`, `ChatLayout`,
+`components/thread/*`, `components/visualizations/*`, the upload helpers) is deleted, and with it
+the repo's four type errors and the `--no-verify` exception.
+
+- **Provider**: `providers/AssistantProvider.tsx`, mounted once in `AppLayout`, wraps `useStream`
+  (token on every request, `fetchStateHistory` of 30 checkpoints for edit and regenerate). The open
+  thread is remembered per user (localStorage) and `/chat?thread=` opens a given one. Panel open
+  state and width are a cookie read by the `routes/app.tsx` loader, so the first render is right.
+- **Panel** (`components/assistant/AssistantPanel.tsx`): header with the thread title, conversations
+  view, new conversation, open full width (`/chat`), close. Resizable (drag or arrow keys on the
+  left edge), ⌘/Ctrl+J, launcher in the sidebar and the phone header. Opening focuses the composer;
+  closing returns focus to whatever opened it.
+- **Conversation** (`Conversation.tsx`): turns with tool-step rows ("Read the ledger, 1 Apr 2026
+  to 31 Mar 2027", live progress from the `custom` stream), the answer (markdown, no raw HTML,
+  in-app links stay in the app), the cards, copy, thumbs up/down (saved in thread metadata),
+  answer again (regenerate from the answer's parent checkpoint), edit and resend (a fork),
+  follow-up chips on the latest answer only, the clarify options, and an error with Try again.
+  `role="log"` with `aria-busy` while streaming. Page-dependent starter questions in an empty
+  conversation. Composer: multi-line, Enter sends, Stop while running, answers an interrupt when
+  one is pending.
+- **Conversations** (`ThreadList.tsx`): switch, rename, delete after a confirmation dialog.
+- **Tests**: `e2e/assistant.spec.ts` (17 tests at 3 widths x 2 themes, plus the docked layout at
+  1800px) against `e2e/helpers/fake-langgraph.ts`, a stand-in for the LangGraph API that keeps a
+  checkpoint tree like the real server, streams SSE, pauses on interrupts and refuses requests
+  without a token. Covers open and close and focus, the shortcut, starters, steps and cards and
+  follow-ups, clarify and resume, navigation from a card link, reload, switch/rename/delete,
+  `/chat`, Stop, failure and retry, edit and regenerate, feedback, resize, docking, axe and
+  overflow with an answer and with the conversations view open.
+
+Deviations and findings:
+
+1. **Docking width (decision 6 changed, needs the owner's confirmation).** At 1280px a docked
+   panel left the page 640px, but pages lay out by viewport breakpoints, so the dashboard rendered
+   its six-column desktop grid in that space and every KPI figure was cut to "£…". The panel now
+   docks only where the page keeps its designed width: from 1700px (sidebar 256 + page 1024 +
+   panel 420), with the panel narrowed before the page drops below 1024px. Below 1700px it
+   overlays with a scrim (modal: focus inside, Escape closes), on a phone it is a sheet. It is one
+   constant (`DOCK_MIN_VIEWPORT` in `lib/assistant-panel.ts`, mirrored as `min-[1700px]:`
+   classes). Docking at 1280 would need the pages to respond to their container instead.
+2. **SDK bug, worked around**: `@langchain/langgraph-sdk` 1.11.0's retrying caller recognises an
+   abort only by an error _message_ starting "AbortError"; a browser abort says "signal is
+   aborted without reason", so a run stopped before the server answered was retried with backoff
+   and Stop took about 20 seconds. `AssistantProvider` passes the client a `fetch` that rethrows
+   the abort with that message (still an `AbortError`, which the SDK ignores). Worth reporting
+   upstream; remove the wrapper when fixed.
+3. History is a view inside the panel (the clock button), not a floating popover: no popover in
+   the kit, and a view works the same in the sheet on a phone.
+4. No attachment button: extraction left chat in Phase 2, so the composer would only lead to "add
+   it on the Invoices page". The page context chip is Phase 5.
+5. `ProductInsights` (Products drawer) still talks to the LangGraph server on its own; it could
+   share the provider's client.
+6. **Checked against the real server.** The panel's e2e tests use a stand-in for the LangGraph API
+   that I wrote, so its protocol was checked once against `langgraph dev` 0.16.1 with the real SDK
+   client, the seeded user's real token, the real agent graph, middleware and tools, and scripted
+   models (a live model was out of quota, see 7). Confirmed: stream events `metadata`, `values`,
+   `messages`, `custom`; UI messages arrive on the `custom` stream with `metadata.message_id` and
+   are in `values.ui`; a clarifying interrupt arrives in `values.__interrupt__` and in
+   `threads.getState().tasks[].interrupts`; `Command(resume={answer})` finishes the turn;
+   `getHistory` gives every checkpoint a `parent_checkpoint` (what edit and regenerate fork from);
+   thread search, update and delete are scoped to the signed-in user. No such live check exists in
+   CI; it was a one-off script. To repeat it, serve the agent with `langgraph dev --config <a copy
+of langgraph.json whose env file points at the local Supabase> --no-reload`: the shipped config
+   loads `ai_agent/.env`, which names the hosted project and overrides the shell, so tokens from
+   the local stack are refused (401), and the file watcher otherwise reloads the server mid-run.
+7. **Gemini's free tier is exhausted on this key** (`GenerateRequestsPerDayPerProjectPerModel`),
+   which is what made some earlier turns take 20 to 40 seconds: the Google client retries a 429 six
+   times with backoff up to 16s, and the agent's own retry and fallback only start after that.
+   Model clients are now built with `max_retries=1` and a 90s timeout (`chat_agent._model`), so a
+   quota error reaches the fallback model (its own quota) within seconds. A paid key, or a
+   different provider, is needed for real use; the plan assumed one (section 9.5).
+8. Full suite on this branch before commit: 1,355 passed; four desktop-light inventory tests
+   failed once in the full run (empty tables on first load) and passed alone and on a rerun, and
+   one invoices mutation test failed once and passed on rerun. Neither touches code changed here.
