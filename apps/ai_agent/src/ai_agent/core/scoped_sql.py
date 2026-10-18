@@ -219,7 +219,7 @@ def check_query(sql: str) -> None:
     if unknown_tables:
         raise QueryRefused(
             f"Table(s) not available: {', '.join(unknown_tables)}. "
-            "Call sql_db_list_tables to see what you can query."
+            "Call list_tables to see what you can query."
         )
     unknown_functions = sorted(functions - ALLOWED_FUNCTIONS)
     if unknown_functions:
@@ -235,15 +235,14 @@ def _connect() -> Any:
     return psycopg2.connect(settings.database_url, connect_timeout=5)
 
 
-def run_query(
+def _run_as_user(
     user_id: str,
     sql: str,
-    *,
-    max_rows: int = MAX_ROWS,
-    timeout_ms: int = STATEMENT_TIMEOUT_MS,
+    params: tuple[Any, ...] | dict[str, Any] | None,
+    max_rows: int,
+    timeout_ms: int,
 ) -> QueryResult:
-    """Run `sql` as `user_id`: read-only, RLS on, row-capped and time-limited."""
-    check_query(sql)
+    """One statement as `user_id`: READ ONLY transaction, `authenticated` role, RLS on."""
     claims = json.dumps(
         {"sub": user_id, "role": "authenticated", "aud": "authenticated"}
     )
@@ -264,7 +263,7 @@ def run_query(
             )
         text = sql.strip().rstrip(";")
         with conn.cursor(name="agent_query") as cur:  # server-side: never pulls it all
-            cur.execute(text)
+            cur.execute(text, params)
             fetched = cur.fetchmany(max_rows + 1)
             columns = [d.name for d in cur.description or []]
         truncated = len(fetched) > max_rows
@@ -273,3 +272,31 @@ def run_query(
     finally:
         conn.rollback()
         conn.close()
+
+
+def run_query(
+    user_id: str,
+    sql: str,
+    *,
+    max_rows: int = MAX_ROWS,
+    timeout_ms: int = STATEMENT_TIMEOUT_MS,
+) -> QueryResult:
+    """Run model-written `sql` as `user_id`: checked, read-only, RLS on, capped."""
+    check_query(sql)
+    return _run_as_user(user_id, sql, None, max_rows, timeout_ms)
+
+
+def run_trusted(
+    user_id: str,
+    sql: str,
+    params: tuple[Any, ...] | dict[str, Any] | None = None,
+    *,
+    max_rows: int = MAX_ROWS,
+    timeout_ms: int = STATEMENT_TIMEOUT_MS,
+) -> QueryResult:
+    """Run fixed SQL written in this codebase, with psycopg2 parameters, as `user_id`.
+
+    Not checked by `check_query` (placeholders do not parse), so never pass it text the
+    model wrote. Row-level security, the READ ONLY transaction and the limits still apply.
+    """
+    return _run_as_user(user_id, sql, params, max_rows, timeout_ms)

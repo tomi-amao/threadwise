@@ -1,7 +1,14 @@
 {
   "dependencies": [".", "src"],
   "graphs": {
-    "threadwise-financial-agent": "ai_agent.agents.graph_agent:agent"
+    "threadwise-financial-agent": "ai_agent.agents.chat_graph:agent"
+  },
+  "checkpointer": {
+    "ttl": {
+      "strategy": "delete",
+      "default_ttl": 129600,
+      "sweep_interval_minutes": 60
+    }
   },
   "env": ".env",
   "image_distro": "wolfi",

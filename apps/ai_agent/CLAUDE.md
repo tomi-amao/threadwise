@@ -12,8 +12,8 @@ unless a task explicitly touches it.
 
 This service does three distinct jobs:
 
-1. **Chat agent** — a LangGraph StateGraph that answers analytics questions
-   (SQL), generic questions, and extracts structured data from uploaded documents.
+1. **Chat agent** — a `create_agent` tool-calling loop that answers questions about
+   the signed-in user's business from typed data tools (SQL as a fallback). Read-only.
 2. **ETL / normalization pipeline** — pulls transactions from external providers
    (Shopify, Revolut, PayPal, Squarespace) via Inngest, normalizes them into a
    canonical schema, and persists them to Supabase/Postgres. Zoho Calendar is
@@ -60,10 +60,10 @@ invoked via Husky) run Black/isort/flake8/mypy/bandit on changed Python files at
 commit time.
 
 Only `tests/test_normalization.py` exists today — most services (journal_service,
-account_mapping, langgraph_service, etc.) have no test coverage yet. Auth and the agent's
-database scoping are covered by `tests/test_auth.py`, `tests/test_api_auth.py`,
-`tests/test_scoped_sql.py` and `tests/test_agent_scoping.py` (the last two use the local
-Supabase database when it is running, and skip that part otherwise).
+account_mapping, langgraph_service, etc.) have no test coverage yet. Auth and the agent are
+covered by `tests/test_auth.py`, `tests/test_api_auth.py`, `tests/test_scoped_sql.py` and
+`tests/test_chat_agent.py` (the last two use the local Supabase database and the e2e seed
+manifest when they exist, and skip those parts otherwise).
 
 ## Architecture
 
@@ -75,10 +75,11 @@ Supabase database when it is running, and skip that part otherwise).
   accounting, health). Service/Inngest imports are wrapped in try/except with a
   relative-then-absolute import fallback — this is intentional so the module works
   both under `poetry run uvicorn` and under the LangGraph CLI's own import context.
-- `langgraph.json` — declares the standalone LangGraph graph
-  (`ai_agent.agents.graph_agent:agent`) served independently of `main.py`'s FastAPI
-  app when run via `langgraph dev`/LangGraph Platform. It also registers the auth
-  handler (`auth.path` -> `src/ai_agent/auth.py`) and the CORS origins.
+- `langgraph.json` — declares the LangGraph graph (`threadwise-financial-agent` =
+  `ai_agent.agents.chat_graph:agent`) served by `langgraph dev`/LangGraph Platform,
+  which also mounts `main.py`'s FastAPI app (`http.app`). It registers the auth handler
+  (`auth.path` -> `src/ai_agent/auth.py`), the CORS origins, and thread retention
+  (`checkpointer.ttl`: 90 days, in minutes).
 
 ### Authentication and authorization (every request)
 
@@ -112,45 +113,33 @@ Nothing here trusts the caller's word about who they are or which business they 
 - The browser app forwards the user's token (see root CLAUDE.md); the old chat page signs its
   LangGraph requests with a client `onRequest` hook until the chat panel replaces it.
 
-### Chat agent (`agents/graph_agent.py`)
+### Chat agent (`agents/chat_agent.py`)
 
-A single LangGraph `StateGraph` (`AgentState` TypedDict) implements this flow:
+One `create_agent` loop (langchain 1.x): system prompt (`agents/chat_prompt.py`), the
+tools below, and middleware. The model decides which tools to call; there is no
+classifier, router or second "what chart?" LLM call.
 
-```
-START → classify_query → retrieve_context → evaluate_context_sufficiency
-    → [sufficient?]
-        → yes: context_response → END
-        → no:  route by query_type
-            → extract_document → END        (file attachments)
-            → generic_response → END         (conversational)
-            → analytics_agent → push_visualization → END  (data queries)
-```
-
-- Query classification, context-sufficiency evaluation, and document-category
-  inference are all separate structured-output LLM calls (Pydantic models),
-  not a single monolithic prompt — read the node docstrings before changing
-  the routing logic, each node has specific confidence thresholds it enforces
-  (e.g. context is only treated as sufficient above 0.7 confidence).
-- `analytics_agent_node` builds its database tools per request from the authenticated user
-  (`config["configurable"]["langgraph_auth_user"]`, set by `auth.py`; the server rejects a
-  client that tries to set it): `tools/sql_tools.py::build_sql_tools`. Every query runs through
-  `core/scoped_sql.py` (see "Agent database access"). A run with no signed-in user gets a
-  refusal and no tools. `retrieve_context_node` searches the vector namespace of the
-  caller's business only. The Supabase MCP path is gone (it was a second route to arbitrary
-  SQL).
-- `push_visualization_node` uses `langgraph.graph.ui.push_ui_message` (generative UI)
-  to stream chart/table/metric components to the frontend — it re-analyzes the
-  agent's own text output with another LLM call to decide what to visualize, it
-  does not receive structured chart data from the analytics step directly.
-- All LLM singletons (`_get_local_model`, `_get_gemini`, `_get_classifier`, etc.)
-  are `@lru_cache`d module-level functions — graph construction itself
-  (`create_analytics_agent_graph`) is cheap and does no I/O; heavy clients are
-  created lazily on first request. Preserve this pattern for any new node.
+- **Identity.** Every tool takes `runtime: ToolRuntime` (hidden from the model) and reads
+  the user from `runtime.config["configurable"]["langgraph_auth_user"]`, which the server
+  sets from `auth.py` and overrides if a client sends it (`tools/identity.py`). Never add
+  a tool argument for the user or business, and never name an argument `config` or
+  `runtime` (reserved).
+- **Middleware, in order:** `BusinessContextMiddleware` (refuses a run with no signed-in
+  user before the model is called; answers a file attachment with a pointer to the
+  Invoices page, since extraction is not part of chat; loads the business profile into
+  state each turn and appends it and today's date to the system prompt), summarisation
+  (small model), model and tool call caps per turn, model fallback, model retry, tool
+  errors returned to the model as text (`tool_error_message`), and tool retry on a
+  dropped database connection.
+- **Models** are settings: `agent_model`, `agent_fallback_model`, `agent_small_model`
+  (provider-prefixed ids for `init_chat_model`; Gemini by default since only
+  `GOOGLE_API_KEY` is configured). The Gemini client refuses to construct without its key,
+  so `build_agent()` builds nothing at import; `agents/chat_graph.py` (what langgraph.json
+  points at) calls it. Tests import `build_agent` and pass a scripted fake model.
+- **No checkpointer in code**: the LangGraph server supplies one (TTL in langgraph.json).
 - The "local" LLM (`core/config.py:get_local_llm`) is an OpenAI-compatible client
-  pointed at `local_llm_base_url` (default `http://localhost:1234/v1`, e.g. LM
-  Studio) — it is not literally OpenAI. `get_chat_model` uses LangChain's
-  `init_chat_model` with provider-prefixed model strings (e.g.
-  `"google_genai:gemini-2.5-flash-lite"`).
+  pointed at `local_llm_base_url` (e.g. LM Studio); still used by one integrations route,
+  not by the chat agent.
 
 ### Two separate DB access paths — don't conflate them
 
@@ -178,6 +167,10 @@ The model writes SQL, so access cannot rely on it behaving. Two layers:
    user's id as the JWT claim, applies a statement timeout, and fetches at most 200 rows
    through a server-side cursor. The same RLS policies as the app's pages therefore decide
    which rows exist; the model is never trusted to filter by business.
+
+`run_trusted(user_id, sql, params)` is the same transaction without the parser, for the
+fixed, parameterised SQL in `tools/data_tools.py` (psycopg2 placeholders do not parse).
+Never pass it text the model wrote.
 
 `DATABASE_URL` must be a role that can `SET ROLE authenticated` (the `postgres` role on
 Supabase). Add a table to `ALLOWED_RELATIONS` only with an RLS policy on it, and cover it in
@@ -291,11 +284,20 @@ review rather than mis-posted. Debits must equal credits within `BALANCE_TOLERAN
 
 ### Tools
 
-`tools/sql_tools.py` builds the analytics agent's four database tools for one user
-(`sql_db_list_tables`, `sql_db_schema`, `sql_db_query_checker`, `sql_db_query`, the names the
-prompts use). The old `tools/sub_agents.py`, `agents/middleware.py`, `core/nodes.py`,
-`core/state.py`, `core/database.py` and `services/mcp_client.py` were unused or unsafe and
-have been removed.
+- `tools/data_tools.py` — typed tools, each returning a dict that names its period,
+  currency and a `link` to the page (using that page's own URL filters):
+  `get_business_profile` (also today's date and data coverage), `profit_and_loss`,
+  `sales_summary`, `top_products`, `top_customers`, `outstanding_invoices`,
+  `cash_position`, `search_transactions`. Their SQL uses **the same definitions as the
+  pages** (the module docstring lists them and the frontend file each comes from); change
+  one and you must change the other, or the chat and the page will disagree.
+  `tests/test_chat_agent.py` checks every tool against the e2e seed manifest.
+- `tools/sql_tools.py` — the fallback: `list_tables`, `describe_tables`, `run_sql`
+  (checked, `run_query`). A refusal comes back to the model as `{"error": ...}`.
+- `tools/document_tools.py` — `search_documents`, the caller's vector namespace only.
+
+The old hand-built graph (`agents/graph_agent.py`, `agents/prompts.py`) and earlier dead
+modules were removed.
 
 ## Environment
 

@@ -31,7 +31,12 @@ class Settings(BaseSettings):
     local_llm_base_url: str = "http://localhost:1234/v1"
     default_model: str = "qwen/qwen3-vl-4b"
     default_chat_model: str = "google_genai:gemini-2.5-flash-lite"
-    
+    # The chat agent (agents/chat_agent.py): provider-prefixed ids for init_chat_model.
+    # The main loop, the model it falls back to, and a small one for summaries.
+    agent_model: str = "google_genai:gemini-3.5-flash"
+    agent_fallback_model: Optional[str] = "google_genai:gemini-2.5-flash"
+    agent_small_model: str = "google_genai:gemini-3.5-flash-lite"
+
     # LangGraph
     langgraph_base_url: str = "http://localhost:2024"
     

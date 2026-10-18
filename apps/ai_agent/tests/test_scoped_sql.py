@@ -7,12 +7,9 @@ import psycopg2
 import pytest
 
 from ai_agent.core import scoped_sql
-from ai_agent.core.scoped_sql import QueryRefused, check_query, run_query
-from ai_agent.tools.sql_tools import (
-    AgentUser,
-    agent_user_from_config,
-    build_sql_tools,
-)
+from ai_agent.core.scoped_sql import QueryRefused, check_query, run_query, run_trusted
+from ai_agent.tools.identity import AgentUser, agent_user_from_config
+from ai_agent.tools.sql_tools import SQL_TOOLS
 
 ALLOWED = [
     "select count(*) from orders",
@@ -76,7 +73,7 @@ def test_everything_else_is_refused(sql):
 
 
 def test_the_refusal_tells_the_model_what_to_do():
-    with pytest.raises(QueryRefused, match="sql_db_list_tables"):
+    with pytest.raises(QueryRefused, match="list_tables"):
         check_query("select * from external_sources")
 
 
@@ -175,33 +172,34 @@ def test_the_transaction_itself_is_read_only(two_businesses, monkeypatch):
         run_query(owner, "delete from orders")
 
 
-async def _call(tool, **kwargs):
-    return await tool.ainvoke(kwargs)
+def test_trusted_sql_takes_parameters_and_keeps_rls_on(two_businesses):
+    (owner_a, entity_a, count_a), (_, entity_b, _) = two_businesses
+    sql = "select count(*) from orders where entity_id = %s"
+    assert run_trusted(owner_a, sql, (entity_a,)).rows == [[count_a]]
+    assert run_trusted(owner_a, sql, (entity_b,)).rows == [[0]]
 
 
 def test_the_tools_answer_for_their_user_only(two_businesses):
     import asyncio
+    from types import SimpleNamespace
 
-    (owner_a, entity_a, count_a), (owner_b, _, count_b) = two_businesses
-    tools = {t.name: t for t in build_sql_tools(AgentUser(owner_a, entity_a))}
-    assert set(tools) == {
-        "sql_db_list_tables",
-        "sql_db_schema",
-        "sql_db_query_checker",
-        "sql_db_query",
-    }
-    answer = asyncio.run(
-        _call(tools["sql_db_query"], query="select count(*) from orders")
+    (owner_a, entity_a, count_a), _ = two_businesses
+    runtime = SimpleNamespace(
+        config={
+            "configurable": {
+                "langgraph_auth_user": {"identity": owner_a, "entity_id": entity_a}
+            }
+        },
+        stream_writer=None,
     )
-    assert str(count_a) in answer and str(count_b) not in answer.replace(
-        str(count_a), ""
-    )
-    refused = asyncio.run(
-        _call(tools["sql_db_query"], query="select * from auth.users")
-    )
-    assert refused.startswith("Error:")
-    assert asyncio.run(_call(tools["sql_db_query_checker"], query="select 1")) == "OK"
-    schema = asyncio.run(
-        _call(tools["sql_db_schema"], table_names="orders, external_sources")
-    )
+    tools = {t.name: t for t in SQL_TOOLS}
+    assert set(tools) == {"list_tables", "describe_tables", "run_sql"}
+
+    def call(name, **kwargs):
+        return asyncio.run(tools[name].coroutine(runtime=runtime, **kwargs))
+
+    answer = call("run_sql", query="select count(*) from orders")
+    assert answer["rows"] == [[count_a]]
+    assert "error" in call("run_sql", query="select * from auth.users")
+    schema = call("describe_tables", table_names=["orders", "external_sources"])
     assert "orders:" in schema and "external_sources: not available" in schema

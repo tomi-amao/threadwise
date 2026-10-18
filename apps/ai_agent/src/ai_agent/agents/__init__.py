@@ -1,36 +1,6 @@
-"""Agents module for ThreadWise AI Agent.
+"""The chat agent.
 
-Contains LangGraph agents, prompts, and graph configurations.
+`chat_agent.build_agent()` builds the graph; `chat_graph.agent` is the instance the
+LangGraph server serves (see langgraph.json). Neither is imported here, so importing
+this package never constructs a model.
 """
-
-from .prompts import (
-    sql_system_prompt,
-    generic_system_prompt,
-    analytics_system_prompt,
-    available_prompts,
-    income_statement_prompt,
-    balance_sheet_prompt,
-    cash_flow_statement_prompt,
-    report_type_prompts,
-    invoice_extraction_prompt,
-    check_financial_prompt,
-    validate_financial_prompt_against_database,
-)
-
-# Import agent graphs (lazy to avoid circular imports)
-# Use: from ai_agent.agents.graph_agent import agent
-
-__all__ = [
-    # Prompts
-    "sql_system_prompt",
-    "generic_system_prompt",
-    "analytics_system_prompt",
-    "available_prompts",
-    "income_statement_prompt",
-    "balance_sheet_prompt",
-    "cash_flow_statement_prompt",
-    "report_type_prompts",
-    "invoice_extraction_prompt",
-    "check_financial_prompt",
-    "validate_financial_prompt_against_database",
-]

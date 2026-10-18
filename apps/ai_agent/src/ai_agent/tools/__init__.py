@@ -1,8 +1,9 @@
 """Tools module for ThreadWise AI Agent.
 
-Contains the analytics agent's database tools, scoped to the signed-in user.
+The chat agent's tools: typed data tools, document search and the SQL fallback, all
+scoped to the signed-in user.
 """
 
-from .sql_tools import AgentUser, agent_user_from_config, build_sql_tools
+from .identity import AgentUser, agent_user, agent_user_from_config
 
-__all__ = ["AgentUser", "agent_user_from_config", "build_sql_tools"]
+__all__ = ["AgentUser", "agent_user", "agent_user_from_config"]
