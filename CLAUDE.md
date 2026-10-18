@@ -121,7 +121,13 @@ distinct data paths, and it matters which one a given feature uses:
    call the FastAPI backend's REST routes (`/accounting`, `/invoices`, etc., mounted
    in `apps/ai_agent/.../api/routes/__init__.py`) via `AI_AGENT_URL`/`VITE_AI_AGENT_URL`
    (also defaults to `:2024` in some files — check the actual env var before assuming
-   which port a given call hits).
+   which port a given call hits). **The agent authenticates every request with the signed-in
+   user's Supabase token and takes the business from it**, so always send the token: browser
+   code calls `agentFetch` (`app/lib/api/agent-auth.ts`), server routes pass
+   `await requestAccessToken(request)` (`agent-auth.server.ts`) to `callAgent`. A plain
+   `fetch` to the agent gets 401. Links and redirects cannot carry a header, so they go
+   through an app route that asks the agent as the user (see `api.integrations.zoho.connect`).
+   Details and the machine-only routes: `apps/ai_agent/CLAUDE.md`.
 3. **Direct-to-Supabase reads** — `.server.ts` loaders (`dashboard.server.ts`,
    `inventory.server.ts`, `orders.server.ts`, `invoices.server.ts`, etc.) query Supabase
    directly, bypassing the AI agent, **as the signed-in user**:
@@ -189,6 +195,8 @@ last, in the `mutations` project, restoring what they change (helpers in `e2e/he
 don't change the seeded user's password (it signs every session out; use a throwaway user), and
 don't remove seeded rows. The stand-in agent (`e2e/stand-in-agent.ts`) answers the server-side
 agent calls; calls the browser makes to the agent are mocked in the spec with `page.route`.
+Both refuse a request without a user token, as the real agent does (the browser mocks must also
+allow the `authorization` header in their CORS reply: `*` does not cover it).
 `e2e/README.md` has the layout.
 
 ### Backend structure (`apps/ai_agent/`)

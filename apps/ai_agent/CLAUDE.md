@@ -11,6 +11,7 @@ and accounting. It lives in a pnpm/Poetry hybrid monorepo — the frontend
 unless a task explicitly touches it.
 
 This service does three distinct jobs:
+
 1. **Chat agent** — a LangGraph StateGraph that answers analytics questions
    (SQL), generic questions, and extracts structured data from uploaded documents.
 2. **ETL / normalization pipeline** — pulls transactions from external providers
@@ -22,7 +23,7 @@ This service does three distinct jobs:
 
 ## Commands
 
-All commands run from `apps/ai_agent/` (Poetry is *not* usable from the repo root).
+All commands run from `apps/ai_agent/` (Poetry is _not_ usable from the repo root).
 
 ```bash
 # Install deps
@@ -73,7 +74,40 @@ account_mapping, langgraph_service, mcp_client, etc.) have no test coverage yet.
   both under `poetry run uvicorn` and under the LangGraph CLI's own import context.
 - `langgraph.json` — declares the standalone LangGraph graph
   (`ai_agent.agents.graph_agent:agent`) served independently of `main.py`'s FastAPI
-  app when run via `langgraph dev`/LangGraph Platform.
+  app when run via `langgraph dev`/LangGraph Platform. It also registers the auth
+  handler (`auth.path` -> `src/ai_agent/auth.py`) and the CORS origins.
+
+### Authentication and authorization (every request)
+
+Nothing here trusts the caller's word about who they are or which business they mean.
+
+- **Users:** a Supabase access token in `Authorization: Bearer`, verified locally against
+  the project's JWKS (`core/auth.py`; `SUPABASE_JWT_SECRET` only for legacy HS256 projects).
+  The business is looked up from the verified user id (`entities.owner_user_id`), never taken
+  from the request.
+- **LangGraph API** (threads, runs): `auth.py` rejects requests without a valid token (401),
+  stamps new threads with their owner and filters every thread/run to it. The auth file is
+  loaded by path, so it uses absolute imports; token verification runs in a thread because
+  the dev server rejects blocking calls on the event loop.
+- **REST routes** (`api/routes`, mounted by both `main.py` and `langgraph.json`'s `http.app`):
+  `api/deps.py` provides `current_user`, `entity_guard` (any `entity_id` in the query, path,
+  JSON body or form must be the caller's, else 403), `owned_*` dependencies for routes that
+  name a record by id alone (404 if it is another business's), and `require_internal`
+  (`X-Internal-Key` = `INTERNAL_API_KEY`; with no key configured those routes are closed).
+  Machine-only routes (`/integrations/entities`, `/embeddings/*`, `/normalization/*` except
+  `reprocess-failed`, `/inngest/*`, `/accounting/health-checks`) use the internal key.
+  Public: `/`, `/health`, `/stats`, the Zoho OAuth callback (signed `state`), and
+  `/api/inngest` (the Inngest SDK verifies request signatures; set `INNGEST_SIGNING_KEY` and
+  not `INNGEST_DEV` in production).
+- **Adding a route:** put it on a router that already carries a guard, or add one.
+  `tests/test_api_auth.py` walks the whole API and fails on any route without a guard, and
+  on any anonymous request that is not refused. Its route walk depends on FastAPI's private
+  `effective_route_contexts()`; a count assertion fails loudly if that changes.
+- Settings: `INTERNAL_API_KEY`, `CORS_ALLOW_ORIGINS` (comma-separated, default the local dev
+  origins), `SUPABASE_JWT_SECRET` (legacy only). A variable set in the real environment wins
+  over `.env` (`load_dotenv(override=False)`).
+- The browser app forwards the user's token (see root CLAUDE.md); the old chat page signs its
+  LangGraph requests with a client `onRequest` hook until the chat panel replaces it.
 
 ### Chat agent (`agents/graph_agent.py`)
 
@@ -165,10 +199,12 @@ existing pattern:
 - `integrations/zoho_calendar/oauth.py` — the OAuth2 mechanics: authorize-URL
   building, code↔token exchange, and a signed `state` param
   (`base64(entity_id|nonce|exp)` + `.` + `hmac_sha256(zoho_client_secret, payload)`,
-  10-minute TTL). The signing matters because the integrations router has no
-  request auth and `entity_id` is otherwise attacker-controlled during the
-  callback — an unsigned `state` would let anyone attach their own Zoho
-  calendar to someone else's `entity_id`.
+  10-minute TTL). The signing matters because the callback is reached by Zoho
+  redirecting the browser, so it carries no bearer token — an unsigned `state` would
+  let anyone attach their own Zoho calendar to someone else's `entity_id`. The `state` is only
+  minted by `GET /oauth/zoho_calendar/authorize-url`, which requires a signed-in user and
+  uses the business from their token (the app's `/api/integrations/zoho/connect` route calls
+  it and redirects, since a plain link cannot send a token).
 - **`zoho_client_id`/`zoho_client_secret` are app-wide config (`core/config.py`/
   `.env`), not a per-connection secret** — the first exception to the pattern
   `docs/secure-api-key-workflow.md` documents, where every other provider's
@@ -176,12 +212,12 @@ existing pattern:
   per `external_sources` row. Here, ThreadWise itself is the registered OAuth
   client (one Zoho API Console app), and many different entities each
   authorize it independently — the client_id/secret identify the
-  *application* to Zoho, not any one user's calendar, the same relationship
+  _application_ to Zoho, not any one user's calendar, the same relationship
   as any "Sign in with Google" button on a multi-tenant SaaS. Each entity's
   own secret — the refresh token Zoho issues after their own consent — still
   goes through the exact same per-source Vault storage as every other
   provider's `api_key` field, just as a `{"refresh_token": ..., "api_domain":
-  ...}` JSON blob instead of a `client_id`/`client_secret` pair.
+...}` JSON blob instead of a `client_id`/`client_secret` pair.
 - Zoho-specific quirks handled explicitly rather than assumed, each the kind
   of thing that fails silently if you don't know to check for it: the token
   endpoint returns HTTP 200 with an `{"error": ...}` body on failure (so
@@ -212,6 +248,7 @@ existing pattern:
 ### Accounting engine (`services/journal_service.py`, `services/account_mapping.py`)
 
 Double-entry journals are generated from normalized records:
+
 - **Accrual journal**: from a captured payment — debits clearing (net of gateway
   fees) + bank charges, credits revenue/shipping/tax from the linked order.
 - **Settlement journal**: from an inbound gateway payout (Stripe/PayPal → Revolut)
@@ -229,14 +266,13 @@ accounts (`is_header = True`) are never valid posting targets. Legacy normalizer
 review rather than mis-posted. Debits must equal credits within `BALANCE_TOLERANCE`
 (`Decimal("0.01")`); accrual journals support `reverse_journal()`.
 
-### Sub-agents & tools
+### Tools
 
-`tools/sub_agents.py` and `agents/middleware.py` hold auxiliary agents (e.g. a
-query-qualification sub-agent exposed as a `@tool`) that the main graph or
-`create_agent`-based analytics agent can call — a different composition pattern
-from the StateGraph nodes in `graph_agent.py`. `agents/agent.py` predates
-`graph_agent.py`; check which is actually wired into `langgraph.json` /
-`main.py` before assuming either is dead code.
+`tools/sql_tools.py` is the analytics agent's SQL toolkit. It runs free-form SQL on a
+direct Postgres connection that is **not** scoped to the caller's business; replacing it with
+RLS-scoped access is the next step in `docs/chat-redesign-plan.md` (Phase 1). The old
+`tools/sub_agents.py`, `agents/middleware.py`, `core/nodes.py` and `core/state.py` were
+unused and have been removed.
 
 ## Environment
 
@@ -244,7 +280,8 @@ Config is centralized in `core/config.py` (`pydantic_settings.BaseSettings`,
 loaded from `.env`, unknown keys ignored). Notable settings: `database_url`
 (direct Postgres), `supabase_url`/`supabase_key` (PostgREST), `supabase_access_token`
 (PAT for MCP auth), `local_llm_base_url`, `inngest_event_key`/`inngest_signing_key`,
-`pinecone_api_key` (vector store for embeddings/RAG), `zoho_client_id`/
+`pinecone_api_key` (vector store for embeddings/RAG), `internal_api_key` and
+`cors_allow_origins` (see "Authentication and authorization"), `zoho_client_id`/
 `zoho_client_secret`/`zoho_redirect_uri`/`zoho_accounts_domain` (see "OAuth
 providers" above — app-wide, not per-connection), `frontend_url` (where the
 Zoho OAuth callback redirects the browser back to after connecting — this
