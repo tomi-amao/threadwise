@@ -192,8 +192,8 @@ no credentials-only path to a specific person's own calendar; it needs real
 3-legged OAuth2, which is new infrastructure, not an extension of the
 existing pattern:
 
-- `api/routes/oauth.py` — `/oauth/zoho_calendar/start` (redirects to Zoho's
-  consent screen) and `/oauth/zoho_calendar/callback` (exchanges the code,
+- `api/routes/oauth.py` — `/oauth/zoho_calendar/authorize-url` (signed-in user; returns
+  Zoho's consent URL) and `/oauth/zoho_calendar/callback` (exchanges the code,
   creates the "ThreadWise Deadlines" calendar, persists the `external_sources`
   row). Any future OAuth provider's routes belong here too, not a new file.
 - `integrations/zoho_calendar/oauth.py` — the OAuth2 mechanics: authorize-URL
