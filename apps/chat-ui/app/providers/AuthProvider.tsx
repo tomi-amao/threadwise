@@ -201,6 +201,10 @@ export function AuthProvider({ children }: AuthProviderProps) {
         return { error: entityError as unknown as AuthError };
       }
 
+      // The sign-in event fired before the business existed, so the provider has none yet.
+      // Load it now, or the new account would show no business name and skip onboarding.
+      await fetchProfileAndEntity(authData.user);
+
       return { error: null };
     } catch (err) {
       return { error: err as AuthError };

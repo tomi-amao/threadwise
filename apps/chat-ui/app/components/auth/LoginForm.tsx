@@ -1,17 +1,14 @@
 /**
- * Login Form Component
- *
- * Handles user authentication with email and password.
- * Maintains the existing dark theme aesthetic.
+ * Login Form Component: sign in with email and password.
  */
 
-import React, { useState } from 'react';
-import { useNavigate, Link } from 'react-router';
-import { EnvelopeSimple, Lock, SpinnerGap, SignIn } from 'phosphor-react';
-import { useAuth } from '~/providers/AuthProvider';
+import { useState } from 'react';
+import { Link, useNavigate } from 'react-router';
 import { Button } from '~/components/ui/button';
+import { Field } from '~/components/ui/field';
 import { Input } from '~/components/ui/input';
-import { Label } from '~/components/ui/label';
+import { PasswordInput } from '~/components/ui/password-input';
+import { useAuth } from '~/providers/AuthProvider';
 
 export function LoginForm() {
   const navigate = useNavigate();
@@ -25,110 +22,73 @@ export function LoginForm() {
     e.preventDefault();
     setError(null);
     setLoading(true);
-
     try {
       const { error } = await signIn(email, password);
-      if (error) {
-        setError(error.message);
-      } else {
-        navigate('/dashboard');
-      }
-    } catch (err) {
-      setError('An unexpected error occurred');
+      if (error) setError(error.message);
+      else navigate('/dashboard');
+    } catch {
+      setError('Something went wrong. Try again in a moment.');
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <div className="w-full max-w-md">
-      <div className="rounded-2xl border border-border bg-card/50 backdrop-blur-sm p-8 shadow-xl">
-        <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-primary/10 mb-4">
-            <SignIn size={32} className="text-primary" weight="duotone" />
-          </div>
-          <h1 className="text-2xl font-bold text-foreground">Welcome back</h1>
-          <p className="text-muted-foreground mt-2">
-            Sign in to access your business intelligence dashboard
+    <div className="w-full max-w-[400px]">
+      <div className="eyebrow">Sign in</div>
+      <h1 className="mt-3 font-serif text-[clamp(34px,4vw,44px)] font-light leading-[1.05] tracking-[-0.03em]">
+        Welcome back.
+      </h1>
+      <p className="mt-3 text-[16px] text-text-2">Pick up where the books left off.</p>
+
+      <form onSubmit={handleSubmit} className="mt-8 space-y-5" noValidate>
+        <Field label="Email">
+          <Input
+            type="email"
+            autoComplete="email"
+            placeholder="you@company.com"
+            value={email}
+            onChange={e => setEmail(e.target.value)}
+            required
+          />
+        </Field>
+        <Field label="Password">
+          <PasswordInput
+            autoComplete="current-password"
+            value={password}
+            onChange={e => setPassword(e.target.value)}
+            required
+          />
+        </Field>
+
+        {error && (
+          <p
+            role="alert"
+            className="rounded-xl border border-destructive/30 bg-destructive/5 px-4 py-3 text-[14px] text-destructive"
+          >
+            {error}
           </p>
-        </div>
+        )}
 
-        <form onSubmit={handleSubmit} className="space-y-5">
-          <div className="space-y-2">
-            <Label htmlFor="email" className="text-sm font-medium">
-              Email address
-            </Label>
-            <div className="relative">
-              <EnvelopeSimple
-                size={20}
-                className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground"
-              />
-              <Input
-                id="email"
-                type="email"
-                placeholder="you@company.com"
-                value={email}
-                onChange={e => setEmail(e.target.value)}
-                className="pl-10"
-                required
-              />
-            </div>
-          </div>
+        <Button
+          type="submit"
+          size="lg"
+          className="w-full"
+          disabled={loading || !email || !password}
+        >
+          {loading ? 'Signing in…' : 'Sign in'}
+        </Button>
+      </form>
 
-          <div className="space-y-2">
-            <Label htmlFor="password" className="text-sm font-medium">
-              Password
-            </Label>
-            <div className="relative">
-              <Lock
-                size={20}
-                className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground"
-              />
-              <Input
-                id="password"
-                type="password"
-                placeholder="••••••••"
-                value={password}
-                onChange={e => setPassword(e.target.value)}
-                className="pl-10"
-                required
-              />
-            </div>
-          </div>
-
-          {error && (
-            <div className="p-3 rounded-lg bg-destructive/10 border border-destructive/20 text-destructive text-sm">
-              {error}
-            </div>
-          )}
-
-          <Button type="submit" className="w-full" size="lg" disabled={loading}>
-            {loading ? (
-              <>
-                <SpinnerGap size={20} className="animate-spin" />
-                Signing in...
-              </>
-            ) : (
-              <>
-                <SignIn size={20} />
-                Sign in
-              </>
-            )}
-          </Button>
-        </form>
-
-        <div className="mt-6 text-center">
-          <p className="text-sm text-muted-foreground">
-            Don't have an account?{' '}
-            <Link
-              to="/signup"
-              className="text-primary hover:text-primary/80 font-medium transition-colors"
-            >
-              Create one now
-            </Link>
-          </p>
-        </div>
-      </div>
+      <p className="mt-8 text-[15px] text-text-2">
+        New here?{' '}
+        <Link
+          to="/signup"
+          className="text-accent-text underline underline-offset-4 hover:text-foreground"
+        >
+          Create an account
+        </Link>
+      </p>
     </div>
   );
 }

@@ -523,3 +523,39 @@ export async function readCollectionByName(name: string) {
 export async function countRows(table: string, query: string): Promise<number> {
   return (await rest<unknown[]>('GET', table, `select=id&${query}`)).length;
 }
+
+// ─── Sign-up (a user and business a test creates, then removes) ────────────────────────────────
+
+/** Remove a business by name and the auth user with this email, whatever the test got up to. */
+export async function deleteSignupUser(email: string, businessName: string): Promise<void> {
+  await rest('DELETE', 'entities', `name=eq.${encodeURIComponent(businessName)}`);
+  const list = await fetch(`${url}/auth/v1/admin/users?per_page=200`, {
+    headers: { apikey: key, Authorization: `Bearer ${key}` },
+  });
+  const body = (await list.json()) as { users?: { id: string; email: string }[] };
+  for (const u of body.users ?? []) {
+    if (u.email === email) {
+      await fetch(`${url}/auth/v1/admin/users/${u.id}`, {
+        method: 'DELETE',
+        headers: { apikey: key, Authorization: `Bearer ${key}` },
+      });
+    }
+  }
+}
+
+export async function readEntityByName(name: string) {
+  const rows = await rest<
+    {
+      id: string;
+      industry: string | null;
+      country: string | null;
+      employee_count: string | null;
+      onboarding_completed: boolean;
+    }[]
+  >(
+    'GET',
+    'entities',
+    `select=id,industry,country,employee_count,onboarding_completed&name=eq.${encodeURIComponent(name)}`
+  );
+  return rows[0];
+}
