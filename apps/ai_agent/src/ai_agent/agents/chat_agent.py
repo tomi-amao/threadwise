@@ -19,7 +19,7 @@ safe to import without API keys. The server's graph is `agents/chat_graph.py:age
 
 import datetime as dt
 import logging
-from typing import Any, NotRequired, cast
+from typing import Annotated, Any, NotRequired, cast
 
 import psycopg2  # type: ignore[import-untyped]
 from langchain.agents import AgentState, create_agent
@@ -39,18 +39,27 @@ from langchain.chat_models import init_chat_model
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langgraph.config import get_config
+from langgraph.graph.ui import AnyUIMessage, ui_message_reducer
 from langgraph.types import Checkpointer
 
 from ..core.config import settings
-from ..tools.data_tools import DATA_TOOLS, financial_year, load_profile, today
+from ..tools.ask_user import ask_user
+from ..tools.data_tools import (
+    DATA_TOOLS,
+    financial_year,
+    load_coverage,
+    load_profile,
+    today,
+)
 from ..tools.document_tools import search_documents
 from ..tools.identity import agent_user_from_config
 from ..tools.sql_tools import SQL_TOOLS
 from .chat_prompt import SYSTEM_PROMPT
+from .ui_middleware import FollowUpsMiddleware, GenerativeUIMiddleware
 
 logger = logging.getLogger(__name__)
 
-TOOLS = [*DATA_TOOLS, search_documents, *SQL_TOOLS]
+TOOLS = [*DATA_TOOLS, search_documents, *SQL_TOOLS, ask_user]
 
 ATTACHMENT_REPLY = (
     "I can't read attached files in chat yet. To add an invoice or receipt, upload it "
@@ -65,9 +74,16 @@ KEEP_MESSAGES = 20
 
 
 class ChatState(AgentState):
-    """The agent's state, plus the business profile loaded at the start of each turn."""
+    """The agent's state, plus what the middleware adds.
+
+    `business`: the profile and data coverage, loaded at the start of each turn.
+    `guard_answered`: this turn was answered before the model (no user, an attachment).
+    `ui`: generative UI messages (`push_ui_message`), merged by `ui_message_reducer`.
+    """
 
     business: NotRequired[dict[str, Any] | None]
+    guard_answered: NotRequired[bool]
+    ui: NotRequired[Annotated[list[AnyUIMessage], ui_message_reducer]]
 
 
 def _has_attachment(message: Any) -> bool:
@@ -94,6 +110,16 @@ def business_context(business: dict[str, Any] | None, on: dt.date) -> str:
             + ("yes" if business.get("vat_registered") else "no or not set")
             + ".",
         ]
+        covered = [
+            f"{c['data']} {c['first']} to {c['last']} ({c['rows']})"
+            for c in business.get("coverage") or []
+            if c.get("rows")
+        ]
+        empty = [c["data"] for c in business.get("coverage") or [] if not c.get("rows")]
+        if covered:
+            lines.append("Data on record: " + "; ".join(covered) + ".")
+        if empty:
+            lines.append("No data yet for: " + ", ".join(empty) + ".")
     return "\n".join(lines)
 
 
@@ -107,21 +133,30 @@ class BusinessContextMiddleware(AgentMiddleware[ChatState]):
         try:
             user = agent_user_from_config(get_config())
         except PermissionError as exc:
-            return {"messages": [AIMessage(content=str(exc))], "jump_to": "end"}
+            return {
+                "messages": [AIMessage(content=str(exc))],
+                "guard_answered": True,
+                "jump_to": "end",
+            }
 
         last_human = next(
             (m for m in reversed(state["messages"]) if isinstance(m, HumanMessage)),
             None,
         )
         if last_human is not None and _has_attachment(last_human):
-            return {"messages": [AIMessage(content=ATTACHMENT_REPLY)], "jump_to": "end"}
+            return {
+                "messages": [AIMessage(content=ATTACHMENT_REPLY)],
+                "guard_answered": True,
+                "jump_to": "end",
+            }
 
         try:
             profile = await load_profile(user)
+            coverage = await load_coverage(user)
         except (psycopg2.Error, PermissionError, RuntimeError) as exc:
             # The tools will say what is wrong; the prompt just goes without the profile.
             logger.warning("Business profile not loaded: %s", type(exc).__name__)
-            return {"business": None}
+            return {"business": None, "guard_answered": False}
         start, end = financial_year(
             today(), profile.get("year_end_month"), profile.get("year_end_day")
         )
@@ -132,7 +167,9 @@ class BusinessContextMiddleware(AgentMiddleware[ChatState]):
                 "country": profile.get("country"),
                 "vat_registered": profile.get("vat_registered"),
                 "financial_year": {"start": start.isoformat(), "end": end.isoformat()},
-            }
+                "coverage": coverage,
+            },
+            "guard_answered": False,
         }
 
     async def awrap_model_call(self, request: ModelRequest, handler: Any) -> Any:
@@ -170,9 +207,12 @@ def build_agent(
     fallback_model: str | BaseChatModel | None = None,
     small_model: str | BaseChatModel | None = None,
     use_fallback: bool = True,
+    follow_ups: bool = True,
     checkpointer: Checkpointer = None,
 ) -> Any:
     """The chat agent graph. Models default to the `agent_*` settings.
+
+    `follow_ups=False` leaves out the end-of-turn follow-up step (one small-model call).
 
     No checkpointer by default: the LangGraph server supplies its own (with the TTL
     from langgraph.json). Tests pass an in-memory one.
@@ -191,11 +231,15 @@ def build_agent(
         ModelCallLimitMiddleware(run_limit=MODEL_CALLS_PER_TURN, exit_behavior="end"),
         ToolCallLimitMiddleware(run_limit=TOOL_CALLS_PER_TURN),
     ]
+    if follow_ups:
+        middleware.append(FollowUpsMiddleware(small, TOOLS))
     if use_fallback and fallback:
         # Outside the retry: the main model is retried first, then the fallback is tried.
         middleware.append(ModelFallbackMiddleware(_model(fallback)))
     middleware += [
         ModelRetryMiddleware(max_retries=2, on_failure="error"),
+        # Outside the error handler, so it only sees results that are not errors.
+        GenerativeUIMiddleware(),
         # Errors outside, retries inside: a dropped connection is retried, anything
         # left becomes an error message to the model instead of failing the turn.
         ToolErrorMiddleware(tool_error_message),

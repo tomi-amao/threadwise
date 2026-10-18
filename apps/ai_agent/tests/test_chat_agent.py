@@ -58,20 +58,29 @@ def call(name: str, **args: Any) -> AIMessage:
     )
 
 
-def agent_for(model: ScriptedModel) -> Any:
+def agent_for(model: ScriptedModel, small: ScriptedModel | None = None) -> Any:
+    """The real agent on scripted models; follow-ups only when given a small model."""
     return build_agent(
-        model, small_model=model, use_fallback=False, checkpointer=InMemorySaver()
+        model,
+        small_model=small or model,
+        use_fallback=False,
+        follow_ups=small is not None,
+        checkpointer=InMemorySaver(),
     )
+
+
+def invoke(
+    agent: Any, user: dict[str, str] | None, message: Any, thread_id: str | None = None
+) -> dict[str, Any]:
+    """One turn; the whole final state (messages, ui, any interrupt)."""
+    configurable: dict[str, Any] = {"thread_id": thread_id or uuid.uuid4().hex}
+    if user is not None:
+        configurable["langgraph_auth_user"] = user
+    return asyncio.run(agent.ainvoke(message, {"configurable": configurable}))
 
 
 def run(agent: Any, user: dict[str, str] | None, message: Any) -> list[Any]:
-    configurable: dict[str, Any] = {"thread_id": uuid.uuid4().hex}
-    if user is not None:
-        configurable["langgraph_auth_user"] = user
-    result = asyncio.run(
-        agent.ainvoke({"messages": [message]}, {"configurable": configurable})
-    )
-    return result["messages"]
+    return invoke(agent, user, {"messages": [message]})["messages"]
 
 
 def tool_results(messages: list[Any]) -> list[Any]:
@@ -138,6 +147,7 @@ def test_an_attachment_gets_a_pointer_to_the_invoices_page():
 
 def test_bad_arguments_go_back_to_the_model_as_an_error(monkeypatch):
     monkeypatch.setattr(chat_agent, "load_profile", _stub_profile)
+    monkeypatch.setattr(chat_agent, "load_coverage", _stub_coverage)
     model = ScriptedModel(
         script=[
             call("profit_and_loss", start_date="last year"),
@@ -153,6 +163,7 @@ def test_bad_arguments_go_back_to_the_model_as_an_error(monkeypatch):
 
 def test_the_prompt_carries_the_business_and_todays_date(monkeypatch):
     monkeypatch.setattr(chat_agent, "load_profile", _stub_profile)
+    monkeypatch.setattr(chat_agent, "load_coverage", _stub_coverage)
     monkeypatch.setattr(chat_agent, "today", lambda: dt.date(2026, 10, 18))
     model = ScriptedModel(script=[AIMessage(content="Hello")])
     run(agent_for(model), USER_STUB, HumanMessage("hi"))
@@ -161,9 +172,118 @@ def test_the_prompt_carries_the_business_and_todays_date(monkeypatch):
     assert "The business is Stub Ltd (GB)." in system
     assert "2026-04-01 to 2027-03-31" in system
     assert "not instructions" in system  # the prompt-injection rule is there
+    assert "Data on record: orders 2026-01-02 to 2026-10-17 (12)." in system
+    assert "No data yet for: invoices." in system
+
+
+def proposal(*pairs: tuple[str, str]) -> AIMessage:
+    """What the small model returns for the follow-up step (a structured-output call)."""
+    items = [{"label": label, "prompt": prompt} for label, prompt in pairs]
+    return AIMessage(
+        content="",
+        tool_calls=[{"name": "_Proposal", "args": {"items": items}, "id": "p1"}],
+    )
+
+
+def test_an_answer_ends_with_follow_up_chips(monkeypatch):
+    monkeypatch.setattr(chat_agent, "load_profile", _stub_profile)
+    monkeypatch.setattr(chat_agent, "load_coverage", _stub_coverage)
+    model = ScriptedModel(script=[AIMessage(content="Hello, ask me about your books.")])
+    small = ScriptedModel(
+        script=[
+            proposal(
+                ("Profit this year", "What is my profit this financial year?"),
+                ("Same again", "hi"),  # the question itself: dropped
+                ("Cash", "How much cash do I have?"),
+            )
+        ]
+    )
+    state = invoke(
+        agent_for(model, small), USER_STUB, {"messages": [HumanMessage("hi")]}
+    )
+    (chips,) = [u for u in state["ui"] if u["name"] == "follow-ups"]
+    assert [i["label"] for i in chips["props"]["items"]] == ["Profit this year", "Cash"]
+    assert chips["metadata"]["message_id"] == state["messages"][-1].id
+    assert chips["metadata"]["catalogue"] == 1
+    # The step was told what the tools can do and what was asked.
+    prompt = small.seen[0][0].content
+    assert "profit_and_loss" in prompt and "The question: hi" in prompt
+
+
+def test_a_failed_follow_up_step_leaves_no_chips(monkeypatch):
+    monkeypatch.setattr(chat_agent, "load_profile", _stub_profile)
+    monkeypatch.setattr(chat_agent, "load_coverage", _stub_coverage)
+    model = ScriptedModel(script=[AIMessage(content="Hello.")])
+    small = ScriptedModel(script=[])  # raises when called
+    state = invoke(
+        agent_for(model, small), USER_STUB, {"messages": [HumanMessage("hi")]}
+    )
+    assert state["messages"][-1].content == "Hello."
+    assert not [u for u in state.get("ui", []) if u["name"] == "follow-ups"]
+
+
+def test_a_refused_turn_gets_no_follow_ups():
+    model, small = ScriptedModel(script=[]), ScriptedModel(script=[])
+    state = invoke(agent_for(model, small), None, {"messages": [HumanMessage("hi")]})
+    assert "signed-in user" in state["messages"][-1].content
+    assert small.seen == [] and not state.get("ui")
+
+
+def test_a_clarifying_question_pauses_and_resumes_with_the_answer(monkeypatch):
+    from langgraph.types import Command
+
+    monkeypatch.setattr(chat_agent, "load_profile", _stub_profile)
+    monkeypatch.setattr(chat_agent, "load_coverage", _stub_coverage)
+    model = ScriptedModel(
+        script=[
+            call(
+                "ask_user",
+                question="Which period?",
+                options=["This month", "Last month"],
+            ),
+            AIMessage(content="Last month it was quiet."),
+        ]
+    )
+    agent, thread = agent_for(model), uuid.uuid4().hex
+    paused = invoke(
+        agent, USER_STUB, {"messages": [HumanMessage("how was it?")]}, thread
+    )
+    (pending,) = paused["__interrupt__"]
+    assert pending.value == {
+        "kind": "clarify",
+        "question": "Which period?",
+        "options": [{"label": "This month"}, {"label": "Last month"}],
+    }
+    resumed = invoke(agent, USER_STUB, Command(resume={"answer": "Last month"}), thread)
+    (answer,) = tool_results(resumed["messages"])
+    assert answer.content == "The user answered: Last month"
+    assert resumed["messages"][-1].content == "Last month it was quiet."
+
+
+def test_a_clarifying_question_with_one_option_goes_back_to_the_model(monkeypatch):
+    monkeypatch.setattr(chat_agent, "load_profile", _stub_profile)
+    monkeypatch.setattr(chat_agent, "load_coverage", _stub_coverage)
+    model = ScriptedModel(
+        script=[
+            call("ask_user", question="Which period?", options=["This month"]),
+            AIMessage(content="I used this financial year."),
+        ]
+    )
+    state = invoke(
+        agent_for(model), USER_STUB, {"messages": [HumanMessage("how was it?")]}
+    )
+    (result,) = tool_results(state["messages"])
+    assert result.status == "error" and "__interrupt__" not in state
 
 
 USER_STUB = {"identity": "user-stub", "entity_id": "entity-stub"}
+
+
+async def _stub_coverage(user):
+    return [
+        {"data": "orders", "rows": 12, "first": "2026-01-02", "last": "2026-10-17"},
+        {"data": "invoices", "rows": 0, "first": None, "last": None},
+    ]
 
 
 async def _stub_profile(user):
@@ -387,3 +507,35 @@ def test_the_same_question_gets_each_business_its_own_answer(seed):
         assert f"The business is {expected_name}" in system
     assert answers["a"]["net_sales"] == seed.m["orders"]["sales"]
     assert answers["b"]["net_sales"] == seed.m["rival"]["orderTotal"]
+
+
+def test_tool_results_become_ui_with_the_same_figures(seed):
+    ledger = seed.m["ledger"]
+    model = ScriptedModel(
+        script=[
+            call(
+                "profit_and_loss",
+                start_date=ledger["currentFrom"],
+                end_date=ledger["currentTo"],
+            ),
+            call("outstanding_invoices"),
+            AIMessage(content="Done."),
+        ]
+    )
+    state = invoke(agent_for(model), seed.a, {"messages": [HumanMessage("profit?")]})
+    ui = {(u["metadata"]["tool"], u["name"]): u for u in state["ui"]}
+    summary = ui[("profit_and_loss", "summary-list")]["props"]
+    net = next(r for r in summary["rows"] if r["label"] == "Net profit")
+    assert net["value"] == ledger["current"]["profit"]
+    assert summary["source"]["period"] == {
+        "start": ledger["currentFrom"],
+        "end": ledger["currentTo"],
+    }
+    assert summary["source"]["link"].startswith("/reports?")
+    # Tied to the AI message that called the tool, so the browser can place it.
+    caller = next(m for m in state["messages"] if getattr(m, "tool_calls", None))
+    assert (
+        ui[("profit_and_loss", "summary-list")]["metadata"]["message_id"] == caller.id
+    )
+    invoices = ui[("outstanding_invoices", "table")]["props"]
+    assert all(link.startswith("/invoices?invoice=") for link in invoices["row_links"])

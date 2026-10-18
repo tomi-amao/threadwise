@@ -56,6 +56,7 @@ uses the **current financial year** (from `entities.year_end_month/day`).
 | `outstanding_invoices` | Owed to you (SALE), you owe (PURCHASE), overdue, the invoices               | `/invoices?tab=open&dir&view=overdue` |
 | `cash_position`        | Balance of each active bank account and the total                           | `/transactions`                       |
 | `search_transactions`  | Bank transactions by text, dates, direction, amount; count and totals       | `/transactions?q&from&to&direction`   |
+| `ask_user`             | Not data: pauses to ask a clarifying question (see Generative UI)           | none                                  |
 
 **They use the same definitions as the app's pages**, so the chat and the page cannot disagree:
 
@@ -103,15 +104,54 @@ In order (the first wraps the rest):
 | --------------------------- | -------------------------------------------------- | ------------------------------------------------------------------------ |
 | `BusinessContextMiddleware` | (ours)                                             | Refuse anonymous runs, deflect attachments, load and inject the business |
 | `SummarizationMiddleware`   | small model, after 60,000 tokens, keep 20 messages | Long threads stay within the context window                              |
+| `FollowUpsMiddleware`       | (ours) small model, after the turn                 | 2 to 4 follow-up questions as chips (see Generative UI)                  |
 | `ModelCallLimitMiddleware`  | 12 per turn, then end                              | Cost and runaway loops                                                   |
 | `ToolCallLimitMiddleware`   | 20 per turn                                        | Same; further calls get an error message                                 |
 | `ModelFallbackMiddleware`   | `agent_fallback_model`                             | The main model is down                                                   |
 | `ModelRetryMiddleware`      | 2 retries, `on_failure="error"`                    | Transient model errors; `"error"` so the fallback gets its turn          |
+| `GenerativeUIMiddleware`    | (ours)                                             | Each tool result becomes a card (see Generative UI)                      |
 | `ToolErrorMiddleware`       | `tool_error_message`                               | A tool failure becomes a message to the model, without internal detail   |
 | `ToolRetryMiddleware`       | 2 retries on `psycopg2.OperationalError`           | A dropped database connection                                            |
 
 Business context is loaded once per turn into the `business` state field (`ChatState`), so the
-prompt carries the name, currency, country, VAT status and financial year without a tool call.
+prompt carries the name, currency, country, VAT status, financial year and which dates each kind
+of data covers, without a tool call.
+
+## Generative UI
+
+Charts, tables and figures under an answer are **built from tool results, not by a model**, so they
+cannot disagree with the answer. They reach the browser as LangGraph UI messages
+(`push_ui_message`, the `ui` state field and the `custom` stream).
+
+- **Catalogue** (`ui/catalogue.py`): `metric`, `bar-chart`, `table`, `summary-list`,
+  `follow-ups`, and the `clarify` interrupt. Pydantic models with `extra="forbid"`; links must be
+  in-app paths. Every data component carries a `source` (tool, label, period or as-of date, link).
+  `CATALOGUE_VERSION` goes in each message's metadata.
+- **Presenters** (`ui/presenters.py`): one pure function per tool, result in, components out.
+  Table rows link to the record (`/invoices?invoice=<id>` and so on). A tool with no presenter
+  (`get_business_profile`, `search_documents`, `list_tables`) shows nothing.
+- **`GenerativeUIMiddleware`** pushes them after each successful tool call, tied to the AI message
+  that made the call (`metadata.message_id`), with an id of `<tool_call_id>-<n>`.
+- **Follow-ups** (`FollowUpsMiddleware`): after each answered turn, one structured-output call to the
+  small model, given the question, this turn's tool results, the answer and the tool list. Repeats
+  and the question itself are dropped; fewer than two left means no chips. Pushed as a
+  `follow-ups` message on the final answer. Skipped when the guard answered the turn.
+- **Clarifying questions** (`tools/ask_user.py`): the model calls `ask_user(question, options)`,
+  which raises an interrupt with a `Clarify` payload. The browser resumes with
+  `Command(resume={"answer": "..."})` (a chip, or typed text), and the tool returns the answer.
+- **The contract**: `poetry run python -m ai_agent.ui.contract` writes
+  `apps/chat-ui/app/components/assistant/ui-contract.json` (JSON Schemas plus examples made by the
+  real presenters). `tests/test_ui_contract.py` fails when it is stale; the frontend's
+  `e2e/assistant-contract.spec.ts` fails when its Zod schemas (`components/assistant/catalogue.ts`)
+  name different fields, required fields, enums or types, or reject an example.
+
+### Adding or changing a component
+
+1. Change the model in `ui/catalogue.py` (and `COMPONENTS`), and the presenter that fills it.
+2. Mirror it in `apps/chat-ui/app/components/assistant/catalogue.ts` and render it in `cards.tsx`.
+3. `poetry run python -m ai_agent.ui.contract`, then run `tests/test_ui_contract.py` and
+   `pnpm exec playwright test assistant-contract.spec.ts`.
+4. A change an older browser cannot render: bump `CATALOGUE_VERSION` on both sides.
 
 ## Models
 
@@ -149,7 +189,9 @@ business.
 5. Raise `ValueError` for bad arguments (the model is told and can retry); let database errors
    raise (the middleware handles them).
 6. Add it to the module's list (`DATA_TOOLS`) and to the prompt's list of typed tools.
-7. Test it in `tests/test_chat_agent.py` against the manifest, for both seeded businesses.
+7. If its result should show as a card, add a presenter (`ui/presenters.py`) and a sample result
+   in `ui/contract.py`, then regenerate the contract.
+8. Test it in `tests/test_chat_agent.py` against the manifest, for both seeded businesses.
 
 ## Testing
 
@@ -163,8 +205,7 @@ seed, as in `docs/chat-redesign-plan.md` section 10.4.
 ## Not in chat (yet)
 
 - Document extraction: invoices are uploaded on the Invoices page (`services/invoice_service.py`).
-- Generative UI (charts and tables pushed mid-stream), follow-up questions, clarifying questions,
-  page context and actions with approval: Phases 3 to 5 of the plan.
+- Page context and actions with approval: Phase 5 of the plan.
 - The old `/chat` REST routes (`api/routes/chat.py`, `services/langgraph_service.py`) call the
   LangGraph server without a user token, so the auth layer refuses them. Only
   `/chat/data-sources` (which does not use LangGraph) is in use.

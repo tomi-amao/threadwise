@@ -32,10 +32,13 @@ export type StatementRow =
 export function Statement({
   rows,
   currency = 'GBP',
+  digits = 0,
   className,
 }: {
   rows: StatementRow[];
   currency?: string;
+  /** Decimal places: 0 for statements, 2 where pence matter (the assistant's figures). */
+  digits?: number;
   className?: string;
 }) {
   return (
@@ -92,7 +95,7 @@ export function Statement({
                   row.kind === 'grand' ? 'py-4' : 'py-2.5'
                 )}
               >
-                {formatAccounting(shown, currency)}
+                {formatAccounting(shown, currency, digits)}
               </td>
             </tr>
           );

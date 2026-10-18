@@ -15,8 +15,8 @@ const STAND_IN_URL = `http://127.0.0.1:${STAND_IN_PORT}`;
 
 /** Setup runs once; tests that change data run last, in their own project. */
 const PAGE_TEST_IGNORE = /auth\.setup\.ts|-edit\.spec\.ts/;
-/** The API-level security checks do not depend on width or theme: run them in one project. */
-const ONCE_ONLY = /rls\.spec\.ts/;
+/** Checks that do not depend on width or theme (API security, the UI contract): one project. */
+const ONCE_ONLY = /rls\.spec\.ts|assistant-contract\.spec\.ts/;
 
 const desktop = { ...devices['Desktop Chrome'], viewport: { width: 1280, height: 900 } };
 

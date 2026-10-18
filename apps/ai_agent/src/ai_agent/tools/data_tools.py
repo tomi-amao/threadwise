@@ -18,6 +18,10 @@ the page agree on a figure:
 
 Dates are YYYY-MM-DD and inclusive. With no dates, a tool uses the current financial
 year (from the business's year end).
+
+SQL here is fixed. Where an f-string builds it (marked `nosec B608`), it only inserts
+fragments this module chooses (a filter clause, a column picked from a `Literal`, a fixed
+expression); every value goes in as a psycopg2 parameter.
 """
 
 import asyncio
@@ -102,6 +106,28 @@ async def load_profile(user: AgentUser) -> dict[str, Any]:
     return rows[0]
 
 
+async def load_coverage(user: AgentUser) -> list[dict[str, Any]]:
+    """Which dates each kind of data covers, so nobody asks about an empty period."""
+    return await _records(
+        user,
+        """
+        select 'orders' as data, count(*) as rows,
+               min(created_at)::date as first, max(created_at)::date as last
+          from orders
+        union all
+        select 'posted journals', count(*), min(journal_date), max(journal_date)
+          from journals where status = 'posted'
+        union all
+        select 'bank transactions', count(*),
+               min(occurred_at)::date, max(occurred_at)::date
+          from financial_transactions
+        union all
+        select 'invoices', count(*), min(invoice_date)::date, max(invoice_date)::date
+          from invoices
+        """,
+    )
+
+
 async def _period(
     user: AgentUser, start_date: str | None, end_date: str | None
 ) -> tuple[dt.date, dt.date, dict[str, Any]]:
@@ -153,24 +179,7 @@ async def get_business_profile(runtime: ToolRuntime) -> dict[str, Any]:
     fy_start, fy_end = financial_year(
         today(), profile.get("year_end_month"), profile.get("year_end_day")
     )
-    coverage = await _records(
-        user,
-        """
-        select 'orders' as data, count(*) as rows,
-               min(created_at)::date as first, max(created_at)::date as last
-          from orders
-        union all
-        select 'posted journals', count(*), min(journal_date), max(journal_date)
-          from journals where status = 'posted'
-        union all
-        select 'bank transactions', count(*),
-               min(occurred_at)::date, max(occurred_at)::date
-          from financial_transactions
-        union all
-        select 'invoices', count(*), min(invoice_date)::date, max(invoice_date)::date
-          from invoices
-        """,
-    )
+    coverage = await load_coverage(user)
     return {
         "name": profile["name"],
         "currency": profile.get("currency") or LEDGER_CURRENCY,
@@ -228,7 +237,7 @@ async def profit_and_loss(
            and j.journal_date between %s and %s
          group by 1, 2, 3
          order by 3, 1
-        """,
+        """,  # nosec B608
         (start, end),
     )
     totals = {"revenue": 0.0, "cogs": 0.0, "expense": 0.0}
@@ -299,7 +308,7 @@ async def sales_summary(
            and created_at >= %s and created_at < %s
          group by 1
          order by 1
-        """,
+        """,  # nosec B608
         (lower, upper),
     )
 
@@ -350,6 +359,7 @@ async def top_products(
         user,
         f"""
         select l.product_name as product,
+               min(l.product_id::text) as product_id,
                coalesce(sum(l.quantity), 0) as units,
                coalesce(sum(l.total_price_amount), 0) as revenue,
                count(distinct o.id) as orders
@@ -360,7 +370,7 @@ async def top_products(
          group by 1
          order by {order_by} desc, 1
          limit %s
-        """,
+        """,  # nosec B608
         (lower, upper, max(1, min(limit, 50))),
     )
     return {
@@ -394,6 +404,7 @@ async def top_customers(
         select coalesce(nullif(trim(coalesce(c.first_name, '') || ' '
                                     || coalesce(c.last_name, '')), ''),
                         c.email, 'Unknown customer') as customer,
+               c.id::text as customer_id,
                count(*) as orders,
                coalesce(sum(o.grand_total_amount
                             - coalesce(o.refunded_total_amount, 0)), 0) as spent,
@@ -455,13 +466,13 @@ async def outstanding_invoices(
          where i.status in ('OPEN', 'PARTIALLY_PAID') {type_filter} {overdue_filter}
          group by 1
          order by 1
-        """,
+        """,  # nosec B608
         params,
     )
     invoices = await _records(
         user,
         f"""
-        select i.invoice_number, i.invoice_type as type, i.status,
+        select i.id::text as id, i.invoice_number, i.invoice_type as type, i.status,
                coalesce(c.company_name, c.name) as counterparty,
                i.gross_amount, coalesce(i.currency, 'GBP') as currency,
                i.invoice_date::date as invoice_date, i.due_date::date as due_date,
@@ -471,7 +482,7 @@ async def outstanding_invoices(
          where i.status in ('OPEN', 'PARTIALLY_PAID') {type_filter} {overdue_filter}
          order by i.due_date nulls last, i.invoice_number
          limit %(limit)s
-        """,
+        """,  # nosec B608
         params,
     )
     return {
@@ -587,14 +598,14 @@ async def search_transactions(
                coalesce(sum({amount}) filter (where t.direction = 'in'), 0) as total_in,
                coalesce(sum({amount}) filter (where t.direction = 'out'), 0) as total_out
           from financial_transactions t where {condition}
-        """,
+        """,  # nosec B608
         params,
         max_rows=1,
     )
     rows = await _records(
         user,
         f"""
-        select t.occurred_at::date as date, t.description,
+        select t.id::text as id, t.occurred_at::date as date, t.description,
                t.counterparty_name as payee, t.direction,
                {amount} as amount,
                coalesce(t.base_currency_code, t.currency_code) as currency,
@@ -604,7 +615,7 @@ async def search_transactions(
          where {condition}
          order by t.occurred_at desc
          limit %(limit)s
-        """,
+        """,  # nosec B608
         params,
     )
     return {

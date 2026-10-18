@@ -141,6 +141,14 @@ classifier, router or second "what chart?" LLM call.
   so `build_agent()` builds nothing at import; `agents/chat_graph.py` (what langgraph.json
   points at) calls it. Tests import `build_agent` and pass a scripted fake model.
 - **No checkpointer in code**: the LangGraph server supplies one (TTL in langgraph.json).
+- **Generative UI** (`ui/`): cards come from tool results through pure presenters
+  (`ui/presenters.py`), never from a model, pushed by `GenerativeUIMiddleware`; follow-up chips
+  come from one small-model call at the end of the turn (`FollowUpsMiddleware`); `ask_user`
+  pauses on an interrupt for a clarifying question. The props are Pydantic models
+  (`ui/catalogue.py`) mirrored as Zod in the frontend. After changing one, run
+  `poetry run python -m ai_agent.ui.contract` and update the Zod side:
+  `tests/test_ui_contract.py` and the frontend's `assistant-contract.spec.ts` fail otherwise.
+  Details: `docs/chat-agent.md`.
 - The "local" LLM (`core/config.py:get_local_llm`) is an OpenAI-compatible client
   pointed at `local_llm_base_url` (e.g. LM Studio); still used by one integrations route,
   not by the chat agent.

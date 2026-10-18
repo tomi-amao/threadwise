@@ -568,3 +568,40 @@ Open, for later phases:
   nothing uses them. It touches `main.py`, `health.py`, `integrations/` and the schemas, so do it
   as its own change, with `/chat/data-sources` going when the chat panel replaces the old page
   (Phase 4).
+
+## 11. Phase 3 result (2026-10-18)
+
+Done on `feat/chat-agent-redesign`. Details: `apps/ai_agent/docs/chat-agent.md`, "Generative UI".
+
+- **Catalogue**: `metric`, `bar-chart`, `table` (rows link to the record), `summary-list`,
+  `follow-ups`, and the `clarify` interrupt; Pydantic in `ai_agent/ui/catalogue.py`, Zod in
+  `apps/chat-ui/app/components/assistant/catalogue.ts`, version 1. Every data card carries a source
+  (tool, label, period or as-of date, in-app link).
+- **Tool-driven UI**: one pure presenter per tool; `GenerativeUIMiddleware` pushes the cards after
+  each successful call, tied to the calling AI message. No model call, so the card shows exactly the
+  tool's rows.
+- **Follow-ups**: `FollowUpsMiddleware`, one structured-output call to the small model after each
+  answered turn (question, this turn's tool results, the answer, the tool list, and the data
+  coverage now in the prompt). Repeats and the question are dropped; under two left gives no chips;
+  any failure gives no chips.
+- **Clarifying questions**: an `ask_user` tool that raises an interrupt with a `Clarify` payload,
+  resumed with `Command(resume={"answer": ...})`.
+- **Contract tests on both sides**: `poetry run python -m ai_agent.ui.contract` writes
+  `ui-contract.json` (JSON Schemas plus examples from the real presenters); pytest fails when it is
+  stale; `e2e/assistant-contract.spec.ts` fails when Zod names different fields, required fields,
+  enums or types (checked by temporarily adding a field), or rejects an example.
+- **Harness**: the cards, follow-up chips and clarify options are on `/ui-kit` (axe, overflow, both
+  themes, three widths); clicking a chip shows what it would send.
+- Checked with real Gemini against the local stack: the profit question produced a `summary-list`
+  and four follow-ups the tools can answer; "how did revenue go?" produced a monthly bar chart.
+
+Deviations: no `line-chart` or `link-card` yet (no tool needs a line chart, and every card's source
+row already carries the link); `proposal` waits for Phase 5. Page-dependent starter prompts are part
+of the panel (Phase 4). The model still sometimes repeats a card's figures in its text; prompt
+tuning, measured by the Phase 6 evals.
+
+Found on the way: in Phase 2 I reported bandit as clean, but that check ran on directories without
+`-r` and scanned nothing. `tools/data_tools.py` had seven B608 warnings (f-strings that insert only
+code-chosen fragments; values are parameters). They are now marked `nosec B608` with the reason in
+the module docstring. `bandit -r src/ -ll` still reports one pre-existing High
+(`services/embedding_service.py`, MD5), part of the backlog in 9.3.
