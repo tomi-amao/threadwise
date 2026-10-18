@@ -40,14 +40,13 @@ test('business details are saved, and emptied fields become unset', async ({ pag
   await page.getByLabel('Industry').selectOption('retail');
   await page.getByRole('button', { name: 'Save' }).nth(1).click();
   await expect(page.getByText('Business saved')).toBeVisible();
-  const saved = await readEntityByName(seed.entityName);
-  expect(saved.industry).toBe('retail');
+  await expect.poll(async () => (await readEntityByName(seed.entityName)).industry).toBe('retail');
 
   await page.getByLabel('Website').fill('');
   await page.getByLabel('Industry').selectOption('');
   await page.getByRole('button', { name: 'Save' }).nth(1).click();
   await expect(page.getByText('Business saved').first()).toBeVisible();
-  expect((await readEntityByName(seed.entityName)).industry).toBeNull();
+  await expect.poll(async () => (await readEntityByName(seed.entityName)).industry).toBeNull();
 });
 
 test('a new password is saved, and works', async ({ browser, baseURL }) => {

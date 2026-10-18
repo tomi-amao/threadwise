@@ -307,16 +307,27 @@ the theme switch and is centred like every other page), with every feature of th
   sales.
 - The `/collections-v2` preview and its mock data are deleted.
 
-### Phase 5: Product surfaces outside the data pages
+### Phase 5: Product surfaces outside the data pages (done, except chat)
 
-- **Chat.** The core of the product and not yet designed. Needs its own short design
-  pass: message layout, tool-call rows (the doc's "› calls tool_name" pattern),
-  and generative UI (charts and tables pushed mid-stream) using the shared chart and
-  table components so chat output matches the pages.
-- **Integrations, Account.** Settings-style pages; mostly forms and cards.
-- **Auth and onboarding.** Login, signup, onboarding modal.
-- **Landing.** The design doc is a marketing-site description, so this is the most
-  literal application of it.
+- **Chat:** not touched. It is being reimagined separately.
+- **Landing:** rebuilt around one idea, "the books, shown working". Ruled-paper layout with an
+  amber margin line and a double rule under every total (the accounting convention for a grand
+  total). A sale you can follow from the order to the profit figure; a profit and loss you can
+  open; and three instruments built on the real engine, so visitors can test the claims by hand:
+  the collection planner (`computePlanProjections`), UK corporation tax with marginal relief, and
+  the VAT threshold. Copy is plain and states limits ("what it does not do"); the sample
+  figures are labelled, and there are no logos, testimonials or invented statistics.
+- **Sign in, sign up, onboarding:** on the shared kit, with a show/hide password field. Two bugs
+  fixed: new accounts never saw onboarding (the business row did not exist when the sign-in
+  event fired, and nothing reloaded it), and the onboarding's country step had no field, so it
+  could not be finished.
+- **Account:** profile, business, appearance and password, each saving on its own. Change
+  password is new.
+- **Integrations:** each source is a card with its state and, when a person is needed, a callout
+  with the action beside it. Connecting a source is a drawer; removing asks first in a dialog
+  (it was `window.confirm`). The sync and load-data menus are one accessible component. The four
+  progress toasts and modals keep their behaviour and moved onto the theme tokens. It still
+  talks to the agent from the browser (see the open item on the agent trusting the browser).
 
 ### Phase 6: Cleanup
 

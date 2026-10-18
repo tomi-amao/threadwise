@@ -32,6 +32,7 @@ test('a new account is created, set up in five steps, and lands on its dashboard
   const modal = page.getByRole('dialog');
   await expect(modal.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '1');
 
+  await page.waitForFunction(() => document.getAnimations().every(a => a.playState !== 'running'));
   const results = await new AxeBuilder({ page }).analyze();
   expect(results.violations, 'onboarding').toEqual([]);
 
