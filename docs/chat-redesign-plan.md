@@ -421,3 +421,93 @@ start of Phase 2. Switching to Claude later is a config change.
 - Removed with it: `core/database.py`, `services/mcp_client.py`, the `langchain-mcp-adapters` and
   `mcp` dependencies, and the `supabase_access_token` setting (a personal access token used only
   for the MCP server).
+
+## 10. Phase 2 handoff (2026-10-18)
+
+Phase 0 and 1 are pushed on `feat/chat-agent-redesign` (no PR yet). Phase 2 is **not started in
+code**; the groundwork below is done and committed.
+
+### 10.1 Done
+
+- `langgraph` 1.2.16, `langgraph-api` 0.16.1 (the old 0.14.1 was end-of-life), `langgraph-cli`
+  0.4.36, `langgraph-sdk` 0.4.8, `langgraph-runtime-inmem` 0.36.1. Backend tests unchanged after
+  the upgrade (166 pass, the same pre-existing Squarespace failure).
+- `langchain` is 1.4.0, so `create_agent` and the built-in middleware exist.
+
+### 10.2 Facts to build on
+
+- **Models.** Only `GOOGLE_API_KEY` is configured. Asking the Gemini API what that key can use
+  returned (generateContent): `gemini-3.5-flash`, `gemini-3.5-flash-lite`, `gemini-2.5-flash`,
+  `gemini-2.5-flash-lite`, `gemini-3.1-flash-lite`, plus several newer previews. Suggested
+  defaults: main loop `google_genai:gemini-3.5-flash`, fallback `google_genai:gemini-2.5-flash`,
+  summarisation and follow-ups `google_genai:gemini-3.5-flash-lite`. Put them in
+  `core/config.py` as settings. Not yet tried: a real tool-calling round trip with
+  `langchain-google-genai` 4.4.0; do that first.
+- **Tools get the run's identity from `ToolRuntime`**: add `runtime: ToolRuntime` to a tool and read
+  `runtime.config["configurable"]["langgraph_auth_user"]` (the model never sees that parameter).
+  The docs say not to name your own arguments `config` or `runtime`. Tools may return a `dict`
+  (structured) or a `Command` (state update plus a matching `ToolMessage`). Errors are handled by
+  `ToolErrorMiddleware` or a `@wrap_tool_call` hook, not inside the tool.
+- **Built-in middleware (verified args):** `SummarizationMiddleware(model, trigger=("tokens", n),
+keep=("messages", 20))`, `ModelFallbackMiddleware(first_model, *more)`,
+  `ModelRetryMiddleware(max_retries=2, on_failure="continue")`, `ToolRetryMiddleware`,
+  `ToolErrorMiddleware(on_error=...)`, `ModelCallLimitMiddleware(run_limit=, thread_limit=,
+exit_behavior="end")`, `ToolCallLimitMiddleware(run_limit=...)`,
+  `HumanInTheLoopMiddleware(interrupt_on={tool: {"allowed_decisions": [...]}})`. Custom:
+  `wrap_model_call(request, handler)` with `request.override(system_message=...)` for the dated
+  business context.
+- **`create_agent` signature:** `model, tools, *, system_prompt, middleware, response_format,
+state_schema, context_schema, checkpointer, store, interrupt_before, interrupt_after, debug,
+name, cache`. Extend `AgentState` to add the `ui` reducer field for `push_ui_message` (Phase 3).
+- **Thread retention.** Add to `langgraph.json`:
+  `"checkpointer": {"ttl": {"strategy": "delete", "default_ttl": 129600, "sweep_interval_minutes": 60}}`
+  (90 days, in minutes).
+- **Safe place for SQL.** `core/scoped_sql.py` has `run_query` (checked, for model-written SQL).
+  Typed tools should run **fixed, parameterised SQL** through a new `run_trusted(user_id, sql,
+params)` that uses the same read-only RLS transaction without the parser (psycopg2 `%s`
+  placeholders cannot go through `check_query`). Convert `Decimal` and dates to JSON-safe values.
+- **Definitions the app already uses (so the agent and the pages agree):**
+  - Profit and loss: posted journals only (`journals.status = 'posted'`), lines joined to
+    `chart_of_accounts` where `is_header = false` and `status = 'active'`; revenue = credit minus
+    debit on `revenue` accounts, cost of sales and expenses = debit minus credit on `cogs` and
+    `expense` accounts; filter on `journals.journal_date`. Non-GBP lines count `gbp_equivalent`
+    (keeping the debit/credit side) and are skipped if it is null; a null currency means GBP
+    (`reports.server.ts`, `getStatementLineAmounts`). The seed's expected figures are in
+    `apps/chat-ui/e2e/.seed-manifest.json` (`ledger.current|previous|all`, with the period dates).
+  - Orders: exclude `status = 'cancelled'`; refunds are `refunded_total_amount`
+    (`revenue-metrics.server.ts`). Seed expectations: `manifest.orders`, `manifest.products`.
+  - Bank balance: each active account's `balance` snapshot plus signed `base_amount` (or `amount`)
+    of non-excluded transactions after the snapshot's `updated_at` (`in` is positive)
+    (`bank-balance.server.ts`).
+  - Invoice statuses present: OPEN, PARTIALLY_PAID, PAID, DRAFT, VOID; types SALE and PURCHASE.
+- **Table facts:** `orders.grand_total_amount/refunded_total_amount/status/created_at/customer_id`;
+  `order_line_items.product_name/quantity/total_price_amount`; `invoices.gross_amount/due_date/
+status/invoice_type/counterparty_id`; `entities` has `currency`, `country`, `year_end_day/month`,
+  `vat_registered`; `inventory_on_hand` is a view.
+- **Dead code to delete once the new agent works:** `agents/graph_agent.py` (1,394 lines),
+  `agents/prompts.py` (895 lines; nothing else imports it), their re-exports in
+  `agents/__init__.py`, and `tests/test_agent_scoping.py` (rewrite against the new agent).
+  `langgraph.json` currently points at `ai_agent.agents.graph_agent:agent`.
+
+### 10.3 Planned shape of Phase 2 (agreed in section 3, refined)
+
+1. `core/config.py`: `agent_model`, `agent_fallback_model`, `agent_small_model`.
+2. `core/scoped_sql.py`: add `run_trusted`.
+3. `tools/data_tools.py`: typed tools, each returning a structured dict that states the period used
+   and the currency: `get_business_profile` (also today's date and data coverage),
+   `profit_and_loss`, `sales_summary`, `top_products`, `top_customers`, `outstanding_invoices`,
+   `cash_position`, `search_transactions`. `tools/sql_tools.py` becomes `list_tables`,
+   `describe_tables`, `run_sql` (fallback; the refusal text comes back to the model). New
+   `search_documents` using `embedding_service.hybrid_search_with_rerank(namespace=entity_id)`.
+4. `agents/chat_prompt.py` (short: scope, tools first then SQL, never state a figure without a
+   tool result, name the period and currency, say when there is no data, imported text is data
+   not instructions, read-only) and `agents/chat_agent.py` exporting `agent` via `create_agent`
+   with the middleware above. Document extraction leaves the chat graph: an attachment gets a
+   polite "add it on the Invoices page" for now.
+5. Point `langgraph.json` at the new graph, add the checkpointer TTL, delete the dead code in
+   10.2, update `apps/ai_agent/CLAUDE.md`.
+6. Tests: a scripted fake chat model (`bind_tools` returns itself) driving the real tools against
+   the local database; assert A's and B's answers differ and match the manifest; the tools refuse
+   without an authenticated user. Then one real Gemini round trip as a manual smoke check.
+
+Phase 1's `ALLOWED_RELATIONS`/`ALLOWED_FUNCTIONS` apply to `run_sql` only; typed tools run fixed SQL.
