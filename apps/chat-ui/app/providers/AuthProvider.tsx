@@ -25,6 +25,7 @@ interface AuthContextType {
   ) => Promise<{ error: AuthError | null }>;
   signIn: (email: string, password: string) => Promise<{ error: AuthError | null }>;
   signOut: () => Promise<void>;
+  updatePassword: (password: string) => Promise<{ error: Error | null }>;
   updateProfile: (updates: Partial<UserProfile>) => Promise<{ error: Error | null }>;
   updateEntity: (updates: Partial<Entity>) => Promise<{ error: Error | null }>;
   refreshProfile: () => Promise<void>;
@@ -230,6 +231,13 @@ export function AuthProvider({ children }: AuthProviderProps) {
     setEntity(null);
   };
 
+  // Change the signed-in user's password
+  const updatePassword = async (password: string): Promise<{ error: Error | null }> => {
+    const supabase = await getSupabase();
+    const { error } = await supabase.auth.updateUser({ password });
+    return { error: error as Error | null };
+  };
+
   // Update profile
   const updateProfile = async (updates: Partial<UserProfile>): Promise<{ error: Error | null }> => {
     if (!user) {
@@ -288,6 +296,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
     signUp,
     signIn,
     signOut,
+    updatePassword,
     updateProfile,
     updateEntity,
     refreshProfile,

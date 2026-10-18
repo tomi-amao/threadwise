@@ -559,3 +559,69 @@ export async function readEntityByName(name: string) {
   );
   return rows[0];
 }
+
+// ─── Account (the profile, business details and password a test may change) ─────────────────────
+
+export interface AccountSnapshot {
+  entity: {
+    id: string;
+    name: string;
+    industry: string | null;
+    employee_count: string | null;
+    website: string | null;
+    description: string | null;
+  };
+  userId: string;
+  metadata: Record<string, unknown>;
+}
+
+async function adminUsers(): Promise<
+  { id: string; email: string; user_metadata: Record<string, unknown> }[]
+> {
+  const res = await fetch(`${url}/auth/v1/admin/users?per_page=200`, {
+    headers: { apikey: key, Authorization: `Bearer ${key}` },
+  });
+  return ((await res.json()) as { users: never[] }).users;
+}
+
+export async function snapshotAccount(
+  email: string,
+  businessName: string
+): Promise<AccountSnapshot> {
+  const [entities, users] = await Promise.all([
+    rest<AccountSnapshot['entity'][]>(
+      'GET',
+      'entities',
+      `select=id,name,industry,employee_count,website,description&name=eq.${encodeURIComponent(businessName)}`
+    ),
+    adminUsers(),
+  ]);
+  const user = users.find(u => u.email === email)!;
+  return { entity: entities[0], userId: user.id, metadata: user.user_metadata };
+}
+
+/** Put the business and the user's metadata back as they were. (Never touches the password: that would sign every session out.) */
+export async function restoreAccount(before: AccountSnapshot): Promise<void> {
+  const { id, ...fields } = before.entity;
+  await rest('PATCH', 'entities', `id=eq.${id}`, fields);
+  await fetch(`${url}/auth/v1/admin/users/${before.userId}`, {
+    method: 'PUT',
+    headers: { apikey: key, Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ user_metadata: before.metadata }),
+  });
+}
+
+export async function readUserMetadata(email: string) {
+  return (await adminUsers()).find(u => u.email === email)?.user_metadata ?? {};
+}
+
+/** A confirmed user with no business, for tests that change a password (the seeded user's must stay put). */
+export async function createThrowawayUser(email: string, password: string): Promise<string> {
+  const res = await fetch(`${url}/auth/v1/admin/users`, {
+    method: 'POST',
+    headers: { apikey: key, Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, password, email_confirm: true }),
+  });
+  if (!res.ok) throw new Error(`create user: ${res.status} ${await res.text()}`);
+  return ((await res.json()) as { id: string }).id;
+}
