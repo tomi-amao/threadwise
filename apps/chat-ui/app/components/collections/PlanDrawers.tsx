@@ -321,11 +321,16 @@ function TermsForm({ plan, onDone }: { plan: PlanData['plan']; onDone: () => voi
         </section>
       )}
 
-      <Field label="Notes">
+      <Field
+        label="Additional information"
+        hint="Shown on the plan and on the printed pack for your partner, e.g. shipping rates."
+      >
         <Textarea
-          rows={3}
+          rows={6}
           value={notes}
-          placeholder="Anything else worth recording about this plan"
+          placeholder={
+            'Shipping rates by region, delivery times, anything else the partner should know'
+          }
           onChange={e => setNotes(e.target.value)}
         />
       </Field>

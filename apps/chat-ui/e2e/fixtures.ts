@@ -106,7 +106,7 @@ export interface SeedManifest {
       estimated: number;
       lineCount: number;
       costCount: number;
-      sizedLine: { productName: string; quantity: number; sizes: string; suggested: string[] };
+      sizedLine: { productName: string; quantity: number; sizes: string[]; suggested: string[] };
     };
     rivalName: string;
     rivalId: string;

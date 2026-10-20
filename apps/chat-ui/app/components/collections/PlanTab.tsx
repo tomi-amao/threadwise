@@ -247,7 +247,12 @@ export function PlanTab({
             ))}
           </dl>
         )}
-        {record.notes && <p className="mt-4 text-[14px] text-text-2">{record.notes}</p>}
+        {record.notes && (
+          <div className="mt-4">
+            <span className="eyebrow">Additional information</span>
+            <p className="mt-1 whitespace-pre-line text-[14px] text-text-2">{record.notes}</p>
+          </div>
+        )}
       </Panel>
 
       {isCollab && (p.partnerPaymentDue || p.entityUpfrontCost != null || p.payouts.length > 0) && (
@@ -400,12 +405,19 @@ export function PlanTab({
                         <span className="block text-[12px] text-text-2">Not launched yet</span>
                       )}
                       {l.sizeQuantities.length > 0 && (
-                        <span
-                          className="block max-w-[240px] truncate text-[12px] tabular-nums text-text-2"
-                          title={formatSizes(l.sizeQuantities)}
+                        <ul
+                          aria-label={`Sizes: ${formatSizes(l.sizeQuantities)}`}
+                          className="mt-1 flex max-w-[240px] flex-wrap gap-1"
                         >
-                          {formatSizes(l.sizeQuantities)}
-                        </span>
+                          {l.sizeQuantities.map(row => (
+                            <li
+                              key={row.size}
+                              className="whitespace-nowrap rounded-md bg-muted px-1.5 py-0.5 text-[12px] tabular-nums text-text-2"
+                            >
+                              {row.size} {row.quantity}
+                            </li>
+                          ))}
+                        </ul>
                       )}
                     </td>
                     <td className="text-right tabular-nums">{int(l.plannedQuantity)}</td>

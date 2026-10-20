@@ -1650,7 +1650,7 @@ async function main() {
       sizedLine: {
         productName: products[0].name,
         quantity: planLines[0].qty,
-        sizes: 'S 30 · M 40 · L 30',
+        sizes: ['S 30', 'M 40', 'L 30'],
         suggested: ['S', 'M'],
       },
     },

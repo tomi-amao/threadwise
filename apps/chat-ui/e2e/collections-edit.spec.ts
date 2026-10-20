@@ -237,7 +237,7 @@ test.describe('plan', () => {
 
     const lines = page.getByTestId('plan-lines');
     await expect(lines).toContainText('Sized Piece');
-    await expect(lines).toContainText('S 4 · M 6');
+    await expect(lines.getByRole('list', { name: 'Sizes: S 4 · M 6' })).toBeVisible();
     // 10 units at £100, all sold, exactly as if the quantity had been typed as one number.
     await expect(revenue).toContainText(`£${(C.plan.revenue + 1000).toLocaleString('en-GB')}`);
     expect(await readPlanLineByName('Sized Piece')).toMatchObject({
@@ -253,7 +253,7 @@ test.describe('plan', () => {
     await drawer(page).getByLabel('Units in M').fill('16');
     await expect(drawer(page).getByTestId('size-total')).toContainText('Total 20 units');
     await drawer(page).getByRole('button', { name: 'Save line' }).click();
-    await expect(lines).toContainText('S 4 · M 16');
+    await expect(lines.getByRole('list', { name: 'Sizes: S 4 · M 16' })).toBeVisible();
     await expect(revenue).toContainText(`£${(C.plan.revenue + 2000).toLocaleString('en-GB')}`);
 
     // Back to one quantity: the split goes, the quantity stays.
@@ -261,7 +261,9 @@ test.describe('plan', () => {
     await drawer(page).getByRole('button', { name: 'One quantity' }).click();
     await drawer(page).getByLabel('Planned quantity').fill('20');
     await drawer(page).getByRole('button', { name: 'Save line' }).click();
-    await expect(lines).not.toContainText('S 4');
+    await expect(drawer(page)).toBeHidden();
+    // Only the seeded line keeps its split.
+    await expect(lines.getByRole('list', { name: /^Sizes:/ })).toHaveCount(1);
     expect(await readPlanLineByName('Sized Piece')).toMatchObject({
       planned_quantity: 20,
       size_quantities: null,
@@ -357,6 +359,30 @@ test.describe('plan', () => {
     await expect(terms).toContainText('Maison Renamed');
     await expect(terms).toContainText('70%');
     await expect(terms).toContainText('Two seasons');
+  });
+
+  test('additional information for the partner shows on the plan and the print pack', async ({
+    page,
+  }) => {
+    const info = 'UK shipping: £4.50 - £8\nUS: £24 (DHL Express)\nNigeria: £26 DPD Air';
+    await page.goto(at(C.autumn.id, '?tab=plan&drawer=terms'));
+    const d = drawer(page);
+    await d.getByLabel('Additional information').fill(info);
+    await d.getByRole('button', { name: 'Save plan details' }).click();
+    await expect(d).toBeHidden();
+
+    const terms = page.getByTestId('plan-terms');
+    await expect(terms).toContainText('Additional information');
+    await expect(terms).toContainText('UK shipping: £4.50 - £8');
+    // Each rate stays on its own line.
+    const text = terms.getByText('US: £24 (DHL Express)');
+    await expect(text).toHaveCSS('white-space', 'pre-line');
+
+    const href = await page.getByRole('link', { name: 'Print plan' }).getAttribute('href');
+    const html = await (await page.request.get(href!)).text();
+    expect(html).toContain('<h2>Additional information</h2>');
+    expect(html).toContain('UK shipping: £4.50 - £8\nUS: £24 (DHL Express)\nNigeria: £26 DPD Air');
+    expect(html).toContain('white-space:pre-line');
   });
 
   test('a split above 100% is refused', async ({ page }) => {

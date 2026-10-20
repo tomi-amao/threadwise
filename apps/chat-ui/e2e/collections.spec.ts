@@ -136,9 +136,9 @@ test.describe('one collection', () => {
     await page.goto(detail(C.autumn.id, '?tab=plan'));
     const lines = panel(page, 'plan-lines');
     const sized = lines.locator('tbody tr').filter({ hasText: C.plan.sizedLine.productName });
-    await expect(sized).toContainText(C.plan.sizedLine.sizes);
+    for (const size of C.plan.sizedLine.sizes) await expect(sized).toContainText(size);
     // The seed splits one of its two lines; the other stays a single quantity.
-    await expect(lines.locator('tbody tr').filter({ hasText: / [SML] \d+/ })).toHaveCount(1);
+    await expect(lines.getByRole('list', { name: /^Sizes:/ })).toHaveCount(1);
 
     // Opening the split line shows the same sizes, adding up to its quantity.
     await sized.getByRole('button', { name: /^Edit / }).click();
@@ -152,8 +152,14 @@ test.describe('one collection', () => {
   test('the print pack lists the sizes of a split line', async ({ page }) => {
     await page.goto(detail(C.autumn.id, '?tab=plan'));
     const href = await page.getByRole('link', { name: 'Print plan' }).getAttribute('href');
-    const response = await page.request.get(href!);
-    expect(await response.text()).toContain(C.plan.sizedLine.sizes);
+    const html = await (await page.request.get(href!)).text();
+    // A size run under the line: a column per size, with the units beneath.
+    expect(html).toMatch(
+      /<th class="num">S<\/th>\s*<th class="num">M<\/th>\s*<th class="num">L<\/th>/
+    );
+    expect(html).toMatch(
+      /<td class="num">30<\/td>\s*<td class="num">40<\/td>\s*<td class="num">30<\/td>/
+    );
   });
 
   test('the scenario switch changes the projection without changing the plan', async ({ page }) => {
