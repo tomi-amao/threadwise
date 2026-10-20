@@ -130,6 +130,32 @@ test.describe('one collection', () => {
     await expect(costs.getByText('Estimate', { exact: true })).toHaveCount(C.plan.estimated);
   });
 
+  test('a line split by size shows its sizes, and a line without a split does not', async ({
+    page,
+  }) => {
+    await page.goto(detail(C.autumn.id, '?tab=plan'));
+    const lines = panel(page, 'plan-lines');
+    const sized = lines.locator('tbody tr').filter({ hasText: C.plan.sizedLine.productName });
+    await expect(sized).toContainText(C.plan.sizedLine.sizes);
+    // The seed splits one of its two lines; the other stays a single quantity.
+    await expect(lines.locator('tbody tr').filter({ hasText: / [SML] \d+/ })).toHaveCount(1);
+
+    // Opening the split line shows the same sizes, adding up to its quantity.
+    await sized.getByRole('button', { name: /^Edit / }).click();
+    const d = page.getByRole('dialog');
+    await expect(d.getByTestId('size-total')).toContainText(
+      `Total ${C.plan.sizedLine.quantity} units`
+    );
+    await expect(d.getByLabel('Units in M')).toHaveValue('40');
+  });
+
+  test('the print pack lists the sizes of a split line', async ({ page }) => {
+    await page.goto(detail(C.autumn.id, '?tab=plan'));
+    const href = await page.getByRole('link', { name: 'Print plan' }).getAttribute('href');
+    const response = await page.request.get(href!);
+    expect(await response.text()).toContain(C.plan.sizedLine.sizes);
+  });
+
   test('the scenario switch changes the projection without changing the plan', async ({ page }) => {
     await page.goto(detail(C.autumn.id, '?tab=plan'));
     const group = page.getByRole('group', { name: 'Scenario' });
@@ -254,5 +280,18 @@ test.describe('layout and accessibility', () => {
       const results = await new AxeBuilder({ page }).analyze();
       expect(results.violations, `${name} drawer`).toEqual([]);
     }
+  });
+  test('the line drawer split by size fits and has no accessibility violations', async ({
+    page,
+  }) => {
+    await page.goto(detail(C.autumn.id, '?tab=plan'));
+    await page
+      .getByTestId('plan-lines')
+      .getByRole('button', { name: new RegExp(`^Edit ${C.plan.sizedLine.productName}`) })
+      .click();
+    await expect(page.getByRole('dialog').getByTestId('size-split')).toBeVisible();
+    await expectNoHorizontalOverflow(page);
+    const results = await new AxeBuilder({ page }).analyze();
+    expect(results.violations).toEqual([]);
   });
 });

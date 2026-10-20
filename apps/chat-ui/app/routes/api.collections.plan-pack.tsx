@@ -12,7 +12,12 @@ import type { LoaderFunctionArgs } from 'react-router';
 import { fetchFxRate } from '~/lib/api/collection-plans.server';
 import { getPackData } from '~/lib/api/collections.server';
 import { getRequestSupabaseClient, requireUser } from '~/lib/supabase-server';
-import { collaborationTypeLabel, computeScenarios, getCustomTerms } from '~/lib/collection-plans';
+import {
+  collaborationTypeLabel,
+  computeScenarios,
+  formatSizes,
+  getCustomTerms,
+} from '~/lib/collection-plans';
 
 const formatMoney = (value: number, currency: string) =>
   new Intl.NumberFormat('en-GB', {
@@ -105,7 +110,11 @@ export async function loader({ request }: LoaderFunctionArgs) {
           : GBP(line.unitCost);
       return `
       <tr>
-        <td>${escapeHtml(line.linkedProductName || line.productName || 'Unnamed product')}</td>
+        <td>${escapeHtml(line.linkedProductName || line.productName || 'Unnamed product')}${
+          line.sizeQuantities.length > 0
+            ? `<br /><span class="muted">${escapeHtml(formatSizes(line.sizeQuantities))}</span>`
+            : ''
+        }</td>
         <td class="num">${line.plannedQuantity}</td>
         <td class="num">${giftedUnits > 0 ? giftedUnits : '—'}</td>
         <td class="num">${unitCostCell}</td>

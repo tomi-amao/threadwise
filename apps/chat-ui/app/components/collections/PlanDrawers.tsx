@@ -17,6 +17,7 @@ import type { PlanData, ProductOption } from '~/lib/api/collections.server';
 import {
   COLLABORATION_TYPES,
   CURRENCY_OPTIONS,
+  MAX_SIZE_LABEL_LENGTH,
   PLAN_COST_CATEGORIES,
   getCustomTerms,
   type CollectionPlanCost,
@@ -356,6 +357,13 @@ function TermsForm({ plan, onDone }: { plan: PlanData['plan']; onDone: () => voi
 
 // ─── A product line ───────────────────────────────────────────────────
 
+interface SizeRow {
+  /** Stable key so removing a row never swaps what is typed in the others. */
+  key: number;
+  size: string;
+  quantity: string;
+}
+
 export function LineDrawer({
   line,
   planCurrency,
@@ -409,6 +417,16 @@ function LineForm({
   const [productId, setProductId] = useState(line?.productId ?? '');
   const [name, setName] = useState(line?.productName ?? '');
   const [qty, setQty] = useState(line ? String(line.plannedQuantity) : '');
+  // Quantity either as one number or split by size (then the total is the quantity).
+  const [bySize, setBySize] = useState((line?.sizeQuantities.length ?? 0) > 0);
+  const [sizeRows, setSizeRows] = useState<SizeRow[]>(
+    (line?.sizeQuantities ?? []).map((row, i) => ({
+      key: i,
+      size: row.size,
+      quantity: String(row.quantity),
+    }))
+  );
+  const [nextKey, setNextKey] = useState(sizeRows.length);
   const [gifted, setGifted] = useState(
     line && line.giftedUnits > 0 ? String(line.giftedUnits) : ''
   );
@@ -429,9 +447,22 @@ function LineForm({
     label: p.name,
     meta: [p.provider, p.productType].filter(Boolean).join(' · ') || undefined,
   }));
+  const suggested =
+    mode === 'existing' ? (products.find(p => p.id === productId)?.sizes ?? []) : [];
+  const total = sizeRows.reduce((sum, row) => sum + (Number(row.quantity) || 0), 0);
+  const sizesValid =
+    sizeRows.length > 0 &&
+    sizeRows.every(row => row.size.trim() !== '' && Number.isInteger(Number(row.quantity))) &&
+    sizeRows.every(row => Number(row.quantity) > 0) &&
+    new Set(sizeRows.map(row => row.size.trim().toLowerCase())).size === sizeRows.length;
+  const quantity = bySize ? String(total) : qty;
+  const addSize = (size = '') => {
+    setSizeRows(rows => [...rows, { key: nextKey, size, quantity: '' }]);
+    setNextKey(k => k + 1);
+  };
   const ready =
     (mode === 'existing' ? !!productId : name.trim() !== '') &&
-    qty !== '' &&
+    (bySize ? sizesValid : qty !== '') &&
     cost !== '' &&
     price !== '';
 
@@ -463,22 +494,111 @@ function LineForm({
         </Field>
       )}
 
+      <Segmented<'one' | 'sizes'>
+        label="Quantity"
+        value={bySize ? 'sizes' : 'one'}
+        onChange={v => {
+          setBySize(v === 'sizes');
+          if (v === 'sizes' && sizeRows.length === 0) {
+            // Start from the product's own sizes, or one empty row to type into.
+            if (suggested.length > 0) {
+              setSizeRows(suggested.map((size, i) => ({ key: nextKey + i, size, quantity: '' })));
+              setNextKey(k => k + suggested.length);
+            } else {
+              addSize();
+            }
+          }
+        }}
+        options={[
+          { value: 'one', label: 'One quantity' },
+          { value: 'sizes', label: 'By size' },
+        ]}
+      />
+
+      {bySize && (
+        <div className="space-y-3" data-testid="size-split">
+          {sizeRows.map(row => (
+            <div key={row.key} className="flex items-end gap-2">
+              <Field label="Size" className="flex-1">
+                <Input
+                  value={row.size}
+                  maxLength={MAX_SIZE_LABEL_LENGTH}
+                  aria-label={row.size ? `Size name ${row.size}` : 'Size name'}
+                  onChange={e =>
+                    setSizeRows(rows =>
+                      rows.map(r => (r.key === row.key ? { ...r, size: e.target.value } : r))
+                    )
+                  }
+                />
+              </Field>
+              <Field label="Units" className="w-28">
+                <Input
+                  type="number"
+                  min={1}
+                  step={1}
+                  inputMode="numeric"
+                  aria-label={row.size ? `Units in ${row.size}` : 'Units'}
+                  value={row.quantity}
+                  onChange={e =>
+                    setSizeRows(rows =>
+                      rows.map(r => (r.key === row.key ? { ...r, quantity: e.target.value } : r))
+                    )
+                  }
+                />
+              </Field>
+              <button
+                type="button"
+                aria-label={`Remove size ${row.size || 'row'}`}
+                onClick={() => setSizeRows(rows => rows.filter(r => r.key !== row.key))}
+                className="mb-1 inline-flex size-9 shrink-0 items-center justify-center rounded-full text-muted-foreground hover:text-destructive focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                <Trash size={16} weight="light" aria-hidden />
+              </button>
+            </div>
+          ))}
+          <div className="flex flex-wrap items-center gap-2">
+            <Button type="button" variant="outline" size="sm" onClick={() => addSize()}>
+              <Plus size={14} weight="bold" aria-hidden /> Add size
+            </Button>
+            {suggested
+              .filter(s => !sizeRows.some(r => r.size.trim().toLowerCase() === s.toLowerCase()))
+              .map(s => (
+                <Button
+                  key={s}
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  aria-label={`Add size ${s}`}
+                  onClick={() => addSize(s)}
+                >
+                  {s}
+                </Button>
+              ))}
+          </div>
+          <p className="text-[14px] text-text-2" data-testid="size-total">
+            Total {total.toLocaleString('en-GB')} {total === 1 ? 'unit' : 'units'}
+          </p>
+        </div>
+      )}
+
       <div className="grid gap-4 sm:grid-cols-2">
-        <Field label="Planned quantity">
-          <Input
-            type="number"
-            min={1}
-            step={1}
-            inputMode="numeric"
-            value={qty}
-            onChange={e => setQty(e.target.value)}
-          />
-        </Field>
+        {!bySize && (
+          <Field label="Planned quantity">
+            <Input
+              type="number"
+              min={1}
+              step={1}
+              inputMode="numeric"
+              value={qty}
+              onChange={e => setQty(e.target.value)}
+            />
+          </Field>
+        )}
         <Field label="Gifted units" hint="PR or free to a partner. Still costs, earns nothing.">
           <Input
             type="number"
             min={0}
-            max={qty || undefined}
+            max={quantity || undefined}
             step={1}
             inputMode="numeric"
             value={gifted}
@@ -551,7 +671,12 @@ function LineForm({
             ...(line ? { lineId: line.id } : {}),
             productId: mode === 'existing' ? productId : '',
             productName: mode === 'new' ? name : '',
-            plannedQuantity: qty,
+            plannedQuantity: quantity,
+            sizeQuantities: bySize
+              ? JSON.stringify(
+                  sizeRows.map(row => ({ size: row.size.trim(), quantity: Number(row.quantity) }))
+                )
+              : '',
             giftedUnits: gifted || '0',
             expectedSellThroughPct: sell,
             unitSellingPrice: price,

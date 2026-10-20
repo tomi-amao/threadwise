@@ -29,6 +29,7 @@ import {
   SCENARIO_PRESETS,
   collaborationTypeLabel,
   computeScenarios,
+  formatSizes,
   getCustomTerms,
 } from '~/lib/collection-plans';
 import { cn } from '~/lib/utils';
@@ -396,7 +397,15 @@ export function PlanTab({
                     <td>
                       <span className="block max-w-[240px] truncate">{name}</span>
                       {!l.productId && (
-                        <span className="text-[12px] text-text-2">Not launched yet</span>
+                        <span className="block text-[12px] text-text-2">Not launched yet</span>
+                      )}
+                      {l.sizeQuantities.length > 0 && (
+                        <span
+                          className="block max-w-[240px] truncate text-[12px] tabular-nums text-text-2"
+                          title={formatSizes(l.sizeQuantities)}
+                        >
+                          {formatSizes(l.sizeQuantities)}
+                        </span>
                       )}
                     </td>
                     <td className="text-right tabular-nums">{int(l.plannedQuantity)}</td>

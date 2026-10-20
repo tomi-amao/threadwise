@@ -520,6 +520,22 @@ export async function readCollectionByName(name: string) {
   return rows[0];
 }
 
+/** A plan line by its working name, with its stored size split. */
+export async function readPlanLineByName(name: string) {
+  const rows = await rest<
+    {
+      product_name: string;
+      planned_quantity: number;
+      size_quantities: { size: string; quantity: number }[] | null;
+    }[]
+  >(
+    'GET',
+    'collection_plan_lines',
+    `select=product_name,planned_quantity,size_quantities&product_name=eq.${encodeURIComponent(name)}`
+  );
+  return rows[0];
+}
+
 export async function countRows(table: string, query: string): Promise<number> {
   return (await rest<unknown[]>('GET', table, `select=id&${query}`)).length;
 }

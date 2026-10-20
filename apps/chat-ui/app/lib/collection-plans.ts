@@ -231,6 +231,46 @@ export const CURRENCY_OPTIONS: { value: string; label: string; meta: string }[] 
 
 // ─── Types ────────────────────────────────────────────────────────────────
 
+/** One size of a plan line and the units planned in it. */
+export interface PlanSizeQuantity {
+  size: string;
+  quantity: number;
+}
+
+export const MAX_PLAN_SIZES = 20;
+export const MAX_SIZE_LABEL_LENGTH = 20;
+
+/**
+ * Read a stored size split (JSON from the database or the form) into clean rows: trimmed labels,
+ * whole positive quantities, each size once (case-insensitive, first wins). Anything else is
+ * dropped, so a line never carries a broken split into the projections.
+ */
+export function parseSizeQuantities(value: unknown): PlanSizeQuantity[] {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set<string>();
+  const rows: PlanSizeQuantity[] = [];
+  for (const item of value) {
+    if (!item || typeof item !== 'object') continue;
+    const { size, quantity } = item as { size?: unknown; quantity?: unknown };
+    const label = typeof size === 'string' ? size.trim() : '';
+    const units = Number(quantity);
+    if (!label || label.length > MAX_SIZE_LABEL_LENGTH) continue;
+    if (!Number.isInteger(units) || units <= 0) continue;
+    const key = label.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    rows.push({ size: label, quantity: units });
+  }
+  return rows.slice(0, MAX_PLAN_SIZES);
+}
+
+export const sizesTotal = (sizes: PlanSizeQuantity[]): number =>
+  sizes.reduce((sum, row) => sum + row.quantity, 0);
+
+/** "S 20 · M 40 · L 30", or an empty string when the line has no split. */
+export const formatSizes = (sizes: PlanSizeQuantity[]): string =>
+  sizes.map(row => `${row.size} ${row.quantity}`).join(' · ');
+
 export interface CollectionPlanLine {
   id: string;
   planId: string;
@@ -238,6 +278,9 @@ export interface CollectionPlanLine {
   productName: string | null;
   linkedProductName: string | null;
   plannedQuantity: number;
+  /** How plannedQuantity splits by size; empty when the line is one quantity. When present,
+   * plannedQuantity is their sum (kept so on save), so projections need not know about sizes. */
+  sizeQuantities: PlanSizeQuantity[];
   /** Units of this line given away for free (PR/influencer/partner gifting)
    * rather than sold — always sold, not an estimate. Still incurs full COGS
    * (plannedQuantity includes them — you paid to produce them), but earns

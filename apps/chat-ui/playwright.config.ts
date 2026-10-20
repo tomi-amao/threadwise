@@ -110,6 +110,10 @@ export default defineConfig<{ theme: ThemeOption }>({
         VITE_SUPABASE_PUBLISHABLE_KEY: anonKey,
         // Server-side calls to the agent go to the stand-in below, never a real agent.
         AI_AGENT_URL: STAND_IN_URL,
+        // The browser's own calls to the agent default to :2024, where a developer may have their
+        // real dev server running (it can hang the page's network). Point them at the stand-in too:
+        // specs that exercise those calls mock them, the rest fail fast.
+        VITE_AI_AGENT_URL: STAND_IN_URL,
       },
     },
     {
