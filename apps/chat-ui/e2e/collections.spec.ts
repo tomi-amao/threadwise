@@ -123,6 +123,23 @@ test.describe('one collection', () => {
     await expect(panel(page, 'plan-payouts')).toContainText('Maison Test');
   });
 
+  test('the plan names the two businesses instead of saying you and they', async ({ page }) => {
+    const entity = readManifest().entityName;
+    await page.goto(detail(C.autumn.id, '?tab=plan'));
+    const upfront = panel(page, 'plan-upfront');
+    await expect(upfront).toContainText(`${entity}'s upfront cash outlay`);
+    await expect(upfront).toContainText(`${C.plan.partner} is covering its own`);
+    await expect(panel(page, 'plan-terms')).toContainText(`${entity} revenue split`);
+    const main = await page.getByRole('main').innerText();
+    expect(main).not.toMatch(/\bYour (upfront|revenue|cost)/);
+
+    const href = await page.getByRole('link', { name: 'Print plan' }).getAttribute('href');
+    const html = await (await page.request.get(href!)).text();
+    expect(html).toMatch(/upfront cash outlay/);
+    expect(html).not.toMatch(/Your (upfront|own)/);
+    expect(html).toContain(`${C.plan.partner} is covering its own`);
+  });
+
   test('costs not yet decided are marked, and estimates are flagged', async ({ page }) => {
     await page.goto(detail(C.autumn.id, '?tab=plan'));
     const costs = panel(page, 'plan-costs');
@@ -260,6 +277,7 @@ test.describe('layout and accessibility', () => {
   ];
 
   test('has no horizontal overflow, with a drawer open or not', async ({ page }) => {
+    test.slow(); // walks every page and drawer in one test, so it needs more than 30 s under load
     for (const [name, url] of pages()) {
       await page.goto(url);
       await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
@@ -274,6 +292,7 @@ test.describe('layout and accessibility', () => {
   });
 
   test('has no accessibility violations', async ({ page }) => {
+    test.slow(); // as above
     for (const [name, url] of pages()) {
       await page.goto(url);
       await expect(page.getByRole('heading', { level: 1 })).toBeVisible();

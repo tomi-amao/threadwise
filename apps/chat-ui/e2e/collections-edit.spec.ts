@@ -349,7 +349,7 @@ test.describe('plan', () => {
     await page.goto(at(C.autumn.id, '?tab=plan&drawer=terms'));
     const d = drawer(page);
     await d.getByLabel('Partner name').fill('Maison Renamed');
-    await d.getByLabel('Your revenue split %').fill('70');
+    await d.getByLabel(`${readManifest().entityName} revenue split %`).fill('70');
     await d.getByRole('button', { name: 'Add term' }).click();
     await d.getByLabel('Term 2 name').fill('Term length');
     await d.getByLabel('Term 2 detail').fill('Two seasons');
@@ -388,7 +388,7 @@ test.describe('plan', () => {
   test('a split above 100% is refused', async ({ page }) => {
     await page.goto(at(C.autumn.id, '?tab=plan&drawer=terms'));
     const d = drawer(page);
-    await d.getByLabel('Your revenue split %').fill('140');
+    await d.getByLabel(`${readManifest().entityName} revenue split %`).fill('140');
     await d.getByRole('button', { name: 'Save plan details' }).click();
     await expect(d.getByRole('alert')).toContainText('between 0 and 100');
   });

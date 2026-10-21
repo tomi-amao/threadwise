@@ -12,7 +12,12 @@ import type { LoaderFunctionArgs } from 'react-router';
 import { fetchFxRate } from '~/lib/api/collection-plans.server';
 import { getPackData } from '~/lib/api/collections.server';
 import { getRequestSupabaseClient, requireUser } from '~/lib/supabase-server';
-import { collaborationTypeLabel, computeScenarios, getCustomTerms } from '~/lib/collection-plans';
+import {
+  collaborationTypeLabel,
+  computeScenarios,
+  getCustomTerms,
+  possessive,
+} from '~/lib/collection-plans';
 
 const formatMoney = (value: number, currency: string) =>
   new Intl.NumberFormat('en-GB', {
@@ -234,15 +239,16 @@ export async function loader({ request }: LoaderFunctionArgs) {
     ${metricRow('Net margin', p => `${p.projectedNetMarginPct.toFixed(1)}%`)}
     ${
       isCollab
-        ? metricRow(`${plan.partnerName || 'Partner'} needs to pay`, p =>
+        ? metricRow(escapeHtml(`${plan.partnerName || 'Partner'} needs to pay`), p =>
             p.partnerPaymentDue?.amount != null ? withPartnerFx(p.partnerPaymentDue.amount) : '—'
           )
         : ''
     }
     ${
       plan.collaborationType === 'co_branded'
-        ? metricRow('Your upfront cash outlay', p =>
-            p.entityUpfrontCost != null ? GBP(p.entityUpfrontCost) : '—'
+        ? metricRow(
+            escapeHtml(`${possessive(entityName || 'The business')} upfront cash outlay`),
+            p => (p.entityUpfrontCost != null ? GBP(p.entityUpfrontCost) : '—')
           )
         : ''
     }
@@ -349,12 +355,16 @@ ${
 ${
   projections.entityUpfrontCost != null
     ? `<div class="callout callout-cash">
-        <strong>Your upfront cash outlay</strong>
+        <strong>${escapeHtml(possessive(entityName || 'The business'))} upfront cash outlay</strong>
         <div class="amount">${GBP(projections.entityUpfrontCost)}</div>
         ${
           projections.entityUpfrontCost === projections.projectedTotalCost
-            ? "The full planned cost — their share isn't paid in upfront, so you're fronting all of it until revenue settles."
-            : 'Your own cost-split share — the partner is covering theirs separately, upfront.'
+            ? escapeHtml(
+                `The full planned cost — ${possessive(plan.partnerName || 'the partner')} share isn't paid in upfront, so ${entityName || 'the business'} is fronting all of it until revenue settles.`
+              )
+            : escapeHtml(
+                `${possessive(entityName || 'The business')} own cost-split share — ${plan.partnerName || 'the partner'} is covering its own separately, upfront.`
+              )
         }
       </div>`
     : ''

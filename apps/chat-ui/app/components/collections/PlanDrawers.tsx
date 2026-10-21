@@ -19,6 +19,7 @@ import {
   CURRENCY_OPTIONS,
   MAX_SIZE_LABEL_LENGTH,
   PLAN_COST_CATEGORIES,
+  possessive,
   getCustomTerms,
   type CollectionPlanCost,
   type CollectionPlanLine,
@@ -29,10 +30,12 @@ import { useCollectionAction } from './use-collection-action';
 
 export function TermsDrawer({
   plan,
+  entityName,
   open,
   onClose,
 }: {
   plan: PlanData['plan'];
+  entityName: string | null;
   open: boolean;
   onClose: () => void;
 }) {
@@ -45,12 +48,21 @@ export function TermsDrawer({
       description="The type of collaboration, its partner and its terms"
       className="w-[min(560px,100vw)]"
     >
-      {open && <TermsForm plan={plan} onDone={onClose} />}
+      {open && <TermsForm plan={plan} entityName={entityName} onDone={onClose} />}
     </Drawer>
   );
 }
 
-function TermsForm({ plan, onDone }: { plan: PlanData['plan']; onDone: () => void }) {
+function TermsForm({
+  plan,
+  entityName,
+  onDone,
+}: {
+  plan: PlanData['plan'];
+  entityName: string | null;
+  onDone: () => void;
+}) {
+  const entity = entityName || 'The business';
   const action = useCollectionAction(onDone);
   const [type, setType] = useState(plan.collaborationType);
   const [partner, setPartner] = useState(plan.partnerName ?? '');
@@ -204,8 +216,8 @@ function TermsForm({ plan, onDone }: { plan: PlanData['plan']; onDone: () => voi
       {type === 'co_branded' && (
         <div className="space-y-4 rounded-xl border bg-background p-4">
           <div className="grid gap-4 sm:grid-cols-2">
-            {field('revenue_split_pct', 'Your revenue split %', { type: 'number' })}
-            {field('cost_split_pct', 'Your cost split %', { type: 'number' })}
+            {field('revenue_split_pct', `${entity} revenue split %`, { type: 'number' })}
+            {field('cost_split_pct', `${entity} cost split %`, { type: 'number' })}
           </div>
           <label className="flex items-start gap-2.5 text-[14px]">
             <input
@@ -215,11 +227,11 @@ function TermsForm({ plan, onDone }: { plan: PlanData['plan']; onDone: () => voi
               className="mt-1 size-4 accent-[var(--primary)]"
             />
             <span>
-              Partner pays their cost share upfront
+              {partner.trim() || 'Partner'} pays its cost share upfront
               <span className="block text-[13px] text-text-2">
                 {upfront
-                  ? 'They contribute cash before launch, whatever sales do.'
-                  : 'Their share comes out of their revenue split instead, so you front the full planned cost.'}
+                  ? `${partner.trim() || 'The partner'} contributes cash before launch, whatever sales do.`
+                  : `${possessive(partner.trim() || 'The partner')} share comes out of its revenue split instead, so ${entity} fronts the full planned cost.`}
               </span>
             </span>
           </label>

@@ -30,6 +30,7 @@ import {
   collaborationTypeLabel,
   computeScenarios,
   formatSizes,
+  possessive,
   getCustomTerms,
 } from '~/lib/collection-plans';
 import { cn } from '~/lib/utils';
@@ -41,7 +42,12 @@ const categoryLabel = (value: string) =>
   PLAN_COST_CATEGORIES.find(c => c.value === value)?.label ?? value.replace(/_/g, ' ');
 
 /** The terms of the deal as label/value pairs, in the order a partner would read them. */
-function termsOf(plan: NonNullable<CollectionDetail['plan']>['plan']): [string, string][] {
+function termsOf(
+  plan: NonNullable<CollectionDetail['plan']>['plan'],
+  entityName: string | null
+): [string, string][] {
+  const entity = entityName || 'The business';
+  const partner = plan.partnerName || 'Partner';
   const m = plan.metadata;
   const out: [string, string][] = [];
   const add = (label: string, value: unknown, suffix = '') => {
@@ -55,11 +61,13 @@ function termsOf(plan: NonNullable<CollectionDetail['plan']>['plan']): [string, 
       add('Purchase order', m.purchase_order_reference);
       break;
     case 'co_branded':
-      add('Your revenue split', m.revenue_split_pct, '%');
-      add('Your cost split', m.cost_split_pct, '%');
+      add(`${entity} revenue split`, m.revenue_split_pct, '%');
+      add(`${entity} cost split`, m.cost_split_pct, '%');
       out.push([
         'Partner costs',
-        m.costs_paid_upfront === false ? 'Taken from their revenue split' : 'Paid upfront',
+        m.costs_paid_upfront === false
+          ? `Taken from ${possessive(partner)} revenue split`
+          : 'Paid upfront',
       ]);
       add('Co-brand credit', m.co_brand_credit_notes);
       add('Marketing commitments', m.marketing_commitment_notes);
@@ -147,7 +155,7 @@ export function PlanTab({
   const chosen = scenarios.find(s => s.preset.label === scenario) ?? scenarios[1];
   const p = chosen?.projections ?? plan.projections;
   const preset = SCENARIO_PRESETS.find(s => s.label === scenario) ?? SCENARIO_PRESETS[1];
-  const terms = termsOf(record);
+  const terms = termsOf(record, entityName);
   const isCollab = record.collaborationType !== 'in_house';
   const line = (id: string | null) => lines.find(l => l.id === id);
   const cost = (id: string | null) => costs.find(c => c.id === id);
@@ -288,7 +296,10 @@ export function PlanTab({
             </Panel>
           )}
           {p.entityUpfrontCost != null && (
-            <Panel title="Your upfront cash outlay" testId="plan-upfront">
+            <Panel
+              title={`${possessive(entityName || 'The business')} upfront cash outlay`}
+              testId="plan-upfront"
+            >
               <div className="flex items-start gap-3">
                 <Wallet
                   size={20}
@@ -302,8 +313,8 @@ export function PlanTab({
                   </div>
                   <p className="mt-1 text-[13px] text-text-2">
                     {p.entityUpfrontCost === p.projectedTotalCost
-                      ? "The full planned cost: their share isn't paid in upfront, so you front all of it until revenue settles."
-                      : 'Your own cost-split share. The partner is covering theirs separately, upfront.'}
+                      ? `The full planned cost: ${possessive(plan.plan.partnerName || 'the partner')} share isn't paid in upfront, so ${entityName || 'the business'} fronts all of it until revenue settles.`
+                      : `${possessive(entityName || 'The business')} own cost-split share. ${plan.plan.partnerName || 'The partner'} is covering its own separately, upfront.`}
                   </p>
                 </div>
               </div>
