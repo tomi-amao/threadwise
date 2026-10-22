@@ -17,6 +17,7 @@ import {
   type CollectionPlanLine,
   type CollectionPlanProjections,
   type CollectionPlanRecord,
+  parseSizeQuantities,
 } from '~/lib/collection-plans';
 import { COLLECTION_STATUSES, type CollectionStatus } from '~/lib/collection-status';
 import { fetchFxRate, type FxRateResult } from './collection-plans.server';
@@ -75,6 +76,8 @@ export interface ProductOption {
   provider: string | null;
   productType: string | null;
   thumbnailUrl: string | null;
+  /** Sizes on the product's variants (the SIZE attribute), for the plan line's size split. */
+  sizes: string[];
 }
 
 export interface MembershipRow {
@@ -329,6 +332,32 @@ interface DbProduct {
   provider: string | null;
   product_type: string | null;
   metadata: { images?: { url?: string }[] } | null;
+  variants?: unknown;
+}
+
+const SIZE_ORDER = ['xxs', 'xs', 's', 'm', 'l', 'xl', 'xxl', 'xxxl'];
+
+/** The distinct SIZE values on a product's variants, in the usual size order where known. */
+export function sizesOfVariants(variants: unknown): string[] {
+  if (!Array.isArray(variants)) return [];
+  const found: string[] = [];
+  for (const variant of variants) {
+    const attributes = (variant as { attributes?: Record<string, unknown> } | null)?.attributes;
+    if (!attributes || typeof attributes !== 'object') continue;
+    for (const [key, value] of Object.entries(attributes)) {
+      if (key.toLowerCase() !== 'size' || typeof value !== 'string') continue;
+      const label = value.trim();
+      if (label && !found.some(f => f.toLowerCase() === label.toLowerCase())) found.push(label);
+    }
+  }
+  const rank = (s: string) => {
+    const i = SIZE_ORDER.indexOf(s.toLowerCase());
+    return i === -1 ? SIZE_ORDER.length : i;
+  };
+  return found
+    .map((label, index) => ({ label, index }))
+    .sort((a, b) => rank(a.label) - rank(b.label) || a.index - b.index)
+    .map(item => item.label);
 }
 
 function toProductOption(p: DbProduct): ProductOption {
@@ -339,6 +368,7 @@ function toProductOption(p: DbProduct): ProductOption {
     provider: p.provider ?? null,
     productType: p.product_type ?? null,
     thumbnailUrl: images[0]?.url ?? null,
+    sizes: sizesOfVariants(p.variants),
   };
 }
 
@@ -362,7 +392,7 @@ export async function getPlan(
     supabase
       .from('collection_plan_lines')
       .select(
-        'id, plan_id, product_id, product_name, planned_quantity, gifted_units, unit_cost, unit_selling_price, expected_sell_through_pct, notes, display_order, unit_cost_currency, unit_cost_original, products(name)'
+        'id, plan_id, product_id, product_name, planned_quantity, size_quantities, gifted_units, unit_cost, unit_selling_price, expected_sell_through_pct, notes, display_order, unit_cost_currency, unit_cost_original, products(name)'
       )
       .eq('plan_id', planRow.id)
       .order('display_order', { ascending: true, nullsFirst: false })
@@ -384,6 +414,7 @@ export async function getPlan(
     product_id: string | null;
     product_name: string | null;
     planned_quantity: number | string | null;
+    size_quantities: unknown;
     gifted_units: number | string | null;
     unit_cost: number | string | null;
     unit_selling_price: number | string | null;
@@ -401,6 +432,7 @@ export async function getPlan(
     productName: r.product_name ?? null,
     linkedProductName: r.products?.name ?? null,
     plannedQuantity: num(r.planned_quantity),
+    sizeQuantities: parseSizeQuantities(r.size_quantities),
     giftedUnits: num(r.gifted_units),
     unitCost: num(r.unit_cost),
     unitSellingPrice: num(r.unit_selling_price),
@@ -499,7 +531,7 @@ export async function getCollectionDetail(
     fetchAllRows<DbProduct>('products', (from, to) =>
       supabase
         .from('products')
-        .select('id, name, provider, product_type, metadata')
+        .select('id, name, provider, product_type, metadata, variants')
         .neq('status', 'archived')
         .order('name')
         .order('id')

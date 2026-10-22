@@ -12,7 +12,12 @@ import type { LoaderFunctionArgs } from 'react-router';
 import { fetchFxRate } from '~/lib/api/collection-plans.server';
 import { getPackData } from '~/lib/api/collections.server';
 import { getRequestSupabaseClient, requireUser } from '~/lib/supabase-server';
-import { collaborationTypeLabel, computeScenarios, getCustomTerms } from '~/lib/collection-plans';
+import {
+  collaborationTypeLabel,
+  computeScenarios,
+  getCustomTerms,
+  possessive,
+} from '~/lib/collection-plans';
 
 const formatMoney = (value: number, currency: string) =>
   new Intl.NumberFormat('en-GB', {
@@ -92,6 +97,21 @@ export async function loader({ request }: LoaderFunctionArgs) {
     return `${base} <span class="muted">(≈ ${formatMoneySafe(value * fxRate.rate, fxRate.targetCurrency)})</span>`;
   };
 
+  // The size curve of a line: one column per size with its units underneath, spanning the
+  // table under the line, so a long run reads as a grid instead of wrapping inside a cell.
+  const sizeRun = (sizes: { size: string; quantity: number }[]) =>
+    sizes.length === 0
+      ? ''
+      : `
+      <tr class="sizes">
+        <td colspan="8">
+          <table class="size-run" aria-label="Size run">
+            <thead><tr><th>Sizes</th>${sizes.map(s => `<th class="num">${escapeHtml(s.size)}</th>`).join('')}<th class="num">Total</th></tr></thead>
+            <tbody><tr><th>Units</th>${sizes.map(s => `<td class="num">${s.quantity}</td>`).join('')}<td class="num bold">${sizes.reduce((sum, s) => sum + s.quantity, 0)}</td></tr></tbody>
+          </table>
+        </td>
+      </tr>`;
+
   const lineRows = lines
     .map(line => {
       const sellThrough = Math.max(0, Math.min(100, line.expectedSellThroughPct)) / 100;
@@ -113,7 +133,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
         <td class="num">${line.expectedSellThroughPct}%</td>
         <td class="num bold">${GBP(projRevenue)}</td>
         <td class="num bold">${GBP(projCogs)}</td>
-      </tr>`;
+      </tr>${sizeRun(line.sizeQuantities)}`;
     })
     .join('');
 
@@ -219,15 +239,16 @@ export async function loader({ request }: LoaderFunctionArgs) {
     ${metricRow('Net margin', p => `${p.projectedNetMarginPct.toFixed(1)}%`)}
     ${
       isCollab
-        ? metricRow(`${plan.partnerName || 'Partner'} needs to pay`, p =>
+        ? metricRow(escapeHtml(`${plan.partnerName || 'Partner'} needs to pay`), p =>
             p.partnerPaymentDue?.amount != null ? withPartnerFx(p.partnerPaymentDue.amount) : '—'
           )
         : ''
     }
     ${
       plan.collaborationType === 'co_branded'
-        ? metricRow('Your upfront cash outlay', p =>
-            p.entityUpfrontCost != null ? GBP(p.entityUpfrontCost) : '—'
+        ? metricRow(
+            escapeHtml(`${possessive(entityName || 'The business')} upfront cash outlay`),
+            p => (p.entityUpfrontCost != null ? GBP(p.entityUpfrontCost) : '—')
           )
         : ''
     }
@@ -271,6 +292,12 @@ ${
   td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
   td.bold { font-weight: 700; }
   td.cap { text-transform: capitalize; }
+  tr.sizes td { padding-top: 0; padding-bottom: 10px; }
+  table.size-run { width: auto; font-size: 11px; color: #555; break-inside: avoid; }
+  table.size-run th, table.size-run td { padding: 2px 10px; border: 1px solid #ddd; font-weight: 400; }
+  table.size-run thead th { background: #f4f4f4; color: #555; }
+  table.size-run tbody th { text-align: left; color: #888; }
+  table.size-run td.bold { font-weight: 700; }
   td.indent { color: #444; }
   .muted { color: #888; font-weight: 400; }
   tr { border-bottom: 1px solid #eee; }
@@ -328,12 +355,16 @@ ${
 ${
   projections.entityUpfrontCost != null
     ? `<div class="callout callout-cash">
-        <strong>Your upfront cash outlay</strong>
+        <strong>${escapeHtml(possessive(entityName || 'The business'))} upfront cash outlay</strong>
         <div class="amount">${GBP(projections.entityUpfrontCost)}</div>
         ${
           projections.entityUpfrontCost === projections.projectedTotalCost
-            ? "The full planned cost — their share isn't paid in upfront, so you're fronting all of it until revenue settles."
-            : 'Your own cost-split share — the partner is covering theirs separately, upfront.'
+            ? escapeHtml(
+                `The full planned cost — ${possessive(plan.partnerName || 'the partner')} share isn't paid in upfront, so ${entityName || 'the business'} is fronting all of it until revenue settles.`
+              )
+            : escapeHtml(
+                `${possessive(entityName || 'The business')} own cost-split share — ${plan.partnerName || 'the partner'} is covering its own separately, upfront.`
+              )
         }
       </div>`
     : ''
@@ -421,7 +452,7 @@ ${
 
 ${scenarioSection}
 
-${plan.notes ? `<h2>Notes</h2><p style="font-size:13px;color:#333;">${escapeHtml(plan.notes)}</p>` : ''}
+${plan.notes ? `<h2>Additional information</h2><p style="font-size:13px;color:#333;white-space:pre-line;">${escapeHtml(plan.notes)}</p>` : ''}
 
 <div class="foot">
   Generated by ThreadWise. All figures are planning projections, not actuals — COGS is charged on

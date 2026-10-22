@@ -13,6 +13,11 @@ import {
   DEFAULT_PLAN_COST_CATEGORIES,
   PLAN_COST_CATEGORIES,
   COLLABORATION_TYPES,
+  MAX_PLAN_SIZES,
+  MAX_SIZE_LABEL_LENGTH,
+  parseSizeQuantities,
+  sizesTotal,
+  type PlanSizeQuantity,
 } from '~/lib/collection-plans';
 import { COLLECTION_STATUSES, inferCostTypes } from './collections.server';
 import { fetchFxRate } from './collection-plans.server';
@@ -402,6 +407,7 @@ interface LineFields {
   product_id: string | null;
   product_name: string | null;
   planned_quantity: number;
+  size_quantities: PlanSizeQuantity[] | null;
   gifted_units: number;
   unit_cost: number;
   unit_cost_currency: string | null;
@@ -409,6 +415,30 @@ interface LineFields {
   unit_selling_price: number;
   expected_sell_through_pct: number;
   notes: string | null;
+}
+
+/**
+ * The size split from the form (a JSON array of {size, quantity}), null when the line has none,
+ * or a message for the user when it is not valid. Rows that would be silently dropped (blank
+ * sizes, zero units, repeats) are refused instead, so what is saved is what was typed.
+ */
+function readSizes(form: FormData): PlanSizeQuantity[] | null | string {
+  const raw = text(form, 'sizeQuantities');
+  if (!raw) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return 'The sizes were not understood.';
+  }
+  if (!Array.isArray(parsed)) return 'The sizes were not understood.';
+  if (parsed.length === 0) return null;
+  if (parsed.length > MAX_PLAN_SIZES) return `Use at most ${MAX_PLAN_SIZES} sizes.`;
+  const clean = parseSizeQuantities(parsed);
+  if (clean.length !== parsed.length) {
+    return `Each size needs a name (up to ${MAX_SIZE_LABEL_LENGTH} characters), used once, with a whole number of units above zero.`;
+  }
+  return clean;
 }
 
 /**
@@ -426,7 +456,11 @@ async function readLine(
   const productName = text(form, 'productName');
   if (!productId && !productName) return fail('Choose a product or enter a product name.');
 
-  const qty = text(form, 'plannedQuantity');
+  // A size split, when given, decides the quantity: it is their sum.
+  const sizeResult = readSizes(form);
+  if (typeof sizeResult === 'string') return fail(sizeResult);
+  const sizes = sizeResult;
+  const qty = sizes ? String(sizesTotal(sizes)) : text(form, 'plannedQuantity');
   const cost = text(form, 'unitCost');
   const price = text(form, 'unitSellingPrice');
   if (![qty, cost, price].every(isNumber)) {
@@ -466,6 +500,7 @@ async function readLine(
     product_id: productId || null,
     product_name: productId ? null : productName,
     planned_quantity: Number(qty),
+    size_quantities: sizes,
     gifted_units: Number(gifted),
     unit_cost: unitCost,
     unit_cost_currency: costCurrency,

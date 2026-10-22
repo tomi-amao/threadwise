@@ -8,6 +8,7 @@ import { test, expect, readManifest } from './fixtures';
 import {
   countRows,
   readCollectionByName,
+  readPlanLineByName,
   restoreCollections,
   snapshotCollections,
   type CollectionSnapshot,
@@ -207,6 +208,99 @@ test.describe('plan', () => {
     await expect(revenue).toContainText(`£${C.plan.revenue.toLocaleString('en-GB')}`);
   });
 
+  test('a line can be split by size; the total is its quantity and sizes can be changed', async ({
+    page,
+  }) => {
+    await page.goto(at(C.autumn.id, '?tab=plan'));
+    const revenue = page
+      .getByRole('main')
+      .locator('div.bg-card')
+      .filter({ has: page.locator('.eyebrow', { hasText: /^Projected revenue$/ }) })
+      .first();
+
+    await page.getByRole('main').getByRole('button', { name: 'Add line' }).first().click();
+    const d = drawer(page);
+    await d.getByRole('button', { name: 'Not launched yet' }).click();
+    await d.getByLabel('Working name').fill('Sized Piece');
+    await d.getByRole('button', { name: 'By size' }).click();
+    await d.getByLabel('Size name', { exact: true }).fill('S');
+    await d.getByLabel('Units in S').fill('4');
+    await d.getByRole('button', { name: 'Add size' }).click();
+    await d.getByLabel('Size name', { exact: true }).fill('M');
+    await d.getByLabel('Units in M').fill('6');
+    await expect(d.getByTestId('size-total')).toContainText('Total 10 units');
+    await d.getByLabel(/^Selling price/).fill('100');
+    await pickFrom(page, 'Supplier currency', 'GBP', /^GBP/);
+    await d.getByLabel('Unit cost').fill('20');
+    await d.getByRole('button', { name: 'Add line' }).click();
+    await expect(d).toBeHidden();
+
+    const lines = page.getByTestId('plan-lines');
+    await expect(lines).toContainText('Sized Piece');
+    await expect(lines.getByRole('list', { name: 'Sizes: S 4 · M 6' })).toBeVisible();
+    // 10 units at £100, all sold, exactly as if the quantity had been typed as one number.
+    await expect(revenue).toContainText(`£${(C.plan.revenue + 1000).toLocaleString('en-GB')}`);
+    expect(await readPlanLineByName('Sized Piece')).toMatchObject({
+      planned_quantity: 10,
+      size_quantities: [
+        { size: 'S', quantity: 4 },
+        { size: 'M', quantity: 6 },
+      ],
+    });
+
+    // Change a size: the quantity and the revenue follow.
+    await lines.getByRole('button', { name: 'Edit Sized Piece' }).click();
+    await drawer(page).getByLabel('Units in M').fill('16');
+    await expect(drawer(page).getByTestId('size-total')).toContainText('Total 20 units');
+    await drawer(page).getByRole('button', { name: 'Save line' }).click();
+    await expect(lines.getByRole('list', { name: 'Sizes: S 4 · M 16' })).toBeVisible();
+    await expect(revenue).toContainText(`£${(C.plan.revenue + 2000).toLocaleString('en-GB')}`);
+
+    // Back to one quantity: the split goes, the quantity stays.
+    await lines.getByRole('button', { name: 'Edit Sized Piece' }).click();
+    await drawer(page).getByRole('button', { name: 'One quantity' }).click();
+    await drawer(page).getByLabel('Planned quantity').fill('20');
+    await drawer(page).getByRole('button', { name: 'Save line' }).click();
+    await expect(drawer(page)).toBeHidden();
+    // Only the seeded line keeps its split.
+    await expect(lines.getByRole('list', { name: /^Sizes:/ })).toHaveCount(1);
+    expect(await readPlanLineByName('Sized Piece')).toMatchObject({
+      planned_quantity: 20,
+      size_quantities: null,
+    });
+  });
+
+  test('an existing product offers its own sizes to start from', async ({ page }) => {
+    await page.goto(at(C.autumn.id, '?tab=plan&drawer=line'));
+    const d = drawer(page);
+    await d.getByRole('button', { name: /^Product:/ }).click();
+    await page
+      .getByPlaceholder(/search/i)
+      .last()
+      .fill(C.plan.sizedLine.productName);
+    await page
+      .getByRole('option', { name: new RegExp(C.plan.sizedLine.productName) })
+      .first()
+      .click();
+    await d.getByRole('button', { name: 'By size' }).click();
+    for (const size of C.plan.sizedLine.suggested) {
+      await expect(d.getByLabel(`Size name ${size}`)).toBeVisible();
+    }
+    // Rows without units are not a line yet.
+    await d.getByLabel(/^Selling price/).fill('10');
+    await pickFrom(page, 'Supplier currency', 'GBP', /^GBP/);
+    await d.getByLabel('Unit cost').fill('1');
+    await expect(d.getByRole('button', { name: 'Add line' })).toBeDisabled();
+    await d.getByLabel('Units in S').fill('3');
+    await d.getByLabel('Units in M').fill('2');
+    await expect(d.getByTestId('size-total')).toContainText('Total 5 units');
+    await expect(d.getByRole('button', { name: 'Add line' })).toBeEnabled();
+
+    // The same size twice is not allowed.
+    await d.getByLabel('Size name M').fill('s');
+    await expect(d.getByRole('button', { name: 'Add line' })).toBeDisabled();
+  });
+
   test('gifted units cannot exceed the quantity', async ({ page }) => {
     await page.goto(at(C.autumn.id, '?tab=plan&drawer=line'));
     const d = drawer(page);
@@ -255,7 +349,7 @@ test.describe('plan', () => {
     await page.goto(at(C.autumn.id, '?tab=plan&drawer=terms'));
     const d = drawer(page);
     await d.getByLabel('Partner name').fill('Maison Renamed');
-    await d.getByLabel('Your revenue split %').fill('70');
+    await d.getByLabel(`${readManifest().entityName} revenue split %`).fill('70');
     await d.getByRole('button', { name: 'Add term' }).click();
     await d.getByLabel('Term 2 name').fill('Term length');
     await d.getByLabel('Term 2 detail').fill('Two seasons');
@@ -267,10 +361,34 @@ test.describe('plan', () => {
     await expect(terms).toContainText('Two seasons');
   });
 
+  test('additional information for the partner shows on the plan and the print pack', async ({
+    page,
+  }) => {
+    const info = 'UK shipping: £4.50 - £8\nUS: £24 (DHL Express)\nNigeria: £26 DPD Air';
+    await page.goto(at(C.autumn.id, '?tab=plan&drawer=terms'));
+    const d = drawer(page);
+    await d.getByLabel('Additional information').fill(info);
+    await d.getByRole('button', { name: 'Save plan details' }).click();
+    await expect(d).toBeHidden();
+
+    const terms = page.getByTestId('plan-terms');
+    await expect(terms).toContainText('Additional information');
+    await expect(terms).toContainText('UK shipping: £4.50 - £8');
+    // Each rate stays on its own line.
+    const text = terms.getByText('US: £24 (DHL Express)');
+    await expect(text).toHaveCSS('white-space', 'pre-line');
+
+    const href = await page.getByRole('link', { name: 'Print plan' }).getAttribute('href');
+    const html = await (await page.request.get(href!)).text();
+    expect(html).toContain('<h2>Additional information</h2>');
+    expect(html).toContain('UK shipping: £4.50 - £8\nUS: £24 (DHL Express)\nNigeria: £26 DPD Air');
+    expect(html).toContain('white-space:pre-line');
+  });
+
   test('a split above 100% is refused', async ({ page }) => {
     await page.goto(at(C.autumn.id, '?tab=plan&drawer=terms'));
     const d = drawer(page);
-    await d.getByLabel('Your revenue split %').fill('140');
+    await d.getByLabel(`${readManifest().entityName} revenue split %`).fill('140');
     await d.getByRole('button', { name: 'Save plan details' }).click();
     await expect(d.getByRole('alert')).toContainText('between 0 and 100');
   });

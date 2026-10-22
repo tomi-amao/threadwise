@@ -123,11 +123,60 @@ test.describe('one collection', () => {
     await expect(panel(page, 'plan-payouts')).toContainText('Maison Test');
   });
 
+  test('the plan names the two businesses instead of saying you and they', async ({ page }) => {
+    const entity = readManifest().entityName;
+    await page.goto(detail(C.autumn.id, '?tab=plan'));
+    const upfront = panel(page, 'plan-upfront');
+    await expect(upfront).toContainText(`${entity}'s upfront cash outlay`);
+    await expect(upfront).toContainText(`${C.plan.partner} is covering its own`);
+    await expect(panel(page, 'plan-terms')).toContainText(`${entity} revenue split`);
+    const main = await page.getByRole('main').innerText();
+    expect(main).not.toMatch(/\bYour (upfront|revenue|cost)/);
+
+    const href = await page.getByRole('link', { name: 'Print plan' }).getAttribute('href');
+    const html = await (await page.request.get(href!)).text();
+    expect(html).toMatch(/upfront cash outlay/);
+    expect(html).not.toMatch(/Your (upfront|own)/);
+    expect(html).toContain(`${C.plan.partner} is covering its own`);
+  });
+
   test('costs not yet decided are marked, and estimates are flagged', async ({ page }) => {
     await page.goto(detail(C.autumn.id, '?tab=plan'));
     const costs = panel(page, 'plan-costs');
     await expect(costs.getByText('To be determined')).toHaveCount(C.plan.pending);
     await expect(costs.getByText('Estimate', { exact: true })).toHaveCount(C.plan.estimated);
+  });
+
+  test('a line split by size shows its sizes, and a line without a split does not', async ({
+    page,
+  }) => {
+    await page.goto(detail(C.autumn.id, '?tab=plan'));
+    const lines = panel(page, 'plan-lines');
+    const sized = lines.locator('tbody tr').filter({ hasText: C.plan.sizedLine.productName });
+    for (const size of C.plan.sizedLine.sizes) await expect(sized).toContainText(size);
+    // The seed splits one of its two lines; the other stays a single quantity.
+    await expect(lines.getByRole('list', { name: /^Sizes:/ })).toHaveCount(1);
+
+    // Opening the split line shows the same sizes, adding up to its quantity.
+    await sized.getByRole('button', { name: /^Edit / }).click();
+    const d = page.getByRole('dialog');
+    await expect(d.getByTestId('size-total')).toContainText(
+      `Total ${C.plan.sizedLine.quantity} units`
+    );
+    await expect(d.getByLabel('Units in M')).toHaveValue('40');
+  });
+
+  test('the print pack lists the sizes of a split line', async ({ page }) => {
+    await page.goto(detail(C.autumn.id, '?tab=plan'));
+    const href = await page.getByRole('link', { name: 'Print plan' }).getAttribute('href');
+    const html = await (await page.request.get(href!)).text();
+    // A size run under the line: a column per size, with the units beneath.
+    expect(html).toMatch(
+      /<th class="num">S<\/th>\s*<th class="num">M<\/th>\s*<th class="num">L<\/th>/
+    );
+    expect(html).toMatch(
+      /<td class="num">30<\/td>\s*<td class="num">40<\/td>\s*<td class="num">30<\/td>/
+    );
   });
 
   test('the scenario switch changes the projection without changing the plan', async ({ page }) => {
@@ -228,6 +277,7 @@ test.describe('layout and accessibility', () => {
   ];
 
   test('has no horizontal overflow, with a drawer open or not', async ({ page }) => {
+    test.slow(); // walks every page and drawer in one test, so it needs more than 30 s under load
     for (const [name, url] of pages()) {
       await page.goto(url);
       await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
@@ -242,6 +292,7 @@ test.describe('layout and accessibility', () => {
   });
 
   test('has no accessibility violations', async ({ page }) => {
+    test.slow(); // as above
     for (const [name, url] of pages()) {
       await page.goto(url);
       await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
@@ -254,5 +305,18 @@ test.describe('layout and accessibility', () => {
       const results = await new AxeBuilder({ page }).analyze();
       expect(results.violations, `${name} drawer`).toEqual([]);
     }
+  });
+  test('the line drawer split by size fits and has no accessibility violations', async ({
+    page,
+  }) => {
+    await page.goto(detail(C.autumn.id, '?tab=plan'));
+    await page
+      .getByTestId('plan-lines')
+      .getByRole('button', { name: new RegExp(`^Edit ${C.plan.sizedLine.productName}`) })
+      .click();
+    await expect(page.getByRole('dialog').getByTestId('size-split')).toBeVisible();
+    await expectNoHorizontalOverflow(page);
+    const results = await new AxeBuilder({ page }).analyze();
+    expect(results.violations).toEqual([]);
   });
 });

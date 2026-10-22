@@ -169,7 +169,12 @@ export function CollectionPage({ detail }: { detail: CollectionDetail }) {
       <EditCostDrawer cost={cost} open={drawer === 'editcost'} onClose={close} />
       {plan && (
         <>
-          <TermsDrawer plan={plan.plan} open={drawer === 'terms'} onClose={close} />
+          <TermsDrawer
+            plan={plan.plan}
+            entityName={detail.entityName}
+            open={drawer === 'terms'}
+            onClose={close}
+          />
           <LineDrawer
             line={line}
             planCurrency={plan.plan.currency}

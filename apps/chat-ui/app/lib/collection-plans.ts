@@ -50,6 +50,13 @@ export const COLLABORATION_TYPES = [
   { value: 'pop_up', label: 'Pop-up / retail takeover' },
 ] as const;
 
+/**
+ * A business name made possessive, for sentences both parties read ("Atelier North's share",
+ * "Moss & Co's"). A plan is read by the business and by its partner, so it names them rather
+ * than saying "you" or "they".
+ */
+export const possessive = (name: string): string => (/s$/i.test(name) ? `${name}'` : `${name}'s`);
+
 export function collaborationTypeLabel(value: string): string {
   return COLLABORATION_TYPES.find(type => type.value === value)?.label ?? value;
 }
@@ -231,6 +238,46 @@ export const CURRENCY_OPTIONS: { value: string; label: string; meta: string }[] 
 
 // ─── Types ────────────────────────────────────────────────────────────────
 
+/** One size of a plan line and the units planned in it. */
+export interface PlanSizeQuantity {
+  size: string;
+  quantity: number;
+}
+
+export const MAX_PLAN_SIZES = 20;
+export const MAX_SIZE_LABEL_LENGTH = 20;
+
+/**
+ * Read a stored size split (JSON from the database or the form) into clean rows: trimmed labels,
+ * whole positive quantities, each size once (case-insensitive, first wins). Anything else is
+ * dropped, so a line never carries a broken split into the projections.
+ */
+export function parseSizeQuantities(value: unknown): PlanSizeQuantity[] {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set<string>();
+  const rows: PlanSizeQuantity[] = [];
+  for (const item of value) {
+    if (!item || typeof item !== 'object') continue;
+    const { size, quantity } = item as { size?: unknown; quantity?: unknown };
+    const label = typeof size === 'string' ? size.trim() : '';
+    const units = Number(quantity);
+    if (!label || label.length > MAX_SIZE_LABEL_LENGTH) continue;
+    if (!Number.isInteger(units) || units <= 0) continue;
+    const key = label.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    rows.push({ size: label, quantity: units });
+  }
+  return rows.slice(0, MAX_PLAN_SIZES);
+}
+
+export const sizesTotal = (sizes: PlanSizeQuantity[]): number =>
+  sizes.reduce((sum, row) => sum + row.quantity, 0);
+
+/** "S 20 · M 40 · L 30", or an empty string when the line has no split. */
+export const formatSizes = (sizes: PlanSizeQuantity[]): string =>
+  sizes.map(row => `${row.size} ${row.quantity}`).join(' · ');
+
 export interface CollectionPlanLine {
   id: string;
   planId: string;
@@ -238,6 +285,9 @@ export interface CollectionPlanLine {
   productName: string | null;
   linkedProductName: string | null;
   plannedQuantity: number;
+  /** How plannedQuantity splits by size; empty when the line is one quantity. When present,
+   * plannedQuantity is their sum (kept so on save), so projections need not know about sizes. */
+  sizeQuantities: PlanSizeQuantity[];
   /** Units of this line given away for free (PR/influencer/partner gifting)
    * rather than sold — always sold, not an estimate. Still incurs full COGS
    * (plannedQuantity includes them — you paid to produce them), but earns
@@ -492,7 +542,7 @@ export function computePlanProjections(
   let partnerPaymentDue: PlanPartnerPayment | null = null;
   let entityUpfrontCost: number | null = null;
   const partnerLabel = partnerName || 'Partner';
-  const entityLabel = entityName || 'You';
+  const entityLabel = entityName || 'The business';
 
   if (collaborationType === 'wholesale') {
     const paymentTerms = typeof metadata?.payment_terms === 'string' ? metadata.payment_terms : '';
@@ -538,7 +588,7 @@ export function computePlanProjections(
       // upfront amount owed in this direction.
       partnerPaymentDue = {
         amount: null,
-        basis: `No upfront payment — you pay ${partnerLabel} their revenue share after sales, shown in "Who gets paid" above`,
+        basis: `No upfront payment — ${entityLabel} pays ${partnerLabel} its revenue share after sales, shown under "Who gets paid"`,
       };
     }
   } else if (collaborationType === 'co_branded') {
@@ -574,7 +624,7 @@ export function computePlanProjections(
         amount: partnerNetPayout,
         basis: costsPaidUpfront
           ? `${100 - rPct}% revenue share, ${100 - cPct}% cost share`
-          : `${100 - rPct}% revenue share, less their ${100 - cPct}% cost share (deducted here instead of paid upfront)`,
+          : `${100 - rPct}% revenue share, less ${possessive(partnerLabel)} ${100 - cPct}% cost share (deducted here instead of paid upfront)`,
       });
 
       if (costsPaidUpfront) {
@@ -585,7 +635,7 @@ export function computePlanProjections(
         // entity-funded).
         partnerPaymentDue = {
           amount: partnerCost,
-          basis: `${100 - cPct}% of total planned costs (their cost-split contribution)`,
+          basis: `${100 - cPct}% of total planned costs (${possessive(partnerLabel)} cost-split contribution)`,
         };
         // The partner is covering their own share in cash, so the entity
         // only needs to front its own share.
@@ -595,8 +645,8 @@ export function computePlanProjections(
         partnerPaymentDue = {
           amount: null,
           basis: shortfall
-            ? `No upfront payment — their ${100 - cPct}% cost share (${Math.round(partnerCost).toLocaleString()}) is deducted from their revenue split instead, but their revenue share alone doesn't cover it — you may not recover the full shortfall if sales come in as planned`
-            : `No upfront payment — their ${100 - cPct}% cost share is deducted from their revenue split when it settles instead`,
+            ? `No upfront payment — ${possessive(partnerLabel)} ${100 - cPct}% cost share (${Math.round(partnerCost).toLocaleString()}) is deducted from its revenue split instead, but that share alone doesn't cover it — ${entityLabel} may not recover the full shortfall if sales come in as planned`
+            : `No upfront payment — ${possessive(partnerLabel)} ${100 - cPct}% cost share is deducted from its revenue split when it settles instead`,
         };
         // Nobody but the entity has put cash in before launch, so the
         // entity is exposed for the *full* planned cost, not just its own
@@ -621,7 +671,7 @@ export function computePlanProjections(
     // cost, so there's nothing the partner owes here.
     partnerPaymentDue = {
       amount: null,
-      basis: `No payment due from ${partnerLabel} — you pay their venue cost, shown in "Who gets paid" above`,
+      basis: `No payment due from ${partnerLabel} — ${entityLabel} pays the venue cost, shown under "Who gets paid"`,
     };
   }
 

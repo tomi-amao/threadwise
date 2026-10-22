@@ -1542,8 +1542,20 @@ async function main() {
       .single()
   )) as { id: string };
   const planLines = [
-    { product: 0, qty: 100, gifted: 10, cost: 40, price: 98, sell: 80 },
-    { product: 1, qty: 60, gifted: 0, cost: 55, price: 124, sell: 70 },
+    {
+      product: 0,
+      qty: 100,
+      gifted: 10,
+      cost: 40,
+      price: 98,
+      sell: 80,
+      sizes: [
+        { size: 'S', quantity: 30 },
+        { size: 'M', quantity: 40 },
+        { size: 'L', quantity: 30 },
+      ],
+    },
+    { product: 1, qty: 60, gifted: 0, cost: 55, price: 124, sell: 70, sizes: null },
   ];
   await must(
     'collection_plan_lines',
@@ -1552,6 +1564,7 @@ async function main() {
         plan_id: planRow.id,
         product_id: products[l.product].id,
         planned_quantity: l.qty,
+        size_quantities: l.sizes,
         gifted_units: l.gifted,
         unit_cost: l.cost,
         unit_selling_price: l.price,
@@ -1589,6 +1602,7 @@ async function main() {
       productName: null,
       linkedProductName: null,
       plannedQuantity: l.qty,
+      sizeQuantities: l.sizes ?? [],
       giftedUnits: l.gifted,
       unitCost: l.cost,
       unitSellingPrice: l.price,
@@ -1632,6 +1646,13 @@ async function main() {
       estimated: projections.costsEstimatedCount,
       lineCount: planLines.length,
       costCount: planCosts.length,
+      // The one line the seed splits by size, as the plan shows it.
+      sizedLine: {
+        productName: products[0].name,
+        quantity: planLines[0].qty,
+        sizes: ['S 30', 'M 40', 'L 30'],
+        suggested: ['S', 'M'],
+      },
     },
     rivalName: 'Rival Drop',
     rivalId: colId('Rival Drop'),

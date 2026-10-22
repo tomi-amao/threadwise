@@ -84,6 +84,7 @@ export function PlanSimulator() {
             productName: 'Sample piece',
             linkedProductName: null,
             plannedQuantity: units,
+            sizeQuantities: [],
             giftedUnits: 0,
             unitCost: cost,
             unitSellingPrice: price,
