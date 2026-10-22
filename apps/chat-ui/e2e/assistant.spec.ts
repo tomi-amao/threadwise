@@ -7,7 +7,7 @@
 
 import AxeBuilder from '@axe-core/playwright';
 import type { Page } from '@playwright/test';
-import { test, expect, expectNoHorizontalOverflow } from './fixtures';
+import { test, expect, expectNoHorizontalOverflow, readManifest } from './fixtures';
 import { example, mockAgent, type Plan } from './helpers/fake-langgraph';
 
 const PROFIT = 'What is my profit this financial year?';
@@ -15,6 +15,22 @@ const COMPARE = 'How does this compare with last financial year?';
 const PERIOD = 'How did sales go?';
 const SLOW = 'Take your time';
 const BROKEN = 'This one fails';
+const PAY = 'Mark this invoice as paid';
+const REMEMBER = 'My financial year starts in April, remember that';
+const UNREADABLE = 'Change something I cannot see';
+const FACT = 'My financial year starts in April';
+const INVOICE = readManifest().invoices.openSale;
+
+/** A proposal as the server sends it (see ui/catalogue.py, Proposal). */
+const PAY_PROPOSAL = {
+  action: 'set_invoice_status',
+  title: `Mark invoice ${INVOICE} as paid`,
+  description: 'Northgate Boutique, GBP 2,400.00. Posts the payment journal.',
+  changes: [{ label: 'Status', before: 'Open', after: 'Paid' }],
+  link: '/invoices?tab=open',
+  approve_label: 'Mark as paid',
+  dismiss_label: 'Leave it',
+};
 
 const PLANS: Record<string, Plan> = {
   [PROFIT]: {
@@ -62,6 +78,42 @@ const PLANS: Record<string, Plan> = {
   },
   [SLOW]: { answer: 'Done at last.', delayMs: 15_000 },
   [BROKEN]: { answer: 'unused', fail: true },
+  [PAY]: {
+    proposal: {
+      tool: 'set_invoice_status',
+      payload: PAY_PROPOSAL,
+      approved: { answer: `Done: invoice ${INVOICE} is now paid.` },
+      declined: { answer: 'Left as it was. Nothing changed.' },
+    },
+    answer: 'unused',
+  },
+  [REMEMBER]: {
+    proposal: {
+      tool: 'remember',
+      payload: {
+        action: 'remember',
+        title: 'Remember this?',
+        description: 'Kept until you delete it under Memory. Used to word answers.',
+        changes: [{ label: 'Remember', after: FACT }],
+        approve_label: 'Remember',
+        dismiss_label: "Don't",
+      },
+      saves: FACT,
+      approved: { answer: "I'll keep that in mind." },
+      declined: { answer: 'Okay, I have not saved anything.' },
+    },
+    answer: 'unused',
+  },
+  [UNREADABLE]: {
+    // A payload this browser cannot show: it must never be approvable blind.
+    proposal: {
+      tool: 'set_invoice_status',
+      payload: { action: 'set_invoice_status', title: 'No changes listed', changes: [] },
+      approved: { answer: 'should never happen' },
+      declined: { answer: 'unused' },
+    },
+    answer: 'unused',
+  },
 };
 
 const panel = (page: Page) => page.locator('#assistant-panel');
@@ -280,7 +332,7 @@ test.describe('assistant', () => {
     await openPanel(page);
     await ask(page, SLOW);
     await expect(panel(page).getByRole('status').filter({ hasText: 'Thinking' })).toBeVisible();
-    await panel(page).getByRole('button', { name: 'Stop' }).click();
+    await panel(page).getByRole('button', { name: 'Stop', exact: true }).click();
     await expect(panel(page).getByRole('button', { name: 'Send' })).toBeVisible();
 
     await ask(page, BROKEN);
@@ -372,6 +424,177 @@ test.describe('assistant', () => {
     expect(main!.x + main!.width).toBeLessThanOrEqual(dock!.x + 1);
     expect(main!.width).toBeGreaterThanOrEqual(1024);
     await expectNoHorizontalOverflow(page);
+  });
+
+  test('the open record is named in the chip and sent as a name, and can be turned off', async ({
+    page,
+  }) => {
+    const agent = await mockAgent(page, PLANS);
+    await page.goto(`/invoices?tab=open&q=${INVOICE}`);
+    await page
+      .getByRole('table')
+      .getByRole('row', { name: new RegExp(INVOICE) })
+      .click();
+    await expect(page).toHaveURL(/invoice=/);
+    const invoiceId = new URL(page.url()).searchParams.get('invoice');
+    // The drawer is modal, so it offers the way in: it closes and the assistant opens.
+    await page.getByRole('dialog').getByRole('button', { name: 'Ask about this' }).click();
+    await expect(panel(page)).toBeVisible();
+    await expect(composer(page)).toBeFocused();
+    await expect(page.getByRole('dialog', { name: INVOICE })).toHaveCount(0);
+
+    const chip = panel(page).getByTestId('page-context');
+    await expect(chip).toHaveText(`Invoices, ${INVOICE}`);
+    await ask(page, PROFIT);
+    await expect(panel(page).getByText('Your net profit this financial year')).toBeVisible();
+    // What is sent: the page, its filters, and the record's id and type. Not the label.
+    const first = agent.runs().at(-1)?.body as { context?: Record<string, unknown> };
+    expect(first.context).toEqual({
+      route: '/invoices',
+      page: 'Invoices',
+      filters: { tab: 'open', q: INVOICE },
+      record: { type: 'invoice', id: invoiceId },
+    });
+    expect(JSON.stringify(first.context)).not.toContain('label');
+    // The record stays the context while the user is on this page...
+    await expect(chip).toHaveText(`Invoices, ${INVOICE}`);
+
+    // Taking the chip off stops sharing the page with the next question.
+    await chip.getByRole('button', { name: /Stop sharing/ }).click();
+    await expect(chip).toHaveCount(0);
+    await ask(page, COMPARE);
+    await expect(panel(page).getByText('this year is lower so far')).toBeVisible();
+    expect((agent.runs().at(-1)?.body as { context?: unknown }).context).toBeUndefined();
+  });
+
+  test('a drawer that shows no record offers no way to ask', async ({ page }) => {
+    await mockAgent(page, PLANS);
+    await page.goto('/ui-kit');
+    await page.getByRole('button', { name: 'Open drawer' }).click();
+    await expect(page.getByRole('dialog')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Ask about this' })).toHaveCount(0);
+  });
+
+  test('the chip follows the page the user moves to', async ({ page }) => {
+    await mockAgent(page, PLANS);
+    await page.goto('/invoices');
+    await openPanel(page);
+    await expect(panel(page).getByTestId('page-context')).toHaveText('Invoices');
+    await panel(page).getByRole('button', { name: 'Close assistant' }).click();
+    await page.goto('/orders?tab=all');
+    await openPanel(page);
+    await expect(panel(page).getByTestId('page-context')).toHaveText('Orders');
+    // A page the assistant has nothing to say about has no chip.
+    await page.goto('/ui-kit');
+    await expect(panel(page).getByTestId('page-context')).toHaveCount(0);
+  });
+
+  test('a proposed change waits for a click: nothing happens until it is approved', async ({
+    page,
+  }) => {
+    const agent = await mockAgent(page, PLANS);
+    await page.goto('/dashboard');
+    await openPanel(page);
+    await ask(page, PAY);
+
+    const card = panel(page).getByRole('region', {
+      name: `Proposed change: Mark invoice ${INVOICE} as paid`,
+    });
+    await expect(card).toBeVisible();
+    await expect(card.getByText('Status')).toBeVisible();
+    await expect(card.getByText('Open', { exact: true })).toBeVisible();
+    await expect(card.getByText('Paid', { exact: true })).toBeVisible();
+    expect(agent.effects).toEqual([]); // proposed, not done
+    // Another question cannot be asked over it: it is settled first.
+    await expect(composer(page)).toHaveAttribute('readonly', '');
+    await expect(panel(page).getByRole('button', { name: 'Send' })).toBeDisabled();
+
+    // Dismissing changes nothing.
+    await card.getByRole('button', { name: 'Leave it' }).click();
+    await expect(panel(page).getByText('Left as it was. Nothing changed.')).toBeVisible();
+    expect(agent.effects).toEqual([]);
+    await expect(card).toHaveCount(0);
+
+    // Approving does, once.
+    await ask(page, PAY);
+    await expect(card).toBeVisible();
+    expect(agent.effects).toEqual([]);
+    await card.getByRole('button', { name: 'Mark as paid' }).click();
+    await expect(panel(page).getByText(`Done: invoice ${INVOICE} is now paid.`)).toBeVisible();
+    expect(agent.effects).toEqual(['set_invoice_status']);
+    await expect(card).toHaveCount(0);
+    await expect(composer(page)).not.toHaveAttribute('readonly', '');
+  });
+
+  test('a proposal this browser cannot show is never approvable', async ({ page }) => {
+    const agent = await mockAgent(page, PLANS);
+    await page.goto('/dashboard');
+    await openPanel(page);
+    await ask(page, UNREADABLE);
+    await expect(panel(page).getByText('Proposed an invoice change')).toBeVisible();
+    await expect(panel(page).getByRole('button', { name: /Approve|Mark as|Dismiss/ })).toHaveCount(
+      0
+    );
+    expect(agent.effects).toEqual([]);
+  });
+
+  test('memory: nothing is remembered until approved; it can be seen and deleted', async ({
+    page,
+  }) => {
+    const agent = await mockAgent(page, PLANS);
+    await page.goto('/dashboard');
+    await openPanel(page);
+    await ask(page, REMEMBER);
+    const card = panel(page).getByRole('region', { name: 'Proposed change: Remember this?' });
+    await expect(card.getByText(FACT)).toBeVisible();
+    expect(agent.memories.size).toBe(0);
+    await card.getByRole('button', { name: 'Remember' }).click();
+    await expect(panel(page).getByText("I'll keep that in mind.")).toBeVisible();
+    expect([...agent.memories.values()]).toEqual([FACT]);
+
+    await panel(page).getByRole('button', { name: 'Memory' }).click();
+    const list = panel(page).getByRole('list', { name: 'Remembered' });
+    await expect(list.getByText(FACT)).toBeVisible();
+    await list.getByRole('button', { name: `Forget: ${FACT}` }).click();
+    await expect(list.getByText(FACT)).toHaveCount(0);
+    expect(agent.memories.size).toBe(0);
+    await expect(panel(page).getByText('Nothing yet.')).toBeVisible();
+  });
+
+  test('declining to remember saves nothing', async ({ page }) => {
+    const agent = await mockAgent(page, PLANS);
+    await page.goto('/dashboard');
+    await openPanel(page);
+    await ask(page, REMEMBER);
+    await panel(page).getByRole('button', { name: "Don't" }).click();
+    await expect(panel(page).getByText('Okay, I have not saved anything.')).toBeVisible();
+    expect(agent.memories.size).toBe(0);
+  });
+
+  test('a proposal and the memory list pass axe, with no horizontal overflow', async ({ page }) => {
+    const agent = await mockAgent(page, PLANS);
+    agent.memories.set('m1', FACT);
+    await page.goto('/dashboard');
+    await openPanel(page);
+    await ask(page, PAY);
+    await expect(
+      panel(page).getByRole('region', { name: /Proposed change: Mark invoice/ })
+    ).toBeVisible();
+    await expectNoHorizontalOverflow(page);
+    const withProposal = await new AxeBuilder({ page })
+      .include('#assistant-panel')
+      .withTags(['wcag2a', 'wcag2aa'])
+      .analyze();
+    expect(withProposal.violations.map(v => `${v.id}: ${v.help} ${v.nodes[0]?.target}`)).toEqual(
+      []
+    );
+    await panel(page).getByRole('button', { name: 'Memory' }).click();
+    await expect(panel(page).getByText(FACT)).toBeVisible();
+    const memory = await new AxeBuilder({ page })
+      .include('#assistant-panel')
+      .withTags(['wcag2a', 'wcag2aa'])
+      .analyze();
+    expect(memory.violations.map(v => `${v.id}: ${v.help} ${v.nodes[0]?.target}`)).toEqual([]);
   });
 
   test('passes axe and has no horizontal overflow, with an answer open', async ({ page }) => {

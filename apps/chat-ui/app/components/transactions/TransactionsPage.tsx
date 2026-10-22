@@ -61,6 +61,7 @@ import {
   withoutFilters,
   type TxnFilters,
 } from './filters';
+import { useAssistantRecord } from '~/providers/AssistantProvider';
 
 const PAGE_SIZE = 50;
 
@@ -228,6 +229,16 @@ export function TransactionsPage() {
   }, [searchText, filters.q, update]);
 
   const rows = load.data?.transactions ?? [];
+  const selected = rows.find(t => t.id === selectedId);
+  useAssistantRecord(
+    selectedId
+      ? {
+          type: 'transaction',
+          id: selectedId,
+          label: selected ? selected.counterparty_name || selected.description || null : null,
+        }
+      : null
+  );
   const total = load.data?.total_count ?? 0;
   const totalPages = load.data?.total_pages ?? 1;
   const loading = load.status === 'loading';

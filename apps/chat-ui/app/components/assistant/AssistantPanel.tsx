@@ -14,11 +14,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router';
 import { FocusScope } from '@radix-ui/react-focus-scope';
-import { ArrowsOutSimple, ClockCounterClockwise, Plus, X } from 'phosphor-react';
+import { ArrowsOutSimple, Brain, ClockCounterClockwise, Plus, X } from 'phosphor-react';
 import { cn } from '~/lib/utils';
 import { DOCK_MIN_VIEWPORT, PANEL_MAX_WIDTH, PANEL_MIN_WIDTH } from '~/lib/assistant-panel';
 import { useAssistant } from '~/providers/AssistantProvider';
 import { Conversation } from './Conversation';
+import { MemoryList } from './MemoryList';
 import { ThreadList, threadTitle } from './ThreadList';
 
 const DOCK_QUERY = `(min-width: ${DOCK_MIN_VIEWPORT}px)`;
@@ -43,7 +44,7 @@ export function AssistantPanel() {
   const { open, setOpen, composerRef } = assistant;
   const docked = useDocked();
   const modal = !docked;
-  const [view, setView] = useState<'conversation' | 'history'>('conversation');
+  const [view, setView] = useState<'conversation' | 'history' | 'memory'>('conversation');
   const opener = useRef<Element | null>(null);
 
   // Remember what opened the panel; move focus to the composer. Give it back on close.
@@ -104,7 +105,11 @@ export function AssistantPanel() {
           <header className="flex shrink-0 items-center gap-1 border-b px-3 py-2">
             <div className="min-w-0 flex-1 px-1">
               <h2 className="truncate text-sm font-medium">
-                {view === 'history' ? 'Conversations' : threadTitle(current)}
+                {view === 'history'
+                  ? 'Conversations'
+                  : view === 'memory'
+                    ? 'Memory'
+                    : threadTitle(current)}
               </h2>
             </div>
             <button
@@ -115,6 +120,15 @@ export function AssistantPanel() {
               onClick={() => setView(v => (v === 'history' ? 'conversation' : 'history'))}
             >
               <ClockCounterClockwise size={18} aria-hidden />
+            </button>
+            <button
+              type="button"
+              className={headerButton}
+              aria-label="Memory"
+              aria-pressed={view === 'memory'}
+              onClick={() => setView(v => (v === 'memory' ? 'conversation' : 'memory'))}
+            >
+              <Brain size={18} aria-hidden />
             </button>
             <button
               type="button"
@@ -148,6 +162,10 @@ export function AssistantPanel() {
           {view === 'history' ? (
             <div className="flex min-h-0 flex-1 flex-col p-4">
               <ThreadList onOpen={() => setView('conversation')} />
+            </div>
+          ) : view === 'memory' ? (
+            <div className="flex min-h-0 flex-1 flex-col p-4">
+              <MemoryList />
             </div>
           ) : (
             <Conversation />

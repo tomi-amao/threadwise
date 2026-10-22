@@ -681,3 +681,77 @@ of langgraph.json whose env file points at the local Supabase> --no-reload`: the
 8. Full suite on this branch before commit: 1,355 passed; four desktop-light inventory tests
    failed once in the full run (empty tables on first load) and passed alone and on a rerun, and
    one invoices mutation test failed once and passed on rerun. Neither touches code changed here.
+
+## 13. Phase 5 result (2026-10-22)
+
+Done on `feat/chat-agent-redesign`. Details: `apps/ai_agent/docs/chat-agent.md` ("Page context",
+"Actions the user must approve", "Memory") and `docs/design-language.md` ("The assistant panel").
+
+- **Page context.** Each page registers the record open in its drawer (`useAssistantRecord`:
+  invoices, orders, customers, products, transactions); the page and its URL filters come from the
+  route. A chip above the composer says what the next question is about and can be taken off. The
+  browser sends names only (route, page, filters, record type and id) as the run `context`; the
+  server validates them and **re-reads the record as the user** (RLS on), and the model sees that
+  summary, not the browser's label. For an invoice it includes the matched bank payment or the
+  nearest candidates, so "why is this unmatched?" is answerable. Another business's id reads as
+  nothing.
+- **Actions with approval.** Two tools, `set_invoice_status` and `categorise_transaction`. Each reads
+  the record as the user, refuses what cannot work without asking, builds a `Proposal` from that
+  read, pauses on `interrupt()`, and only on `{"decision": "approve"}` calls the existing REST
+  endpoint **through the app itself** (ASGI transport, no network) with the user's own token. The
+  endpoint enforces the rules. The browser shows a proposal card (what changes, from and to,
+  "Nothing changes until you approve it", approve and leave it) and keeps the composer read-only
+  until it is settled. A proposal the browser cannot read is never approvable.
+- **Memory.** `remember` and `forget`, both proposals, in the LangGraph store under
+  `(user_id, "memories")` (at most 20, 200 characters each), shown to the model as data and listed
+  in a Memory view in the panel where each can be deleted. `auth.py` gained an `@auth.on.store`
+  handler that nests every namespace under the caller's id.
+- **Deep links** were done in Phase 3 (every card's source row, every table row, the proposal's
+  record link); nothing new was needed.
+- **Tests.** `tests/test_actions.py` (23): malformed context ignored, the browser label never
+  reaches the prompt, another business's record reads as nothing, every record type reads for its
+  owner, a proposal pauses and a dismissal writes nothing, approval calls the endpoint once with the
+  user's token, rule-forbidden and foreign records are refused without asking, an endpoint refusal
+  is reported, a run without a token cannot act, one pausing call per step, memory saved only after
+  approval and per user, the store handler. Two run against the **real endpoint** on the local
+  stack (real tokens for both businesses): an approved categorisation changes the record and a
+  dismissed one does not, then the record is put back; the other business's token is refused. In the
+  browser, `e2e/assistant.spec.ts` gained nine specs (chip and the context sent, Ask about this,
+  proposals approve and dismiss with `agent.effects` empty until the click, an unreadable proposal,
+  memory approve, decline and delete, axe and overflow with a proposal and the Memory view).
+- **Checked against the real server** (scripted models, real SDK client and tokens): the `context`
+  run option is accepted and read; the proposal interrupt arrives in the shape the browser parses;
+  nothing is stored while paused and the memory exists only after approval; the store handler
+  holds (the other business sees nothing in my namespace and cannot delete from it).
+
+Deviations:
+
+1. **Plain `interrupt()`, not `HumanInTheLoopMiddleware`** (correction to 9.2 #7). The middleware
+   shows raw tool arguments; the proposal must show a description built from a database read, which
+   its synchronous description hook cannot do safely on the event loop, and which must run before
+   the user is asked (to refuse the impossible).
+2. **Modal drawers cover the panel**, so "ask about the invoice I am looking at" cannot work by
+   opening the panel over a drawer without fighting Radix's focus trap, pointer blocking and
+   `aria-hidden`. The kit `Drawer` offers **Ask about this** when it shows a record: it closes, the
+   panel opens, and the record stays the chip's context until the user leaves the page, opens
+   another record or turns the chip off.
+3. **Saving a memory needs approval**, which the plan did not say. Otherwise text read in an order
+   note could write itself into every later conversation (5.4).
+4. **Two actions, not the plan's three examples.** "Match a payment to an invoice" is written by
+   a frontend server function with the service key, not a REST endpoint, so there is nothing for
+   the agent to call as the user; marking a tax period and creating a journal have no suitable
+   endpoint either. Each needs its endpoint first (guarded like the others), then a tool.
+5. `categorise_transaction` only sets the transaction's account for its journal; the proposal
+   says so (a journal already posted is not changed).
+
+Open:
+
+- Gemini quota (section 12, item 7) still blocks live checks of the real model on this
+  key; the live prompt with page context and the two action tools has not been tried against a real
+  model, only against scripted ones.
+- The Memory view loads on open; a memory approved in a conversation shows after the view is
+  opened (it is not live).
+- Test runs before commit: backend 226 passed (and the old Squarespace failure); typecheck clean;
+  the assistant, ui-kit and contract specs 204 passed across all six projects; the full suite
+  1,383 passed with 49 desktop-light failures that were timeouts while I ran typecheck, ESLint and
+  the backend suite alongside it (all 110 tests in those specs pass alone); mutations 56 of 56.

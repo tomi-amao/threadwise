@@ -259,6 +259,15 @@ page from these before inventing a component; if one is missing, add it to the k
   Width is resizable by dragging the left edge or with the arrow keys on it.
 - **Focus**: opening moves it to the composer; closing returns it to what opened the panel.
   ⌘/Ctrl+J toggles it from anywhere.
+- **Page awareness.** Above the composer a chip says what the next question is about ("Looking
+  at: Invoices, INV-0042") and can be taken off. Drawers are modal, so a drawer that shows a
+  record offers **Ask about this**: it closes and the panel opens with that record in the chip.
+  The record stays the context while the user is on that page.
+- **A proposed change** is a card that says what changes (from, to), says "Nothing changes until
+  you approve it", and has one button to approve and one to leave it. The composer is read-only
+  until it is settled. A proposal the browser cannot read is never shown as approvable.
+- **Memory** is a view in the panel listing what the assistant was asked to remember, with a
+  delete on each item. Nothing is saved without approving it in the conversation first.
 - **Cards under an answer** are built from tool results, never from the model's text, on the kit
   (Statement, DataTable, the chart theme) with pence shown. Every card ends with a quiet Source
   row: what was read, the period, and a link to the page. Follow-up chips show under the latest

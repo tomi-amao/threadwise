@@ -45,6 +45,7 @@ import {
   summarise,
   type Tab,
 } from './model';
+import { useAssistantRecord } from '~/providers/AssistantProvider';
 
 const PAGE_SIZE = 50;
 
@@ -75,6 +76,15 @@ export function InvoicesPage({
       : 'all';
   const overdueOnly = sp.get('view') === 'overdue';
   const openId = sp.get('invoice');
+  useAssistantRecord(
+    openId
+      ? {
+          type: 'invoice',
+          id: openId,
+          label: invoices.find(i => i.id === openId)?.invoice_number ?? null,
+        }
+      : null
+  );
 
   const summary = useMemo(() => summarise(invoices, today, base), [invoices, today, base]);
   const counts = useMemo(

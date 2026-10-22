@@ -168,6 +168,35 @@ class Clarify(Props):
     options: list[ClarifyOption] = Field(min_length=2, max_length=4)
 
 
+class Change(Props):
+    label: str = Field(max_length=60, description="What changes, e.g. 'Status'.")
+    before: str | None = Field(default=None, max_length=120)
+    after: str = Field(max_length=120)
+
+
+class Proposal(Props):
+    """A change the agent proposes and will only make if the user approves it.
+
+    The agent pauses (an interrupt) with this payload; the browser shows what will change
+    and resumes with `{"decision": "approve" | "dismiss"}`. Everything shown here is built
+    by the server from the record as the user can see it, never from the model's words.
+    """
+
+    kind: Literal["proposal"] = "proposal"
+    action: str = Field(max_length=40, description="The tool that will run.")
+    title: str = Field(min_length=1, max_length=120)
+    description: str | None = Field(default=None, max_length=300)
+    changes: list[Change] = Field(min_length=1, max_length=6)
+    link: str | None = Field(default=None, description="The record's page.")
+    approve_label: str = Field(default="Approve", max_length=30)
+    dismiss_label: str = Field(default="Dismiss", max_length=30)
+
+    @field_validator("link")
+    @classmethod
+    def _check_link(cls, value: str | None) -> str | None:
+        return _internal_link(value)
+
+
 # name -> props model, for every component the browser can render.
 COMPONENTS: dict[str, type[Props]] = {
     "metric": Metric,
@@ -178,4 +207,4 @@ COMPONENTS: dict[str, type[Props]] = {
 }
 
 # kind -> payload model, for every interrupt the browser can answer.
-INTERRUPTS: dict[str, type[Props]] = {"clarify": Clarify}
+INTERRUPTS: dict[str, type[Props]] = {"clarify": Clarify, "proposal": Proposal}

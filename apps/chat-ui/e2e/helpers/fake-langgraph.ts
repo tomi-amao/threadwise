@@ -46,6 +46,18 @@ export interface Plan {
   followUps?: { label: string; prompt: string }[];
   /** Pause on a clarifying question; `then` runs after the user answers. */
   clarify?: { question: string; options: string[]; then: Plan };
+  /**
+   * Pause on a proposed change. Nothing happens (`effects` stays empty) until the user
+   * approves; `approved` or `declined` then runs. `saves` is a memory kept on approval.
+   */
+  proposal?: {
+    tool: string;
+    args?: Record<string, unknown>;
+    payload: Record<string, unknown>;
+    approved: Plan;
+    declined: Plan;
+    saves?: string;
+  };
   /** Hold the response this long (for the loading state and Stop). */
   delayMs?: number;
   /** The run fails inside the agent: the server streams an `error` event, as the real one does. */
@@ -78,7 +90,12 @@ interface FakeThread {
   snapshots: Snapshot[];
   head: string;
   /** The plan to continue with when a clarifying question is answered. */
-  pending?: { plan: Plan; callId: string };
+  pending?: {
+    plan: Plan;
+    callId: string;
+    tool: string;
+    proposal?: { approved: Plan; declined: Plan; saves?: string };
+  };
 }
 
 export interface Call {
@@ -147,6 +164,10 @@ function sse(events: [string, unknown][]): string {
 
 export interface FakeAgent {
   calls: Call[];
+  /** Changes the stand-in agent has made: one entry per approved proposal, never before. */
+  effects: string[];
+  /** What the assistant remembers (the store behind the Memory view). */
+  memories: Map<string, string>;
   threads: Map<string, FakeThread>;
   /** Replace the plan for a question (e.g. make a failed one succeed on retry). */
   setPlan: (question: string, plan: Plan) => void;
@@ -158,6 +179,8 @@ const DEFAULT_PLAN: Plan = { answer: 'I can answer from your own records.' };
 
 export async function mockAgent(page: Page, plans: Record<string, Plan> = {}): Promise<FakeAgent> {
   const calls: Call[] = [];
+  const effects: string[] = [];
+  const memories = new Map<string, string>();
   const threads = new Map<string, FakeThread>();
   const runCounts = new Map<string, number>();
   const table = { ...plans };
@@ -210,6 +233,40 @@ export async function mockAgent(page: Page, plans: Record<string, Plan> = {}): P
     }
 
     const parent = base.checkpoint_id;
+    if (plan.proposal) {
+      const callId = nextId('call');
+      messages.push({
+        id: nextId('ai'),
+        type: 'ai',
+        content: '',
+        tool_calls: [
+          {
+            id: callId,
+            name: plan.proposal.tool,
+            args: plan.proposal.args ?? {},
+            type: 'tool_call',
+          },
+        ],
+      });
+      const value = { kind: 'proposal', ...plan.proposal.payload };
+      const interruptId = nextId('interrupt');
+      const final: Snapshot = {
+        checkpoint_id: nextId('cp'),
+        parent,
+        values: { messages, ui },
+        next: ['tools'],
+        tasks: [{ id: nextId('task'), name: 'tools', interrupts: [{ value, id: interruptId }] }],
+        created_at: now(),
+      };
+      thread.pending = {
+        plan: plan.proposal.approved,
+        callId,
+        tool: plan.proposal.tool,
+        proposal: plan.proposal,
+      };
+      events.push(['values', { ...final.values, __interrupt__: [{ value, id: interruptId }] }]);
+      return { events, final };
+    }
     if (plan.clarify) {
       const callId = nextId('call');
       messages.push({
@@ -239,7 +296,7 @@ export async function mockAgent(page: Page, plans: Record<string, Plan> = {}): P
         tasks: [{ id: nextId('task'), name: 'tools', interrupts: [{ value, id: interruptId }] }],
         created_at: now(),
       };
-      thread.pending = { plan: plan.clarify.then, callId };
+      thread.pending = { plan: plan.clarify.then, callId, tool: 'ask_user' };
       events.push(['values', { ...final.values, __interrupt__: [{ value, id: interruptId }] }]);
       return { events, final };
     }
@@ -324,6 +381,22 @@ export async function mockAgent(page: Page, plans: Record<string, Plan> = {}): P
         return json(route, list);
       }
 
+      // The store behind the Memory view (the real server scopes it to the user).
+      if (path === '/store/items/search') {
+        const items = [...memories].map(([key, fact], i) => ({
+          namespace: ['user', 'memories'],
+          key,
+          value: { fact, saved_at: `2026-10-0${(i % 9) + 1}T00:00:00Z` },
+          created_at: now(),
+          updated_at: now(),
+        }));
+        return json(route, { items });
+      }
+      if (path === '/store/items' && request.method() === 'DELETE') {
+        memories.delete(String(body.key));
+        return route.fulfill({ status: 204, headers: CORS });
+      }
+
       const match = /^\/threads\/([^/]+)(\/.*)?$/.exec(path);
       const thread = match ? threads.get(match[1]) : undefined;
       if (!match || !thread) return json(route, { detail: 'Thread not found' }, 404);
@@ -366,13 +439,36 @@ export async function mockAgent(page: Page, plans: Record<string, Plan> = {}): P
           thread.snapshots.find(s => s.checkpoint_id === (checkpointId ?? thread.head)) ??
           thread.snapshots[0];
         const input = body.input as { messages?: Msg[] } | null | undefined;
-        const resume = (body.command as { resume?: { answer?: string } } | undefined)?.resume;
+        const resume = (
+          body.command as { resume?: { answer?: string; decision?: string } } | undefined
+        )?.resume;
 
         let plan: Plan;
         let question: string;
         let prefix: Msg[] = [];
         let afterInput: Snapshot = base;
-        if (resume && thread.pending) {
+        if (resume && thread.pending?.proposal) {
+          const { approved, declined, saves } = thread.pending.proposal;
+          const approve = resume.decision === 'approve';
+          plan = approve ? approved : declined;
+          question = `resume:${resume.decision}`;
+          if (approve) {
+            effects.push(thread.pending.tool);
+            if (saves) memories.set(nextId('memory'), saves);
+          }
+          prefix = [
+            {
+              id: nextId('tool'),
+              type: 'tool',
+              name: thread.pending.tool,
+              tool_call_id: thread.pending.callId,
+              content: JSON.stringify(
+                approve ? { done: true } : { done: false, declined: true, note: 'Declined.' }
+              ),
+              status: 'success',
+            },
+          ];
+        } else if (resume && thread.pending) {
           plan = thread.pending.plan;
           question = `resume:${resume.answer}`;
           prefix = [
@@ -451,6 +547,8 @@ export async function mockAgent(page: Page, plans: Record<string, Plan> = {}): P
 
   return {
     calls,
+    effects,
+    memories,
     threads,
     setPlan: (question, plan) => {
       table[question] = plan;

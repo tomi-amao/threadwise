@@ -49,6 +49,10 @@ const STEP_LABELS: Record<string, string> = {
   describe_tables: 'Read table columns',
   run_sql: 'Ran a custom query',
   ask_user: 'Asked you a question',
+  set_invoice_status: 'Proposed an invoice change',
+  categorise_transaction: 'Proposed a categorisation',
+  remember: 'Offered to remember something',
+  forget: 'Offered to forget something',
 };
 
 export function stepLabel(call: ToolCallLike): string {

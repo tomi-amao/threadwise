@@ -107,6 +107,28 @@ never the default namespace.
 Leave out credential and raw tables on purpose (`external_sources`, `external_raw_events`, sync
 state, logs, backups).
 
+## What the agent can change
+
+By default nothing: its SQL is read-only. The only writes are the proposals in
+[chat-agent.md](chat-agent.md#actions-the-user-must-approve), and they hold four lines:
+
+- **A click.** The run pauses before any write; only an explicit `{"decision": "approve"}`
+  continues. A dismissal, silence or a malformed answer writes nothing.
+- **The user's identity.** The write goes through the existing endpoint with the user's own
+  token, so the endpoint's guards, ownership checks and business rules apply. A run without the
+  token cannot act at all (`call_app` refuses).
+- **A verified description.** What the user is asked to approve is built from a read as that user,
+  not from what the model said.
+- **No injection into memory.** Saving a memory needs approval too, and memories are per user:
+  `auth.py`'s `@auth.on.store` handler nests every namespace under the caller's id.
+
+The page context the browser sends is a name only. The server re-reads the record as the user
+(`agents/page_context.py`); another business's id reads as nothing, and the label is never used.
+
+`tests/test_actions.py` proves each of these, including against the real endpoint (an approved
+change really happens, a dismissed one does not, another business's token is refused), and puts
+the record back afterwards.
+
 ## Secrets
 
 - Provider credentials each user enters are stored per `external_sources` row in Supabase Vault

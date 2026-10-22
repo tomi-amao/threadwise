@@ -1109,6 +1109,24 @@
         ],
         "question": "Which period do you mean?"
       }
+    ],
+    "proposal": [
+      {
+        "action": "set_invoice_status",
+        "approve_label": "Mark as paid",
+        "changes": [
+          {
+            "after": "Paid",
+            "before": "Open",
+            "label": "Status"
+          }
+        ],
+        "description": "Harbour & Co, \u00a3960.00. Posts the payment journal.",
+        "dismiss_label": "Leave it",
+        "kind": "proposal",
+        "link": "/invoices?invoice=i-1",
+        "title": "Mark invoice INV-OUT-2003 as paid"
+      }
     ]
   },
   "interrupts": {
@@ -1156,6 +1174,114 @@
       },
       "required": ["question", "options"],
       "title": "Clarify",
+      "type": "object"
+    },
+    "proposal": {
+      "$defs": {
+        "Change": {
+          "additionalProperties": false,
+          "properties": {
+            "after": {
+              "maxLength": 120,
+              "title": "After",
+              "type": "string"
+            },
+            "before": {
+              "anyOf": [
+                {
+                  "maxLength": 120,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Before"
+            },
+            "label": {
+              "description": "What changes, e.g. 'Status'.",
+              "maxLength": 60,
+              "title": "Label",
+              "type": "string"
+            }
+          },
+          "required": ["label", "after"],
+          "title": "Change",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "description": "A change the agent proposes and will only make if the user approves it.\n\nThe agent pauses (an interrupt) with this payload; the browser shows what will change\nand resumes with `{\"decision\": \"approve\" | \"dismiss\"}`. Everything shown here is built\nby the server from the record as the user can see it, never from the model's words.",
+      "properties": {
+        "action": {
+          "description": "The tool that will run.",
+          "maxLength": 40,
+          "title": "Action",
+          "type": "string"
+        },
+        "approve_label": {
+          "default": "Approve",
+          "maxLength": 30,
+          "title": "Approve Label",
+          "type": "string"
+        },
+        "changes": {
+          "items": {
+            "$ref": "#/$defs/Change"
+          },
+          "maxItems": 6,
+          "minItems": 1,
+          "title": "Changes",
+          "type": "array"
+        },
+        "description": {
+          "anyOf": [
+            {
+              "maxLength": 300,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Description"
+        },
+        "dismiss_label": {
+          "default": "Dismiss",
+          "maxLength": 30,
+          "title": "Dismiss Label",
+          "type": "string"
+        },
+        "kind": {
+          "const": "proposal",
+          "default": "proposal",
+          "title": "Kind",
+          "type": "string"
+        },
+        "link": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The record's page.",
+          "title": "Link"
+        },
+        "title": {
+          "maxLength": 120,
+          "minLength": 1,
+          "title": "Title",
+          "type": "string"
+        }
+      },
+      "required": ["action", "title", "changes"],
+      "title": "Proposal",
       "type": "object"
     }
   },

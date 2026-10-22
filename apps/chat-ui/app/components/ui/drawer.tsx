@@ -1,13 +1,17 @@
 import * as React from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
-import { X } from 'phosphor-react';
+import { ChatCircle, X } from 'phosphor-react';
 import { cn } from '~/lib/utils';
+import { useOptionalAssistant } from '~/providers/AssistantProvider';
 import { Eyebrow } from './eyebrow';
 
 /**
  * Right-hand slide-over for add/edit flows and detail views (replaces permanent side
  * forms). Built on Radix Dialog, so focus is trapped while open, returns to the trigger
  * on close, and Escape closes it.
+ *
+ * Where the open drawer shows a record (an invoice, an order...), it offers "Ask about this":
+ * the drawer is modal, so it closes and the assistant opens with that record as its context.
  */
 export function Drawer({
   open,
@@ -32,6 +36,8 @@ export function Drawer({
   // The drawer is opened from state, not from a <Dialog.Trigger>, so Radix has no trigger to
   // hand focus back to. Remember the opener as focus is about to move in, restore on close.
   const openerRef = React.useRef<HTMLElement | null>(null);
+  const assistant = useOptionalAssistant();
+  const asked = React.useRef(false);
 
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
@@ -44,7 +50,9 @@ export function Drawer({
           }}
           onCloseAutoFocus={e => {
             e.preventDefault();
-            openerRef.current?.focus();
+            // Asking the assistant hands focus to its composer; do not take it back.
+            if (asked.current) asked.current = false;
+            else openerRef.current?.focus();
           }}
           className={cn(
             'fixed inset-y-0 right-0 z-[61] flex w-[min(480px,100vw)] flex-col border-l border-border-strong bg-background text-foreground shadow-2xl duration-200 data-[state=closed]:animate-out data-[state=open]:animate-in data-[state=closed]:slide-out-to-right data-[state=open]:slide-in-from-right',
@@ -59,6 +67,20 @@ export function Drawer({
                 <Dialog.Description className="sr-only">{description}</Dialog.Description>
               )}
             </div>
+            {assistant?.canAskAbout && (
+              <button
+                type="button"
+                onClick={() => {
+                  asked.current = true;
+                  assistant.askAbout();
+                  onOpenChange(false);
+                }}
+                className="ml-auto mr-1 inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full border border-border px-3 text-xs text-text-2 transition-colors hover:border-border-strong hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                <ChatCircle size={14} weight="light" aria-hidden />
+                Ask about this
+              </button>
+            )}
             <Dialog.Close
               aria-label="Close"
               className="inline-flex size-8 shrink-0 items-center justify-center rounded-full border border-transparent text-muted-foreground transition-colors hover:border-border-strong hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"

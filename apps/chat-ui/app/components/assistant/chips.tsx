@@ -3,9 +3,11 @@
  * options of a clarifying question the agent paused on.
  */
 
+import { Link } from 'react-router';
 import { ArrowRight } from 'phosphor-react';
+import { Button } from '~/components/ui/button';
 import { cn } from '~/lib/utils';
-import type { ComponentProps, Clarify } from './catalogue';
+import type { ComponentProps, Clarify, Proposal } from './catalogue';
 
 function ChoiceButton({
   children,
@@ -89,5 +91,74 @@ export function ClarifyPrompt({
       </ul>
       <p className="mt-3 text-xs text-muted-foreground">Or type your answer below.</p>
     </div>
+  );
+}
+
+/**
+ * A change the agent proposes. The run is paused: nothing has happened, and nothing will
+ * unless the user approves. What is shown was built by the server from the record as the
+ * user can see it, not from the model's words.
+ */
+export function ProposalCard({
+  proposal,
+  onDecide,
+  disabled,
+}: {
+  proposal: Proposal;
+  onDecide: (decision: 'approve' | 'dismiss') => void;
+  disabled?: boolean;
+}) {
+  return (
+    <section
+      aria-label={`Proposed change: ${proposal.title}`}
+      className="rounded-2xl border border-border-strong bg-card p-4"
+    >
+      <p className="eyebrow">Proposed change</p>
+      <h3 className="mt-1 text-[15px] font-medium">{proposal.title}</h3>
+      {proposal.description && <p className="mt-1 text-sm text-text-2">{proposal.description}</p>}
+      <dl className="mt-3 space-y-2 text-sm">
+        {proposal.changes.map(change => (
+          <div key={change.label} className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+            <dt className="w-20 shrink-0 text-xs text-muted-foreground">{change.label}</dt>
+            <dd className="min-w-0 flex-1">
+              {change.before != null && (
+                <>
+                  <span className="text-text-2 line-through decoration-muted-foreground/60">
+                    {change.before}
+                  </span>
+                  <span aria-hidden className="mx-2 text-muted-foreground">
+                    →
+                  </span>
+                  <span className="sr-only"> changes to </span>
+                </>
+              )}
+              <span className="font-medium">{change.after}</span>
+            </dd>
+          </div>
+        ))}
+      </dl>
+      <p className="mt-3 text-xs text-muted-foreground">
+        Nothing changes until you approve it.
+        {proposal.link && (
+          <>
+            {' '}
+            <Link
+              to={proposal.link}
+              className="text-accent-text underline underline-offset-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              Open the record
+            </Link>
+          </>
+        )}
+      </p>
+      <div className="mt-3 flex flex-wrap gap-2">
+        <Button size="sm" onClick={() => onDecide('approve')} disabled={disabled}>
+          {proposal.approve_label}
+        </Button>
+        <Button size="sm" variant="outline" onClick={() => onDecide('dismiss')} disabled={disabled}>
+          {proposal.dismiss_label}
+        </Button>
+      </div>
+    </section>
   );
 }

@@ -6,7 +6,7 @@ read it through `ToolRuntime`, so the model never sees or chooses it.
 """
 
 import datetime as dt
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Any
 from uuid import UUID
@@ -21,6 +21,9 @@ class AgentUser:
 
     user_id: str
     entity_id: str
+    # The user's own Supabase token, for calling the app's endpoints as them. Never shown
+    # to the model and never logged; repr=False keeps it out of tracebacks.
+    access_token: str | None = field(default=None, repr=False)
 
 
 def agent_user_from_config(config: RunnableConfig | None) -> AgentUser:
@@ -40,7 +43,9 @@ def agent_user_from_config(config: RunnableConfig | None) -> AgentUser:
         raise PermissionError(
             "This agent only works for a signed-in user with a business."
         )
-    return AgentUser(user_id=user_id, entity_id=entity_id)
+    return AgentUser(
+        user_id=user_id, entity_id=entity_id, access_token=pick("access_token")
+    )
 
 
 def agent_user(runtime: ToolRuntime) -> AgentUser:

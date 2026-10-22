@@ -22,13 +22,15 @@ import {
   ThumbsDown,
   ThumbsUp,
   WarningCircle,
+  X,
 } from 'phosphor-react';
 import { Button } from '~/components/ui/button';
 import { useAssistant } from '~/providers/AssistantProvider';
 import { AssistantCard } from './cards';
 import { parseUiMessage, type ParsedUi } from './catalogue';
-import { ClarifyPrompt, FollowUpChips } from './chips';
+import { ClarifyPrompt, FollowUpChips, ProposalCard } from './chips';
 import { Markdown } from './Markdown';
+import { chipLabel } from '~/lib/assistant-context';
 import { messageText, startersFor, stepLabel, toolCalls } from './text';
 
 interface Turn {
@@ -261,6 +263,10 @@ function TurnView({
           <ClarifyPrompt clarify={assistant.clarify} onAnswer={assistant.answer} />
         )}
 
+        {latest && !assistant.isLoading && assistant.proposal && (
+          <ProposalCard proposal={assistant.proposal} onDecide={assistant.decide} />
+        )}
+
         {latest &&
           !assistant.isLoading &&
           !assistant.clarify &&
@@ -395,10 +401,12 @@ function Composer() {
   const assistant = useAssistant();
   const [draft, setDraft] = useState('');
   const answering = !!assistant.clarify && !assistant.isLoading;
+  // A proposed change is settled first: a new question would leave it hanging.
+  const deciding = !!assistant.proposal && !assistant.isLoading;
 
   const submit = () => {
     const text = draft.trim();
-    if (!text || assistant.isLoading) return;
+    if (!text || assistant.isLoading || deciding) return;
     if (answering) assistant.answer(text);
     else assistant.send(text);
     setDraft('');
@@ -420,6 +428,25 @@ function Composer() {
       }}
       className="shrink-0 border-t bg-background p-3"
     >
+      {assistant.pageContext && !deciding && (
+        <p className="mb-2 flex items-center gap-1.5 text-xs text-muted-foreground">
+          <span className="eyebrow">Looking at</span>
+          <span
+            data-testid="page-context"
+            className="inline-flex min-w-0 items-center gap-1 rounded-full border bg-card py-0.5 pl-2.5 pr-1 text-text-2"
+          >
+            <span className="min-w-0 truncate">{chipLabel(assistant.pageContext)}</span>
+            <button
+              type="button"
+              onClick={assistant.dismissPageContext}
+              aria-label={`Stop sharing ${chipLabel(assistant.pageContext)} with the assistant`}
+              className="inline-flex size-5 items-center justify-center rounded-full hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              <X size={11} aria-hidden />
+            </button>
+          </span>
+        </p>
+      )}
       <div className="flex items-end gap-2 rounded-2xl border bg-card p-2 focus-within:border-border-strong">
         <label htmlFor="assistant-composer" className="sr-only">
           {answering ? 'Your answer' : 'Ask about your business'}
@@ -436,7 +463,14 @@ function Composer() {
             }
           }}
           rows={1}
-          placeholder={answering ? 'Type your answer…' : 'Ask about your business…'}
+          readOnly={deciding}
+          placeholder={
+            deciding
+              ? 'Approve or dismiss the change above first'
+              : answering
+                ? 'Type your answer…'
+                : 'Ask about your business…'
+          }
           className="max-h-[200px] min-h-9 flex-1 resize-none bg-transparent px-2 py-1.5 text-[15px] placeholder:text-muted-foreground focus-visible:outline-none"
         />
         {assistant.isLoading ? (
@@ -454,7 +488,7 @@ function Composer() {
           <Button
             type="submit"
             size="icon"
-            disabled={!draft.trim()}
+            disabled={!draft.trim() || deciding}
             aria-label={answering ? 'Send answer' : 'Send'}
             className="size-9 shrink-0 rounded-xl"
           >

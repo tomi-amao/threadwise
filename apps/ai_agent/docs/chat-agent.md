@@ -117,6 +117,55 @@ Business context is loaded once per turn into the `business` state field (`ChatS
 prompt carries the name, currency, country, VAT status, financial year and which dates each kind
 of data covers, without a tool call.
 
+## Page context
+
+The browser sends what the user is looking at as the run's `context` (a plain dict; the graph's
+`context_schema` is `dict`): the route, the page name, its URL filters, and the type and id of a
+record open in a drawer. **None of it is believed** (`agents/page_context.py`):
+
+- `parse_context` validates the shape (a route inside the app, a real UUID, a known record type,
+  bounded filters); anything malformed is dropped, not an error.
+- `describe_page` re-reads the record **as the user** (fixed SQL through `run_trusted`, row-level
+  security on), so another business's id finds nothing ("could not be read"). For an invoice it
+  also finds the matched bank payment, or the nearest candidates, and its journals, so "why is
+  this unmatched?" can be answered. The label the browser shows in its chip is never sent.
+- The summary goes into the system prompt inside `<page>` tags as data. It is stored in the
+  `page` state field each turn (and cleared when a turn has no context).
+
+## Actions the user must approve
+
+Tools in `tools/action_tools.py`: `set_invoice_status` (OPEN, PAID, CANCELLED, VOID) and
+`categorise_transaction` (a chart-of-accounts number). Each one:
+
+1. reads the record as the user and refuses, without asking, what cannot work (not theirs, a move
+   the lifecycle rules forbid, an account that does not exist or cannot be posted to);
+2. builds a **`Proposal`** (`ui/catalogue.py`) from that read: title, what changes from what to
+   what, a link to the record, never the model's words;
+3. pauses on `interrupt()`. Nothing is written. It can stay paused indefinitely; nothing happens
+   unless the user answers `{"decision": "approve"}`. Anything else is a no;
+4. only on approval calls the **existing REST endpoint through the app itself**
+   (`call_app`: `httpx.ASGITransport(app)`, no network) with the user's own token
+   (`AgentUser.access_token`, never shown to the model). The endpoint enforces the rules (guards,
+   ownership, the invoice lifecycle, the ledger), so the agent can do nothing a signed-in user
+   could not do from the page. If the endpoint refuses, the model is told why.
+
+A tool restarts from its top when the run resumes, so steps 1 and 2 only read. `OneActionPerStep`
+keeps a model step to one thing that pauses (a proposal, a memory, a clarifying question): if the
+model asks for several, only the first is kept.
+
+Why not `HumanInTheLoopMiddleware`: it shows the raw tool arguments, and a verified description
+needs a database read that its synchronous description hook cannot do safely on the event loop.
+
+## Memory
+
+`tools/memory_tools.py`: `remember(fact)` and `forget(memory_id)`, both proposals. Items live in
+the LangGraph store under `(user_id, "memories")`, at most 20 of up to 200 characters. They go
+into the prompt inside `<memories>` tags with their ids, as the user's own words. **Saving needs
+the user's approval**, otherwise text read in an order note could write itself into every later
+conversation. The browser lists and deletes them directly through the store API (the panel's
+Memory view); `auth.py`'s `@auth.on.store` handler puts every item under the caller's own id, so
+a client naming another user's namespace only reaches its own.
+
 ## Generative UI
 
 Charts, tables and figures under an answer are **built from tool results, not by a model**, so they
@@ -189,9 +238,11 @@ business.
 5. Raise `ValueError` for bad arguments (the model is told and can retry); let database errors
    raise (the middleware handles them).
 6. Add it to the module's list (`DATA_TOOLS`) and to the prompt's list of typed tools.
-7. If its result should show as a card, add a presenter (`ui/presenters.py`) and a sample result
+7. A tool that changes anything is an action: follow the four steps above, add it to
+   `ACTION_TOOLS`, and test that nothing is written before approval or after a dismissal.
+8. If its result should show as a card, add a presenter (`ui/presenters.py`) and a sample result
    in `ui/contract.py`, then regenerate the contract.
-8. Test it in `tests/test_chat_agent.py` against the manifest, for both seeded businesses.
+9. Test it in `tests/test_chat_agent.py` against the manifest, for both seeded businesses.
 
 ## Testing
 
@@ -205,7 +256,8 @@ seed, as in `docs/chat-redesign-plan.md` section 10.4.
 ## Not in chat (yet)
 
 - Document extraction: invoices are uploaded on the Invoices page (`services/invoice_service.py`).
-- Page context and actions with approval: Phase 5 of the plan.
+- Actions beyond the two above (journals, matching a payment to an invoice): add a tool with the
+  same four steps. Attaching a file to a question: invoices are added on the Invoices page.
 - The old `/chat` REST routes (`api/routes/chat.py`, `services/langgraph_service.py`) call the
   LangGraph server without a user token, so the auth layer refuses them. Only
   `/chat/data-sources` (which does not use LangGraph) is in use.

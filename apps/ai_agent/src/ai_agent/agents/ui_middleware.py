@@ -192,3 +192,35 @@ class FollowUpsMiddleware(AgentMiddleware):
             metadata={"catalogue": CATALOGUE_VERSION},
         )
         return None
+
+
+class OneActionPerStep(AgentMiddleware):
+    """Keep a model step to one thing that pauses for the user.
+
+    A proposal, a remembered fact or a clarifying question each pause the run for the
+    user's answer, and the browser answers one at a time. If the model asks for several in
+    one step, only the first is kept; it can ask for the next once that is settled. The
+    others never run, so nothing is proposed that the user was not shown.
+    """
+
+    def __init__(self, pausing_tools: frozenset[str]) -> None:
+        super().__init__()
+        self.pausing_tools = pausing_tools
+
+    async def aafter_model(self, state: Any, runtime: Any) -> dict[str, Any] | None:
+        messages = state.get("messages", [])
+        last = messages[-1] if messages else None
+        if not isinstance(last, AIMessage) or len(last.tool_calls or []) < 2:
+            return None
+        kept: list[Any] = []
+        paused = False
+        for call in last.tool_calls:
+            if call["name"] in self.pausing_tools:
+                if paused:
+                    continue
+                paused = True
+            kept.append(call)
+        if len(kept) == len(last.tool_calls):
+            return None
+        # Same id: the reducer replaces the message instead of adding a second one.
+        return {"messages": [last.model_copy(update={"tool_calls": kept})]}

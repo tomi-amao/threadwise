@@ -65,6 +65,17 @@ test.describe('ui kit', () => {
       .getByRole('button', { name: 'Last month' })
       .click();
     await expect(status).toHaveText('Would send: Last month');
+
+    // A proposed change shows what will change, and says nothing happens until approved.
+    const proposal = block.getByRole('region', {
+      name: 'Proposed change: Mark invoice INV-OUT-2003 as paid',
+    });
+    await expect(proposal.getByText('Nothing changes until you approve it.')).toBeVisible();
+    await expect(proposal.getByText('Open', { exact: true })).toBeVisible();
+    await proposal.getByRole('button', { name: 'Leave it' }).click();
+    await expect(status).toHaveText('Would send: Would dismiss: Mark invoice INV-OUT-2003 as paid');
+    await proposal.getByRole('button', { name: 'Mark as paid' }).click();
+    await expect(status).toHaveText('Would send: Would approve: Mark invoice INV-OUT-2003 as paid');
   });
 
   test('charts render with a text alternative', async ({ page }) => {

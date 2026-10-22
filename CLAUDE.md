@@ -178,6 +178,9 @@ distinct data paths, and it matters which one a given feature uses:
   `e2e/assistant-contract.spec.ts`). It docks beside the page from 1700px, overlays below that,
   and is a sheet on a phone; its open state and width are a cookie (`lib/assistant-panel.ts`)
   read by the `routes/app.tsx` loader. `/chat` shows the same conversation full width.
+  Pages tell it which record is open (`useAssistantRecord`); the agent can propose changes
+  (invoice status, a transaction's account) and remember preferences, but only after the user
+  approves a proposal card: nothing writes without a click.
   Details: `docs/chat-redesign-plan.md` (sections 3, 4 and 12).
 - `components/dashboard/`, `components/reports/`, etc. are organized by feature/domain,
   mirroring the route list above.

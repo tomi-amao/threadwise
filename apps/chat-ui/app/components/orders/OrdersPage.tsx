@@ -36,6 +36,7 @@ import {
   summarise,
   type Tab,
 } from './model';
+import { useAssistantRecord } from '~/providers/AssistantProvider';
 
 const PAGE_SIZE = 50;
 
@@ -47,6 +48,15 @@ export function OrdersPage({ orders, currency }: { orders: OrderRow[]; currency:
   const from = sp.get('from') ?? '';
   const to = sp.get('to') ?? '';
   const openId = sp.get('order');
+  useAssistantRecord(
+    openId
+      ? {
+          type: 'order',
+          id: openId,
+          label: orders.find(o => o.id === openId)?.order_number ?? null,
+        }
+      : null
+  );
 
   const inRange = useMemo(
     () => (o: OrderRow) =>

@@ -17,10 +17,12 @@ from .catalogue import (
     CATALOGUE_VERSION,
     COMPONENTS,
     INTERRUPTS,
+    Change,
     Clarify,
     ClarifyOption,
     FollowUp,
     FollowUps,
+    Proposal,
 )
 from .presenters import present
 
@@ -207,6 +209,17 @@ def contract() -> dict[str, Any]:
         },
         "examples": examples(),
         "interrupt_examples": {
+            "proposal": [
+                Proposal(
+                    action="set_invoice_status",
+                    title="Mark invoice INV-OUT-2003 as paid",
+                    description="Harbour & Co, £960.00. Posts the payment journal.",
+                    changes=[Change(label="Status", before="Open", after="Paid")],
+                    link="/invoices?invoice=i-1",
+                    approve_label="Mark as paid",
+                    dismiss_label="Leave it",
+                ).model_dump(mode="json")
+            ],
             "clarify": [
                 Clarify(
                     question="Which period do you mean?",
@@ -216,7 +229,7 @@ def contract() -> dict[str, Any]:
                         ClarifyOption(label="This financial year"),
                     ],
                 ).model_dump(mode="json")
-            ]
+            ],
         },
     }
 

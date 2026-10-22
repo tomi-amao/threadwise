@@ -27,7 +27,7 @@ const contract = JSON.parse(
   components: Record<string, Json>;
   interrupts: Record<string, Json>;
   examples: Record<string, unknown[]>;
-  interrupt_examples: { clarify: unknown[] };
+  interrupt_examples: Record<string, unknown[]>;
 };
 
 /** A comparable outline of a JSON Schema: properties, required, enums and leaf types. */
@@ -91,10 +91,12 @@ test.describe('assistant UI contract', () => {
     });
   }
 
-  test('clarify: Zod and Pydantic describe the same payload', () => {
-    const python = contract.interrupts.clarify;
-    expect(zodShape(INTERRUPTS.clarify)).toEqual(shape(python, python));
-  });
+  for (const kind of Object.keys(contract.interrupts)) {
+    test(`${kind} (an interrupt): Zod and Pydantic describe the same payload`, () => {
+      const python = contract.interrupts[kind];
+      expect(zodShape(INTERRUPTS[kind as keyof typeof INTERRUPTS])).toEqual(shape(python, python));
+    });
+  }
 
   test('every example from the backend parses', () => {
     for (const [name, examples] of Object.entries(contract.examples)) {
@@ -103,8 +105,11 @@ test.describe('assistant UI contract', () => {
         expect(parseUiMessage({ id: `${name}-${i}`, name, props }), `${name} #${i}`).not.toBeNull();
       }
     }
-    for (const payload of contract.interrupt_examples.clarify) {
-      expect(INTERRUPTS.clarify.safeParse(payload).success).toBe(true);
+    for (const [kind, payloads] of Object.entries(contract.interrupt_examples)) {
+      expect(payloads.length, `${kind} has examples`).toBeGreaterThan(0);
+      for (const payload of payloads) {
+        expect(INTERRUPTS[kind as keyof typeof INTERRUPTS].safeParse(payload).success).toBe(true);
+      }
     }
   });
 

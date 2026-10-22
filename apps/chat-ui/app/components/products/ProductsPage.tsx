@@ -41,6 +41,7 @@ import {
   type Sort,
   type Tab,
 } from './model';
+import { useAssistantRecord } from '~/providers/AssistantProvider';
 
 const PAGE_SIZE = 50;
 
@@ -74,6 +75,7 @@ export function ProductsPage({
   const current = Math.min(page, Math.max(1, Math.ceil(rows.length / PAGE_SIZE)));
   const shown = rows.slice((current - 1) * PAGE_SIZE, current * PAGE_SIZE);
   const open = products.find(p => p.id !== null && p.id === openId) ?? null;
+  useAssistantRecord(openId ? { type: 'product', id: openId, label: open?.name ?? null } : null);
   const topRevenue = summary.top?.revenue ?? 0;
   const filtered = q !== '';
 

@@ -34,7 +34,18 @@ import {
 import { v4 as uuidv4 } from 'uuid';
 import { getSupabaseBrowserClient } from '~/lib/supabase-browser';
 import { clampWidth, writePanelCookie, type PanelState } from '~/lib/assistant-panel';
-import { parseClarify, type Clarify } from '~/components/assistant/catalogue';
+import {
+  parseClarify,
+  parseProposal,
+  type Clarify,
+  type Proposal,
+} from '~/components/assistant/catalogue';
+import {
+  contextFromUrl,
+  toRunContext,
+  type PageContext,
+  type PageRecord,
+} from '~/lib/assistant-context';
 import { useAuth } from './AuthProvider';
 
 const API_URL = import.meta.env.VITE_LANGGRAPH_API_URL || 'http://localhost:2024';
@@ -50,6 +61,13 @@ const STREAM_MODES: ('values' | 'messages-tuple' | 'custom')[] = [
 ];
 
 type Feedback = 'up' | 'down';
+
+export interface Memory {
+  id: string;
+  fact: string;
+}
+
+const MEMORY_LABEL = 'memories';
 
 export interface AssistantValues extends Record<string, unknown> {
   messages: Message[];
@@ -149,8 +167,26 @@ interface AssistantContextValue {
   error: unknown;
   progress: string | null;
   clarify: Clarify | null;
+  /** A change the agent proposed; nothing happens until the user decides. */
+  proposal: Proposal | null;
   send: (text: string) => void;
   answer: (text: string) => void;
+  decide: (decision: 'approve' | 'dismiss') => void;
+  // what the user is looking at
+  /** The page (and open record) the next question is sent with; null if it is turned off. */
+  pageContext: PageContext | null;
+  /** Take the page out of the next questions (until the user goes to another page). */
+  dismissPageContext: () => void;
+  setPageRecord: (record: PageRecord | null) => void;
+  /** A record is open on the page (a drawer), so the drawer can offer "Ask about this". */
+  canAskAbout: boolean;
+  /** Keep the open record as the chip's context and open the panel. */
+  askAbout: () => void;
+  // memory
+  memories: Memory[];
+  memoriesError: boolean;
+  refreshMemories: () => Promise<void>;
+  deleteMemory: (id: string) => Promise<void>;
   stop: () => void;
   retry: () => void;
   /** There is a last request to send again. */
@@ -180,6 +216,38 @@ export function AssistantProvider({
   const onChatPage = location.pathname === '/chat';
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
 
+  // ── what the user is looking at ─────────────────────────────────────────────────────
+  // The page and its filters come from the URL; the record in a drawer is registered by the
+  // page (`useAssistantRecord`). Taking the chip off turns it off until the next page.
+  const [liveRecord, setLiveRecord] = useState<PageRecord | null>(null);
+  // The record kept when the user pressed "Ask about this" in its drawer (which closes the
+  // drawer so the panel can open). It lasts until they leave the page, open another record
+  // or turn the chip off, so the chip always says what a question will be about.
+  const [heldRecord, setHeldRecord] = useState<PageRecord | null>(null);
+  const [contextOffFor, setContextOffFor] = useState<string | null>(null);
+  const record = liveRecord ?? heldRecord;
+  const setPageRecord = useCallback((next: PageRecord | null) => {
+    setLiveRecord(next);
+    if (next) setHeldRecord(null);
+  }, []);
+  useEffect(() => {
+    setHeldRecord(null);
+  }, [location.pathname]);
+  const urlContext = useMemo(
+    () => contextFromUrl(location.pathname, searchParams),
+    [location.pathname, searchParams]
+  );
+  const pageContext = useMemo<PageContext | null>(() => {
+    if (!urlContext || contextOffFor === location.pathname) return null;
+    return { ...urlContext, record };
+  }, [urlContext, record, contextOffFor, location.pathname]);
+  const dismissPageContext = useCallback(() => {
+    setContextOffFor(location.pathname);
+    setHeldRecord(null);
+  }, [location.pathname]);
+  // A record belongs to the page that registered it: `useAssistantRecord` clears it when the
+  // page goes away (an effect here would run after the new page's and wipe its record).
+
   // ── panel ────────────────────────────────────────────────────────────────────────
   const [panel, setPanel] = useState<PanelState>(initialPanel);
   const firstPanel = useRef(true);
@@ -196,6 +264,11 @@ export function AssistantProvider({
     (width: number) => setPanel(prev => ({ ...prev, width: clampWidth(width) })),
     []
   );
+
+  const askAbout = useCallback(() => {
+    setHeldRecord(liveRecord);
+    setPanel(prev => ({ ...prev, open: true }));
+  }, [liveRecord]);
 
   // ⌘/Ctrl+J: toggle the panel (on /chat, where the thread is the page, go to the composer).
   useEffect(() => {
@@ -295,6 +368,12 @@ export function AssistantProvider({
     () => (stream.interrupt ? parseClarify(stream.interrupt.value) : null),
     [stream.interrupt]
   );
+  // A proposal the browser cannot show is never approved blind: it is treated as no proposal,
+  // and the run stays paused (nothing happens).
+  const proposal = useMemo(
+    () => (stream.interrupt ? parseProposal(stream.interrupt.value) : null),
+    [stream.interrupt]
+  );
 
   const submit = useCallback((run: () => Promise<void>) => {
     lastSubmit.current = () => void run();
@@ -317,11 +396,13 @@ export function AssistantProvider({
             }),
             // Names a new thread after its first question.
             metadata: threadId ? undefined : { title: titleFrom(content) },
+            // What the user is looking at. The agent only believes what it can re-read.
+            context: pageContext ? toRunContext(pageContext) : undefined,
           }
         )
       );
     },
-    [isLoading, stream, submit, threadId]
+    [isLoading, pageContext, stream, submit, threadId]
   );
 
   const answer = useCallback(
@@ -330,6 +411,16 @@ export function AssistantProvider({
       if (!content || isLoading) return;
       submit(() =>
         stream.submit(null, { command: { resume: { answer: content } }, streamMode: STREAM_MODES })
+      );
+    },
+    [isLoading, stream, submit]
+  );
+
+  const decide = useCallback(
+    (decision: 'approve' | 'dismiss') => {
+      if (isLoading) return;
+      submit(() =>
+        stream.submit(null, { command: { resume: { decision } }, streamMode: STREAM_MODES })
       );
     },
     [isLoading, stream, submit]
@@ -426,6 +517,40 @@ export function AssistantProvider({
     [feedback, threadId]
   );
 
+  // ── memory (what the assistant was asked to remember; the user can see and delete it) ──
+  const [memories, setMemories] = useState<Memory[]>([]);
+  const [memoriesError, setMemoriesError] = useState(false);
+  const refreshMemories = useCallback(async () => {
+    if (!userId) return;
+    try {
+      const { items } = await getClient().store.searchItems([userId, MEMORY_LABEL], {
+        limit: 50,
+      });
+      setMemories(
+        items
+          .map(item => ({
+            id: item.key,
+            fact: String((item.value as { fact?: unknown }).fact ?? ''),
+            saved: String((item.value as { saved_at?: unknown }).saved_at ?? ''),
+          }))
+          .filter(m => m.fact)
+          .sort((a, b) => a.saved.localeCompare(b.saved))
+          .map(({ id, fact }) => ({ id, fact }))
+      );
+      setMemoriesError(false);
+    } catch {
+      setMemoriesError(true);
+    }
+  }, [userId]);
+  const deleteMemory = useCallback(
+    async (id: string) => {
+      if (!userId) return;
+      await getClient().store.deleteItem([userId, MEMORY_LABEL], id);
+      await refreshMemories();
+    },
+    [refreshMemories, userId]
+  );
+
   const value: AssistantContextValue = {
     open: panel.open,
     width: panel.width,
@@ -449,8 +574,19 @@ export function AssistantProvider({
     error: stream.error,
     progress,
     clarify,
+    proposal,
     send,
     answer,
+    decide,
+    pageContext,
+    dismissPageContext,
+    setPageRecord,
+    canAskAbout: liveRecord != null && !onChatPage,
+    askAbout,
+    memories,
+    memoriesError,
+    refreshMemories,
+    deleteMemory,
     stop,
     retry,
     canRetry: lastSubmit.current != null,
@@ -463,6 +599,26 @@ export function AssistantProvider({
   };
 
   return <AssistantContext.Provider value={value}>{children}</AssistantContext.Provider>;
+}
+
+/**
+ * Tell the assistant which record is open on this page (an invoice's drawer, say), so a
+ * question like "why is this unmatched?" is about it. Pass null while nothing is open.
+ */
+export function useAssistantRecord(record: PageRecord | null) {
+  const { setPageRecord } = useAssistant();
+  const type = record?.type;
+  const id = record?.id;
+  const label = record?.label ?? null;
+  useEffect(() => {
+    setPageRecord(type && id ? { type, id, label } : null);
+    return () => setPageRecord(null);
+  }, [setPageRecord, type, id, label]);
+}
+
+/** The assistant, or null where there is none (so shared components can offer it if present). */
+export function useOptionalAssistant(): AssistantContextValue | null {
+  return useContext(AssistantContext);
 }
 
 export function useAssistant(): AssistantContextValue {

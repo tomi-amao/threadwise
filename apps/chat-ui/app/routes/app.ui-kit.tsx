@@ -26,8 +26,13 @@ import { Tabs } from '~/components/ui/tabs';
 import { ThemeToggle } from '~/components/ui/theme-toggle';
 import { BarChart, LineChart, ShareChart } from '~/components/charts';
 import { AssistantCard } from '~/components/assistant/cards';
-import { parseClarify, parseUiMessage, type ParsedUi } from '~/components/assistant/catalogue';
-import { ClarifyPrompt, FollowUpChips } from '~/components/assistant/chips';
+import {
+  parseClarify,
+  parseProposal,
+  parseUiMessage,
+  type ParsedUi,
+} from '~/components/assistant/catalogue';
+import { ClarifyPrompt, FollowUpChips, ProposalCard } from '~/components/assistant/chips';
 import contract from '~/components/assistant/ui-contract.json';
 
 export const meta: MetaFunction = () => [{ title: 'UI kit - ThreadWise' }];
@@ -44,6 +49,7 @@ const ASSISTANT_EXAMPLES: ParsedUi[] = Object.entries(contract.examples).flatMap
   })
 );
 const CLARIFY_EXAMPLE = parseClarify(contract.interrupt_examples.clarify[0]);
+const PROPOSAL_EXAMPLE = parseProposal(contract.interrupt_examples.proposal[0]);
 
 function Block({ id, title, children }: { id: string; title: string; children: React.ReactNode }) {
   return (
@@ -325,6 +331,12 @@ export default function UiKit() {
           )}
           {CLARIFY_EXAMPLE && (
             <ClarifyPrompt clarify={CLARIFY_EXAMPLE} onAnswer={a => setSent(a)} />
+          )}
+          {PROPOSAL_EXAMPLE && (
+            <ProposalCard
+              proposal={PROPOSAL_EXAMPLE}
+              onDecide={decision => setSent(`Would ${decision}: ${PROPOSAL_EXAMPLE.title}`)}
+            />
           )}
           <p role="status" className="text-sm text-text-2">
             {sent ? `Would send: ${sent}` : 'Click a suggestion to see what it sends.'}

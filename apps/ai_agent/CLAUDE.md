@@ -141,6 +141,13 @@ classifier, router or second "what chart?" LLM call.
   so `build_agent()` builds nothing at import; `agents/chat_graph.py` (what langgraph.json
   points at) calls it. Tests import `build_agent` and pass a scripted fake model.
 - **No checkpointer in code**: the LangGraph server supplies one (TTL in langgraph.json).
+- **Page context, actions, memory**: the browser's page context is a name only: the server
+  re-reads the record as the user (`agents/page_context.py`) and the label is never used. Action
+  tools (`tools/action_tools.py`) read, build a `Proposal` from the read, pause on an interrupt,
+  and only on `{"decision": "approve"}` call the existing endpoint through the app with the
+  user's token (`call_app`). Memory (`tools/memory_tools.py`) is saved only after approval, in the
+  store under `(user_id, "memories")`, which `auth.py` scopes per user. Nothing writes without a
+  click: keep it that way, and test it. Details: `docs/chat-agent.md`.
 - **Generative UI** (`ui/`): cards come from tool results through pure presenters
   (`ui/presenters.py`), never from a model, pushed by `GenerativeUIMiddleware`; follow-up chips
   come from one small-model call at the end of the turn (`FollowUpsMiddleware`); `ask_user`

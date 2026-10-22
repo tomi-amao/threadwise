@@ -118,6 +118,24 @@ export const clarify = z.strictObject({
   options: z.array(clarifyOption).min(2).max(4),
 });
 
+const change = z.strictObject({
+  label: z.string().max(60),
+  before: z.string().max(120).nullish(),
+  after: z.string().max(120),
+});
+
+/** A change the agent proposes; it only happens if the user approves (the run is paused). */
+export const proposal = z.strictObject({
+  kind: z.literal('proposal').default('proposal'),
+  action: z.string().max(40),
+  title: z.string().min(1).max(120),
+  description: z.string().max(300).nullish(),
+  changes: z.array(change).min(1).max(6),
+  link: internalLink.nullish(),
+  approve_label: z.string().max(30).default('Approve'),
+  dismiss_label: z.string().max(30).default('Dismiss'),
+});
+
 /** name -> props schema, for every component the agent can push. */
 export const COMPONENTS = {
   metric,
@@ -128,11 +146,12 @@ export const COMPONENTS = {
 } as const;
 
 /** kind -> payload schema, for every interrupt the browser can answer. */
-export const INTERRUPTS = { clarify } as const;
+export const INTERRUPTS = { clarify, proposal } as const;
 
 export type ComponentName = keyof typeof COMPONENTS;
 export type ComponentProps = { [K in ComponentName]: z.infer<(typeof COMPONENTS)[K]> };
 export type Clarify = z.infer<typeof clarify>;
+export type Proposal = z.infer<typeof proposal>;
 
 /** A UI message the registry can render, already validated. */
 export type ParsedUi = {
@@ -164,6 +183,12 @@ export function parseUiMessage(message: RawUiMessage): ParsedUi | null {
     return null;
   }
   return { id: message.id, name: message.name, props: parsed.data } as ParsedUi;
+}
+
+/** Validate a proposal payload; null if the browser cannot show it (so it is never approved blind). */
+export function parseProposal(value: unknown): Proposal | null {
+  const parsed = proposal.safeParse(value);
+  return parsed.success ? parsed.data : null;
 }
 
 /** Validate an interrupt payload; null if the browser cannot answer it. */
