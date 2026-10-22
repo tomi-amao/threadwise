@@ -104,7 +104,9 @@ function getClient(): Client {
   if (!client) {
     client = new Client({
       apiUrl: API_URL,
-      callerOptions: { fetch: stoppableFetch },
+      // One retry, not the SDK's four: a refusal (HTTP 429, a busy model) should show in a
+      // second or two, not after fifteen seconds of backoff. Try again is a click away.
+      callerOptions: { fetch: stoppableFetch, maxRetries: 1 },
       onRequest: async (_url, init) => {
         const { data } = await getSupabaseBrowserClient().auth.getSession();
         const headers = new Headers(init.headers);
@@ -159,6 +161,8 @@ interface AssistantContextValue {
   selectThread: (id: string) => void;
   renameThread: (id: string, title: string) => Promise<void>;
   deleteThread: (id: string) => Promise<void>;
+  /** Delete every conversation this user has. Returns how many. */
+  deleteAllThreads: () => Promise<number>;
   // conversation
   messages: Message[];
   ui: UIMessage[];
@@ -208,7 +212,7 @@ export function AssistantProvider({
   initialPanel: PanelState;
   children: React.ReactNode;
 }) {
-  const { user } = useAuth();
+  const { user, entity } = useAuth();
   const userId = user?.id;
   const location = useLocation();
   const navigate = useNavigate();
@@ -494,6 +498,22 @@ export function AssistantProvider({
     [refreshThreads, setThreadId, threadId]
   );
 
+  const deleteAllThreads = useCallback(async () => {
+    const ids: string[] = [];
+    // Every page, not just the 50 the list shows.
+    for (let offset = 0; ; offset += 100) {
+      const page = await getClient().threads.search({ limit: 100, offset });
+      ids.push(...page.map(t => t.thread_id));
+      if (page.length < 100) break;
+    }
+    for (let i = 0; i < ids.length; i += 5) {
+      await Promise.all(ids.slice(i, i + 5).map(id => getClient().threads.delete(id)));
+    }
+    setThreadId(null);
+    await refreshThreads();
+    return ids.length;
+  }, [refreshThreads, setThreadId]);
+
   // ── feedback (stored on the thread, for evals) ───────────────────────────────────
   const current = threads.find(t => t.thread_id === threadId);
   const [feedback, setFeedbackState] = useState<Record<string, Feedback>>({});
@@ -513,8 +533,27 @@ export function AssistantProvider({
       void getClient()
         .threads.update(threadId, { metadata: { feedback: next } })
         .catch(() => undefined);
+      // And one row per rating for the review queue: ids only, never the question or the
+      // answer (supabase/migrations/20261022000000_assistant_feedback.sql).
+      if (entity?.id && userId) {
+        const table = getSupabaseBrowserClient().from('assistant_feedback');
+        const saved = value
+          ? table.upsert(
+              {
+                entity_id: entity.id,
+                user_id: userId,
+                thread_id: threadId,
+                message_id: messageId,
+                rating: value,
+                updated_at: new Date().toISOString(),
+              },
+              { onConflict: 'user_id,thread_id,message_id' }
+            )
+          : table.delete().eq('thread_id', threadId).eq('message_id', messageId);
+        void Promise.resolve(saved).catch(() => undefined);
+      }
     },
-    [feedback, threadId]
+    [entity?.id, feedback, threadId, userId]
   );
 
   // ── memory (what the assistant was asked to remember; the user can see and delete it) ──
@@ -567,6 +606,7 @@ export function AssistantProvider({
     selectThread,
     renameThread,
     deleteThread,
+    deleteAllThreads,
     messages: stream.messages,
     ui: stream.values?.ui ?? [],
     isLoading,
@@ -606,11 +646,12 @@ export function AssistantProvider({
  * question like "why is this unmatched?" is about it. Pass null while nothing is open.
  */
 export function useAssistantRecord(record: PageRecord | null) {
-  const { setPageRecord } = useAssistant();
+  const setPageRecord = useOptionalAssistant()?.setPageRecord;
   const type = record?.type;
   const id = record?.id;
   const label = record?.label ?? null;
   useEffect(() => {
+    if (!setPageRecord) return;
     setPageRecord(type && id ? { type, id, label } : null);
     return () => setPageRecord(null);
   }, [setPageRecord, type, id, label]);

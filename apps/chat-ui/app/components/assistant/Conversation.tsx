@@ -31,7 +31,15 @@ import { parseUiMessage, type ParsedUi } from './catalogue';
 import { ClarifyPrompt, FollowUpChips, ProposalCard } from './chips';
 import { Markdown } from './Markdown';
 import { chipLabel } from '~/lib/assistant-context';
-import { messageText, startersFor, stepLabel, toolCalls } from './text';
+import { PRIVACY_NOTE } from '~/lib/assistant-privacy';
+import {
+  SLOW_AFTER_MS,
+  explainError,
+  messageText,
+  startersFor,
+  stepLabel,
+  toolCalls,
+} from './text';
 
 interface Turn {
   human: Message | null;
@@ -123,7 +131,7 @@ export function Conversation() {
             <WarningCircle size={18} className="shrink-0 text-destructive" aria-hidden />
             <span className="min-w-0 flex-1">
               {assistant.canRetry
-                ? 'The assistant could not answer. Try again.'
+                ? explainError(error)
                 : 'The assistant is not available right now.'}
             </span>
             {assistant.canRetry && (
@@ -139,6 +147,20 @@ export function Conversation() {
   );
 }
 
+/** True once a turn has been running longer than SLOW_AFTER_MS; resets when it ends. */
+function useSlow(running: boolean): boolean {
+  const [slow, setSlow] = useState(false);
+  useEffect(() => {
+    if (!running) {
+      setSlow(false);
+      return;
+    }
+    const timer = setTimeout(() => setSlow(true), SLOW_AFTER_MS);
+    return () => clearTimeout(timer);
+  }, [running]);
+  return slow;
+}
+
 function EmptyThread() {
   const { send } = useAssistant();
   const { pathname } = useLocation();
@@ -149,6 +171,7 @@ function EmptyThread() {
         Answers come from your own records, with the figures shown and a link to where they live.
         The assistant can read, not change, anything.
       </p>
+      <p className="mt-3 text-xs text-muted-foreground">{PRIVACY_NOTE}</p>
       <p className="eyebrow mt-6">Try</p>
       <ul className="mt-2 space-y-2">
         {startersFor(pathname).map(prompt => (
@@ -178,6 +201,7 @@ function TurnView({
 }) {
   const assistant = useAssistant();
   const busy = latest && assistant.isLoading;
+  const slow = useSlow(busy);
   const results = new Map(
     turn.agent
       .filter(m => m.type === 'tool')
@@ -243,7 +267,11 @@ function TurnView({
         {busy && !finalAnswer && (
           <p role="status" className="flex items-center gap-2 text-sm text-muted-foreground">
             <CircleNotch size={14} className="animate-spin" aria-hidden />
-            {assistant.progress ? `${assistant.progress}…` : 'Thinking…'}
+            {slow
+              ? 'This is taking longer than usual. You can wait, or stop and try again.'
+              : assistant.progress
+                ? `${assistant.progress}…`
+                : 'Thinking…'}
           </p>
         )}
 

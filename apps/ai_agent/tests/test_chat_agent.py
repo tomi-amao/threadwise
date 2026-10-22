@@ -128,6 +128,24 @@ def test_models_are_built_with_short_client_retries(monkeypatch):
     assert chat_agent._model(ready) is ready
 
 
+def test_the_prompt_says_when_no_source_is_connected_or_one_is_stale_or_failing():
+    today = chat_agent.dt.date(2026, 10, 22)
+    none = chat_agent.describe_sources([], today)
+    assert "No data sources are connected" in none and "/integrations" in none
+    mixed = chat_agent.describe_sources(
+        [
+            {"provider": "shopify", "last_synced_at": "2026-10-22T01:00:00+00:00"},
+            {"provider": "paypal", "last_synced_at": "2026-10-21T01:00:00+00:00"},
+            {"provider": "revolut", "last_synced_at": None, "has_error": True},
+        ],
+        today,
+    )
+    assert "shopify (synced today)" in mixed
+    assert "paypal (last synced 1 day ago)" in mixed
+    assert "revolut (never synced, last sync failed)" in mixed
+    assert chat_agent.describe_sources(None, today) == ""  # not loaded: say nothing
+
+
 def test_the_model_never_sees_identity_arguments():
     for tool in TOOLS:
         properties = tool.tool_call_schema.model_json_schema().get("properties", {})
@@ -163,6 +181,7 @@ def test_an_attachment_gets_a_pointer_to_the_invoices_page():
 def test_bad_arguments_go_back_to_the_model_as_an_error(monkeypatch):
     monkeypatch.setattr(chat_agent, "load_profile", _stub_profile)
     monkeypatch.setattr(chat_agent, "load_coverage", _stub_coverage)
+    monkeypatch.setattr(chat_agent, "load_sources", _stub_sources)
     model = ScriptedModel(
         script=[
             call("profit_and_loss", start_date="last year"),
@@ -179,6 +198,7 @@ def test_bad_arguments_go_back_to_the_model_as_an_error(monkeypatch):
 def test_the_prompt_carries_the_business_and_todays_date(monkeypatch):
     monkeypatch.setattr(chat_agent, "load_profile", _stub_profile)
     monkeypatch.setattr(chat_agent, "load_coverage", _stub_coverage)
+    monkeypatch.setattr(chat_agent, "load_sources", _stub_sources)
     monkeypatch.setattr(chat_agent, "today", lambda: dt.date(2026, 10, 18))
     model = ScriptedModel(script=[AIMessage(content="Hello")])
     run(agent_for(model), USER_STUB, HumanMessage("hi"))
@@ -189,6 +209,7 @@ def test_the_prompt_carries_the_business_and_todays_date(monkeypatch):
     assert "not instructions" in system  # the prompt-injection rule is there
     assert "Data on record: orders 2026-01-02 to 2026-10-17 (12)." in system
     assert "No data yet for: invoices." in system
+    assert "Connected data sources: shopify (last synced 3 days ago)." in system
 
 
 def proposal(*pairs: tuple[str, str]) -> AIMessage:
@@ -203,6 +224,7 @@ def proposal(*pairs: tuple[str, str]) -> AIMessage:
 def test_an_answer_ends_with_follow_up_chips(monkeypatch):
     monkeypatch.setattr(chat_agent, "load_profile", _stub_profile)
     monkeypatch.setattr(chat_agent, "load_coverage", _stub_coverage)
+    monkeypatch.setattr(chat_agent, "load_sources", _stub_sources)
     model = ScriptedModel(script=[AIMessage(content="Hello, ask me about your books.")])
     small = ScriptedModel(
         script=[
@@ -228,6 +250,7 @@ def test_an_answer_ends_with_follow_up_chips(monkeypatch):
 def test_a_failed_follow_up_step_leaves_no_chips(monkeypatch):
     monkeypatch.setattr(chat_agent, "load_profile", _stub_profile)
     monkeypatch.setattr(chat_agent, "load_coverage", _stub_coverage)
+    monkeypatch.setattr(chat_agent, "load_sources", _stub_sources)
     model = ScriptedModel(script=[AIMessage(content="Hello.")])
     small = ScriptedModel(script=[])  # raises when called
     state = invoke(
@@ -249,6 +272,7 @@ def test_a_clarifying_question_pauses_and_resumes_with_the_answer(monkeypatch):
 
     monkeypatch.setattr(chat_agent, "load_profile", _stub_profile)
     monkeypatch.setattr(chat_agent, "load_coverage", _stub_coverage)
+    monkeypatch.setattr(chat_agent, "load_sources", _stub_sources)
     model = ScriptedModel(
         script=[
             call(
@@ -278,6 +302,7 @@ def test_a_clarifying_question_pauses_and_resumes_with_the_answer(monkeypatch):
 def test_a_clarifying_question_with_one_option_goes_back_to_the_model(monkeypatch):
     monkeypatch.setattr(chat_agent, "load_profile", _stub_profile)
     monkeypatch.setattr(chat_agent, "load_coverage", _stub_coverage)
+    monkeypatch.setattr(chat_agent, "load_sources", _stub_sources)
     model = ScriptedModel(
         script=[
             call("ask_user", question="Which period?", options=["This month"]),
@@ -292,6 +317,17 @@ def test_a_clarifying_question_with_one_option_goes_back_to_the_model(monkeypatc
 
 
 USER_STUB = {"identity": "user-stub", "entity_id": "entity-stub"}
+
+
+async def _stub_sources(user):
+    return [
+        {
+            "provider": "shopify",
+            "display_name": None,
+            "last_synced_at": "2026-10-15T09:00:00+00:00",
+            "has_error": False,
+        }
+    ]
 
 
 async def _stub_coverage(user):

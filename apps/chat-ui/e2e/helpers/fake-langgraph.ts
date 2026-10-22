@@ -60,8 +60,13 @@ export interface Plan {
   };
   /** Hold the response this long (for the loading state and Stop). */
   delayMs?: number;
-  /** The run fails inside the agent: the server streams an `error` event, as the real one does. */
-  fail?: boolean;
+  /**
+   * The run fails inside the agent: the server streams an `error` event, as the real one does.
+   * Give the error's name and message to look like a provider failure.
+   */
+  fail?: boolean | { error: string; message: string };
+  /** The server refuses the run with HTTP 429, as the rate limit does. */
+  rateLimited?: boolean;
 }
 
 type Msg = Record<string, unknown> & { id: string; type: string };
@@ -502,6 +507,15 @@ export async function mockAgent(page: Page, plans: Record<string, Plan> = {}): P
           }
         }
 
+        if (plan.rateLimited) {
+          return route
+            .fulfill({
+              status: 429,
+              headers: { ...CORS, 'content-type': 'application/json', 'retry-after': '30' },
+              body: JSON.stringify({ detail: 'You are asking too fast. Try again in 30 seconds.' }),
+            })
+            .catch(() => undefined);
+        }
         if (plan.delayMs) await new Promise(resolve => setTimeout(resolve, plan.delayMs));
         if (plan.fail) {
           return route
@@ -511,7 +525,12 @@ export async function mockAgent(page: Page, plans: Record<string, Plan> = {}): P
               body: sse([
                 ['metadata', { run_id: nextId('run'), attempt: 1 }],
                 ['values', afterInput.values],
-                ['error', { error: 'ModelError', message: 'The model did not answer.' }],
+                [
+                  'error',
+                  typeof plan.fail === 'object'
+                    ? plan.fail
+                    : { error: 'ModelError', message: 'The model did not answer.' },
+                ],
               ]),
             })
             .catch(() => undefined);

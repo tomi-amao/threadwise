@@ -33,9 +33,19 @@ class Settings(BaseSettings):
     default_chat_model: str = "google_genai:gemini-2.5-flash-lite"
     # The chat agent (agents/chat_agent.py): provider-prefixed ids for init_chat_model.
     # The main loop, the model it falls back to, and a small one for summaries.
-    agent_model: str = "google_genai:gemini-3.5-flash"
-    agent_fallback_model: Optional[str] = "google_genai:gemini-2.5-flash"
-    agent_small_model: str = "google_genai:gemini-3.5-flash-lite"
+    # Measured on 2026-10-22 (docs/evals.md): the 3.5 models took 18-22s for a one-tool question
+    # and 20-34s for the follow-up step; the 2.5 models 5-9s and about 1s. Different models
+    # have separate free-tier quotas, so the fallback is the other family.
+    agent_model: str = "google_genai:gemini-2.5-flash"
+    agent_fallback_model: Optional[str] = "google_genai:gemini-3.5-flash"
+    agent_small_model: str = "google_genai:gemini-2.5-flash-lite"
+
+    # Limits on the assistant (see docs/operations.md)
+    assistant_runs_per_window: int = 30
+    assistant_rate_window_s: int = 600
+    assistant_turn_token_cap: int = 150_000
+    # Keyed hash for ids in traces and metadata (core/tracing.py). Set it in production.
+    trace_hash_salt: Optional[str] = None
 
     # LangGraph
     langgraph_base_url: str = "http://localhost:2024"

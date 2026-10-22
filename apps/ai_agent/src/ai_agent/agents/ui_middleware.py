@@ -23,7 +23,7 @@ from langgraph.graph.ui import push_ui_message
 from pydantic import BaseModel, Field
 
 from ..ui.catalogue import CATALOGUE_VERSION, FollowUp, FollowUps
-from ..ui.presenters import present
+from ..ui.presenters import PRESENTERS, present
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +63,8 @@ class GenerativeUIMiddleware(AgentMiddleware):
             if not isinstance(result, ToolMessage) or result.status == "error":
                 return result
             call = request.tool_call
+            if call["name"] not in PRESENTERS:
+                return result  # nothing to show for this tool (and often not JSON)
             data = (
                 json.loads(result.content) if isinstance(result.content, str) else None
             )

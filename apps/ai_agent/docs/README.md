@@ -15,6 +15,8 @@ These pages are for developers working on this service. Start with
 | [data-pipeline.md](data-pipeline.md) | Provider sync and normalisation through Inngest, and how to add a provider.               |
 | [accounting.md](accounting.md)       | Journals, account mapping, invoices and their lifecycle.                                  |
 | [api.md](api.md)                     | Every REST route, grouped by router, with the guard each one needs.                       |
+| [evals.md](evals.md)                 | The golden set, the oracle, thresholds, the nightly real-model run and the review queue.  |
+| [operations.md](operations.md)       | The rollout flag, settings, limits and cost, logs and tracing, retention and privacy.     |
 | [development.md](development.md)     | Setup, running locally, configuration, tests, lint and CI.                                |
 
 Related documents elsewhere in the repo:

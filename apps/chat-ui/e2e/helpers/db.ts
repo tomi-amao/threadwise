@@ -641,3 +641,18 @@ export async function createThrowawayUser(email: string, password: string): Prom
   if (!res.ok) throw new Error(`create user: ${res.status} ${await res.text()}`);
   return ((await res.json()) as { id: string }).id;
 }
+
+// ─── Assistant feedback (thumbs up and down; the review queue) ──────────────────────────────────
+
+/** Ratings written by the panel in a test: the stand-in agent's thread ids start "thread-". */
+export async function feedbackRows(): Promise<Record<string, unknown>[]> {
+  return rest('GET', 'assistant_feedback', 'select=*&thread_id=like.thread-*');
+}
+
+export async function deleteTestFeedback(): Promise<void> {
+  await rest('DELETE', 'assistant_feedback', 'thread_id=like.thread-*');
+}
+
+export async function insertFeedback(row: Record<string, unknown>): Promise<void> {
+  await rest('POST', 'assistant_feedback', '', row);
+}

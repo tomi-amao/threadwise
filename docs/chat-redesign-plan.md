@@ -755,3 +755,76 @@ Open:
   the assistant, ui-kit and contract specs 204 passed across all six projects; the full suite
   1,383 passed with 49 desktop-light failures that were timeouts while I ran typecheck, ESLint and
   the backend suite alongside it (all 110 tests in those specs pass alone); mutations 56 of 56.
+
+## 14. Phase 6 result (2026-10-22)
+
+Done on `feat/chat-agent-redesign`. Details: `apps/ai_agent/docs/evals.md` and
+`apps/ai_agent/docs/operations.md`.
+
+- **Evals.** A golden set of 56 cases (`ai_agent/evals/`) with expected figures taken from the seed
+  manifest (a test fails if one is typed into a case), covering the ledger, sales, products,
+  customers, invoices, cash, the business, the fallback SQL, a record the user is looking at, a
+  clarifying question, seven refusals, and five questions asked as the rival business. A scorer
+  checks tool, figure, text, leak, write and follow-ups. A **scripted oracle** (a perfect model
+  that words answers from the tools' real output, never from the expected figures) makes the whole
+  pipeline testable without a model: it must score 100% and runs on every relevant PR
+  (`.github/workflows/backend-data.yml`). The same cases run against a real model nightly (needs
+  the `GOOGLE_API_KEY` secret; skipped without it). `tests/test_evals.py` (24) proves the harness
+  can fail: wrong figure, wrong tool, a leak, a quota refusal, a crash, a write attempt, a
+  non-local database.
+- **The database-backed backend tests now run in CI.** They skipped themselves in the normal
+  backend job (no database); the new workflow starts the local Supabase stack, seeds it, and runs
+  them (`test_scoped_sql`, `test_chat_agent`, `test_actions`, `test_evals`, `test_ui_contract`).
+- **Rollout flag.** `ASSISTANT_ENABLED` (server-read, no rebuild): on in development, **off in
+  production until set**. Off removes the launcher, panel, shortcut, "Ask about this", product
+  insights, and redirects `/chat`. Checked for real with a second dev server.
+- **Limits.** A per-user run limit (default 30 per 10 minutes, HTTP 429 with `Retry-After`,
+  per process), a per-turn token cap checked before the next model call so no tool call is left
+  unanswered, model clients that retry once, a "taking longer than usual" notice after 25 s, and
+  plain-words messages for rate limiting and an unavailable model (the provider's text is never
+  shown).
+- **Observability.** One structured line per turn and per model failure (`ai_agent.turns`: hashed
+  business, seconds, calls, tool names, tokens, outcome; never a question, answer or figure).
+  Thread and run metadata carry keyed hashes (`core/tracing.py`) instead of raw user and business
+  ids. LangSmith is left to the standard environment, with the data-leaving-for-another-provider
+  caveat and the hide-inputs settings documented.
+- **Feedback.** Thumbs ratings are saved to `assistant_feedback` (a migration; ids only; RLS so
+  only the person who gave one can read or change it), and `python -m ai_agent.evals.feedback`
+  lists thumbs-down newest first with the business as the same hash the traces carry.
+- **Privacy and retention.** The 90-day retention is stated in the panel and a test ties it to
+  `langgraph.json`; the conversations view deletes one or all conversations (with a
+  confirmation); what is sent to the model provider is stated where a conversation starts.
+- **Empty and failure states.** The per-turn prompt now names each connected source and when it
+  last synced (or that none is connected, or that its last sync failed), and tells the model to
+  say how fresh time-sensitive figures are and point to Integrations.
+
+Findings from running a real model for the first time (a free-tier key that ran out partway):
+
+1. **Model defaults changed.** Phase 2 picked the 3.5 Gemini models from a list without measuring
+   them. Measured: 3.5-flash took 18-22 s per question and 3.5-flash-lite took 20-34 s for the
+   follow-up step (past its 12 s limit, so **no follow-ups ever appeared**, and once a 504); the
+   2.5 models took 6-9 s and about 1 s. Defaults are now 2.5-flash (main), 3.5-flash (fallback, the
+   other quota) and 2.5-flash-lite (small). The sample is small (9 completed cases); see
+   `docs/evals.md`.
+2. **One golden case was ambiguous**, not the model wrong: "Who is my biggest customer?" correctly
+   got the financial-year default. Cases now say the period they mean.
+3. **Thresholds are provisional.** Real-model thresholds (tool 90%, figure 85%, text 90%,
+   follow-ups 90%; zero leaks, writes and crashes at any level) were set before they could be
+   measured. Tighten them from the first full nightly run.
+4. A recurring `invoices-edit` mutation test failure was **a race in the test**, exposed by the
+   assistant's mount widening the window by milliseconds: it pressed Escape before the drawer had
+   opened, then could not find the tab hidden behind it. It now waits for the dialog (0 failures
+   in 10 repeats, from about 1 in 4). The assistant does not slow the drawer perceptibly, but that
+   is worth keeping an eye on.
+5. The turn log's token counts depend on the provider reporting usage; with a provider that does
+   not, they read 0.
+
+Not done, and why:
+
+- No real-model **nightly baseline** exists yet: it needs a key with enough quota (a full run is
+  about 56 cases and about 450,000 tokens) set as the `GOOGLE_API_KEY` repository secret.
+- A latency/cost **dashboard** is a log query (documented), not a hosted dashboard; that needs
+  wherever the logs are shipped.
+- The per-user limit is per process.
+- The live model has still not been tried with page context and the action tools (only scripted
+  models, and the oracle), apart from the nine real cases above.

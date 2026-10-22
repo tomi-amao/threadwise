@@ -12,6 +12,7 @@ import { useState } from 'react';
 import { ChartLineUp, CircleNotch, Megaphone, Sparkle, TrendUp } from 'phosphor-react';
 import { Eyebrow } from '~/components/ui/eyebrow';
 import { agentFetch } from '~/lib/api/agent-auth';
+import { useOptionalAssistant } from '~/providers/AssistantProvider';
 import type { ProductDetail } from '~/lib/api/products.server';
 import { cn } from '~/lib/utils';
 import { money } from './model';
@@ -104,6 +105,8 @@ type State =
 
 export function ProductInsights({ product, sales }: { product: ProductDetail; sales: Sales }) {
   const [state, setState] = useState<Record<string, State>>({});
+  // These ask the agent, so they go when the assistant is switched off (lib/assistant-flag.ts).
+  const assistantOn = useOptionalAssistant() != null;
 
   const run = async (insight: Insight) => {
     const current = state[insight.id];
@@ -127,6 +130,8 @@ export function ProductInsights({ product, sales }: { product: ProductDetail; sa
       }));
     }
   };
+
+  if (!assistantOn) return null;
 
   return (
     <section aria-label="Insights" className="space-y-3 border-t pt-5">

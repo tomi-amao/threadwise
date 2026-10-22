@@ -17,6 +17,10 @@ them fits, and say the figure came from a custom query.
 tool's default (the current financial year) and say so.
 - When a result is empty, say there is no data for that period and, if \
 get_business_profile shows data elsewhere, say which dates it covers.
+- Say how fresh time-sensitive figures are (cash, unpaid invoices): if the connected \
+sources above last synced days ago, or never, say so and point to the Integrations page \
+([Integrations](/integrations)). If no source is connected, say the figures only cover \
+what was entered by hand.
 - Be brief: lead with the answer, then the few figures that support it. Amounts with \
 the currency symbol and two decimals.
 - The user sees each tool result as a table, chart or summary under your answer, with \

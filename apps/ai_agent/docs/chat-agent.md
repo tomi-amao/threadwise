@@ -100,22 +100,27 @@ doing. `json_safe` turns `Decimal`, dates and UUIDs into JSON values (money to t
 
 In order (the first wraps the rest):
 
-| Middleware                  | Setting                                            | Why                                                                      |
-| --------------------------- | -------------------------------------------------- | ------------------------------------------------------------------------ |
-| `BusinessContextMiddleware` | (ours)                                             | Refuse anonymous runs, deflect attachments, load and inject the business |
-| `SummarizationMiddleware`   | small model, after 60,000 tokens, keep 20 messages | Long threads stay within the context window                              |
-| `FollowUpsMiddleware`       | (ours) small model, after the turn                 | 2 to 4 follow-up questions as chips (see Generative UI)                  |
-| `ModelCallLimitMiddleware`  | 12 per turn, then end                              | Cost and runaway loops                                                   |
-| `ToolCallLimitMiddleware`   | 20 per turn                                        | Same; further calls get an error message                                 |
-| `ModelFallbackMiddleware`   | `agent_fallback_model`                             | The main model is down                                                   |
-| `ModelRetryMiddleware`      | 2 retries, `on_failure="error"`                    | Transient model errors; `"error"` so the fallback gets its turn          |
-| `GenerativeUIMiddleware`    | (ours)                                             | Each tool result becomes a card (see Generative UI)                      |
-| `ToolErrorMiddleware`       | `tool_error_message`                               | A tool failure becomes a message to the model, without internal detail   |
-| `ToolRetryMiddleware`       | 2 retries on `psycopg2.OperationalError`           | A dropped database connection                                            |
+| Middleware                  | Setting                                            | Why                                                                                     |
+| --------------------------- | -------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| `BusinessContextMiddleware` | (ours)                                             | Refuse anonymous runs, deflect attachments, load and inject the business                |
+| `TurnLogMiddleware`         | (ours)                                             | One structured line per turn and per model failure (see [operations.md](operations.md)) |
+| `SummarizationMiddleware`   | small model, after 60,000 tokens, keep 20 messages | Long threads stay within the context window                                             |
+| `TurnBudgetMiddleware`      | token cap per turn (150,000)                       | Stop a runaway turn, before a model call so no tool call is left unanswered             |
+| `FollowUpsMiddleware`       | (ours) small model, after the turn                 | 2 to 4 follow-up questions as chips (see Generative UI)                                 |
+| `ModelCallLimitMiddleware`  | 12 per turn, then end                              | Cost and runaway loops                                                                  |
+| `ToolCallLimitMiddleware`   | 20 per turn                                        | Same; further calls get an error message                                                |
+| `ModelFallbackMiddleware`   | `agent_fallback_model`                             | The main model is down                                                                  |
+| `ModelRetryMiddleware`      | 2 retries, `on_failure="error"`                    | Transient model errors; `"error"` so the fallback gets its turn                         |
+| `GenerativeUIMiddleware`    | (ours)                                             | Each tool result becomes a card (see Generative UI)                                     |
+| `ToolErrorMiddleware`       | `tool_error_message`                               | A tool failure becomes a message to the model, without internal detail                  |
+| `ToolRetryMiddleware`       | 2 retries on `psycopg2.OperationalError`           | A dropped database connection                                                           |
 
 Business context is loaded once per turn into the `business` state field (`ChatState`), so the
-prompt carries the name, currency, country, VAT status, financial year and which dates each kind
-of data covers, without a tool call.
+prompt carries the name, currency, country, VAT status, financial year, which dates each kind
+of data covers, and **which data sources are connected and when each last synced** (or that none is),
+without a tool call. The prompt tells the model to say how fresh time-sensitive figures are and to
+point to Integrations when a source is missing, stale or failing. A source's credentials are never
+read.
 
 ## Page context
 
@@ -206,11 +211,16 @@ cannot disagree with the answer. They reach the browser as LangGraph UI messages
 
 Settings in `core/config.py`, provider-prefixed ids for `init_chat_model`:
 
-| Setting                | Default                              | Used for                                    |
-| ---------------------- | ------------------------------------ | ------------------------------------------- |
-| `AGENT_MODEL`          | `google_genai:gemini-3.5-flash`      | The loop                                    |
-| `AGENT_FALLBACK_MODEL` | `google_genai:gemini-2.5-flash`      | When the main model fails                   |
-| `AGENT_SMALL_MODEL`    | `google_genai:gemini-3.5-flash-lite` | Summaries (and, later, follow-up questions) |
+| Setting                | Default                              | Used for                                                         |
+| ---------------------- | ------------------------------------ | ---------------------------------------------------------------- |
+| `AGENT_MODEL`          | `google_genai:gemini-2.5-flash`      | The loop                                                         |
+| `AGENT_FALLBACK_MODEL` | `google_genai:gemini-3.5-flash`      | When the main model fails (the other family, with its own quota) |
+| `AGENT_SMALL_MODEL`    | `google_genai:gemini-2.5-flash-lite` | Summaries and follow-up questions                                |
+
+The defaults were chosen by measurement (see [operations.md](operations.md#settings-backend-coreconfigpy)):
+the 3.5 models took 18-22 s per question and 20-34 s for the follow-up step, the 2.5 models 6-9 s and
+about 1 s. Model clients retry once and time out after 90 s, so a quota error reaches the fallback in
+seconds.
 
 Switching provider (for example `anthropic:...`) is a settings change plus that provider's API key
 and LangChain integration package.

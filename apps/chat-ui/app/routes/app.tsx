@@ -8,13 +8,17 @@
 
 import { useLoaderData, type LoaderFunctionArgs } from 'react-router';
 import { AppLayout } from '~/components/layout';
+import { assistantEnabled } from '~/lib/assistant-flag';
 import { parsePanel } from '~/lib/assistant-panel';
 
 export function loader({ request }: LoaderFunctionArgs) {
-  return { panel: parsePanel(request.headers.get('cookie')) };
+  return {
+    panel: parsePanel(request.headers.get('cookie')),
+    assistant: assistantEnabled(process.env),
+  };
 }
 
 export default function AppLayoutRoute() {
-  const { panel } = useLoaderData<typeof loader>();
-  return <AppLayout initialPanel={panel} />;
+  const { panel, assistant } = useLoaderData<typeof loader>();
+  return <AppLayout initialPanel={panel} assistant={assistant} />;
 }

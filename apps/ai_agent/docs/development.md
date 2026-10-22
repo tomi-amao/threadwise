@@ -62,17 +62,26 @@ poetry run pytest tests/test_chat_agent.py -v       # one file
 poetry run pytest -k cash_position                  # by name
 ```
 
-| File                                               | Covers                                                                                |
-| -------------------------------------------------- | ------------------------------------------------------------------------------------- |
-| `test_auth.py`                                     | Token verification and the LangGraph auth handler                                     |
-| `test_api_auth.py`                                 | Every REST route has a guard and refuses anonymous callers                            |
-| `test_scoped_sql.py`                               | The SQL checker (30 refused statements) and RLS-scoped execution                      |
-| `test_chat_agent.py`                               | The chat agent end to end with a scripted model; every tool against the seed manifest |
-| `test_invoice_rules.py`, `test_invoice_service.py` | Invoice lifecycle and processing                                                      |
-| `test_normalization.py`                            | Provider normalisers                                                                  |
+| File                                               | Covers                                                                                                  |
+| -------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| `test_auth.py`                                     | Token verification and the LangGraph auth handler                                                       |
+| `test_api_auth.py`                                 | Every REST route has a guard and refuses anonymous callers                                              |
+| `test_scoped_sql.py`                               | The SQL checker (30 refused statements) and RLS-scoped execution                                        |
+| `test_chat_agent.py`                               | The chat agent end to end with a scripted model; every tool against the seed manifest                   |
+| `test_actions.py`                                  | Page context, actions that wait for approval (two against the real endpoint), memory, the store handler |
+| `test_ui_contract.py`                              | The generative UI catalogue, presenters and the contract file                                           |
+| `test_limits.py`                                   | The per-turn token cap and the turn log                                                                 |
+| `test_evals.py`                                    | The eval scorer, the golden set, that the harness can fail, and the review queue                        |
+| `test_invoice_rules.py`, `test_invoice_service.py` | Invoice lifecycle and processing                                                                        |
+| `test_normalization.py`                            | Provider normalisers                                                                                    |
 
-Tests that need the local database and seed (`test_scoped_sql.py`, `test_chat_agent.py`) skip
-those cases when it is not running. Point them elsewhere with `TEST_DATABASE_URL`.
+Tests that need the local database and seed (`test_scoped_sql.py`, `test_chat_agent.py`,
+`test_actions.py`, `test_evals.py`) skip those cases when it is not running, which is why the normal
+backend CI job (no database) skips them. `.github/workflows/backend-data.yml` starts the local
+stack, seeds it, and runs them plus the oracle evals on every relevant PR. Point the tests elsewhere
+with `TEST_DATABASE_URL`.
+
+Run the golden-set evals with `poetry run python -m ai_agent.evals` (see [evals.md](evals.md)).
 
 Assert figures from the seed manifest (`apps/chat-ui/e2e/.seed-manifest.json`, written by
 `pnpm db:fresh`), not from numbers you work out by hand.

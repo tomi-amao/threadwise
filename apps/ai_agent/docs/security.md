@@ -107,6 +107,28 @@ never the default namespace.
 Leave out credential and raw tables on purpose (`external_sources`, `external_raw_events`, sync
 state, logs, backups).
 
+## What goes into traces and logs
+
+Run and thread metadata flows into traces, so no raw id is put in it: `owner` (what a thread is
+filtered by) and `entity_hash` are HMAC-SHA256 of the real ids (`core/tracing.py`, keyed by
+`TRACE_HASH_SALT`). The turn log and the model-error log carry the hashed business, never a
+question, an answer or a figure, and a provider's error message (which can quote the prompt) is
+logged by type only. If LangSmith tracing is switched on, a trace does hold the conversation: see
+[operations.md](operations.md#observability).
+
+## Limits
+
+A user starting runs too fast gets HTTP 429 with `Retry-After` (`auth.py`, per process: see
+[operations.md](operations.md#limits-and-cost)). It protects cost, not tenancy: no isolation rule
+depends on it.
+
+## Ratings
+
+`assistant_feedback` rows (ids and a rating only) are readable and writable only by the person who
+gave them, for a business they own; the review queue reads them with the service role.
+`e2e/assistant-feedback-edit.spec.ts` proves another business and anyone not signed in can neither
+read, change, delete nor forge one.
+
 ## What the agent can change
 
 By default nothing: its SQL is read-only. The only writes are the proposals in

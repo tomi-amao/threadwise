@@ -15,6 +15,8 @@ const COMPARE = 'How does this compare with last financial year?';
 const PERIOD = 'How did sales go?';
 const SLOW = 'Take your time';
 const BROKEN = 'This one fails';
+const TOO_FAST = 'Asking too fast';
+const MODEL_DOWN = 'The model is down';
 const PAY = 'Mark this invoice as paid';
 const REMEMBER = 'My financial year starts in April, remember that';
 const UNREADABLE = 'Change something I cannot see';
@@ -78,6 +80,11 @@ const PLANS: Record<string, Plan> = {
   },
   [SLOW]: { answer: 'Done at last.', delayMs: 15_000 },
   [BROKEN]: { answer: 'unused', fail: true },
+  [TOO_FAST]: { answer: 'unused', rateLimited: true },
+  [MODEL_DOWN]: {
+    answer: 'unused',
+    fail: { error: 'GoogleRateLimitError', message: '429 RESOURCE_EXHAUSTED: quota exceeded' },
+  },
   [PAY]: {
     proposal: {
       tool: 'set_invoice_status',
@@ -149,6 +156,9 @@ async function ask(page: Page, question: string) {
 test.describe('assistant', () => {
   test.beforeEach(async ({ page }) => {
     await page.emulateMedia({ reducedMotion: 'reduce' });
+    // A rating is also saved to the database for the review queue; these tests must not write
+    // to it (the real write is tested in assistant-feedback-edit.spec.ts, in the mutations run).
+    await page.route('**/rest/v1/assistant_feedback*', route => route.abort());
   });
 
   test('opens from the launcher with focus in the composer; Escape closes it and focus goes back', async ({
@@ -342,6 +352,74 @@ test.describe('assistant', () => {
     await alert.getByRole('button', { name: 'Try again' }).click();
     await expect(panel(page).getByText('It worked the second time.')).toBeVisible();
     await expect(panel(page).getByRole('alert')).toHaveCount(0);
+  });
+
+  test('a turn that runs long says so and offers Stop', async ({ page }) => {
+    await page.clock.install();
+    await mockAgent(page, PLANS);
+    await page.goto('/dashboard');
+    await openPanel(page);
+    await ask(page, SLOW);
+    const status = panel(page).getByRole('status');
+    await expect(status).toHaveText('Thinking…');
+    await page.clock.fastForward(26_000);
+    await expect(status).toContainText('taking longer than usual');
+    await expect(panel(page).getByRole('button', { name: 'Stop', exact: true })).toBeVisible();
+  });
+
+  test('asking too fast says so in plain words, and a busy model does too', async ({ page }) => {
+    await mockAgent(page, PLANS);
+    await page.goto('/dashboard');
+    await openPanel(page);
+    await ask(page, TOO_FAST);
+    await expect(panel(page).getByRole('alert')).toContainText('You are asking too fast');
+    await ask(page, MODEL_DOWN);
+    const alert = panel(page).getByRole('alert');
+    await expect(alert).toContainText('AI model is busy or unavailable');
+    // The provider's own words (a quota message can quote the prompt) are never shown.
+    await expect(alert).not.toContainText('RESOURCE_EXHAUSTED');
+  });
+
+  test('every conversation can be deleted at once, after a confirmation', async ({ page }) => {
+    const agent = await mockAgent(page, PLANS);
+    await page.goto('/dashboard');
+    await openPanel(page);
+    await ask(page, PROFIT);
+    await expect(panel(page).getByText('Your net profit this financial year')).toBeVisible();
+    await panel(page).getByRole('button', { name: 'New conversation' }).click();
+    await ask(page, COMPARE);
+    await expect(panel(page).getByText('this year is lower so far')).toBeVisible();
+    expect(agent.threads.size).toBe(2);
+
+    await panel(page).getByRole('button', { name: 'Conversations' }).click();
+    await expect(panel(page).getByText(/kept for 90 days, then deleted/)).toBeVisible();
+    await panel(page).getByRole('button', { name: 'Delete all conversations' }).click();
+    const confirm = page.getByRole('dialog', { name: 'Delete all your conversations?' });
+    await expect(confirm).toContainText('cannot be undone');
+    // Keeping them changes nothing.
+    await confirm.getByRole('button', { name: 'Keep them' }).click();
+    expect(agent.threads.size).toBe(2);
+
+    await panel(page).getByRole('button', { name: 'Delete all conversations' }).click();
+    await page
+      .getByRole('dialog', { name: 'Delete all your conversations?' })
+      .getByRole('button', { name: 'Delete everything' })
+      .click();
+    await expect(panel(page).getByText('No conversations yet.')).toBeVisible();
+    expect(agent.threads.size).toBe(0);
+    await expect(panel(page).getByRole('button', { name: 'Delete all conversations' })).toHaveCount(
+      0
+    );
+  });
+
+  test('an empty conversation says what is sent to the model and how long it is kept', async ({
+    page,
+  }) => {
+    await mockAgent(page, PLANS);
+    await page.goto('/dashboard');
+    await openPanel(page);
+    await expect(panel(page).getByText(/sent to Google \(Gemini\)/)).toBeVisible();
+    await expect(panel(page).getByText(/kept for 90 days/)).toBeVisible();
   });
 
   test('a question can be edited and sent again; an answer can be asked for again', async ({

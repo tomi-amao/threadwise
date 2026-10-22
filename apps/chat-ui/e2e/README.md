@@ -31,18 +31,20 @@ The seed refuses to run twice; that is what `db:fresh` is for.
 
 ## Layout
 
-| Path                        | Purpose                                                                                                                                               |
-| --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `env.ts`                    | Loads `.env.test`; the local-only safety guard                                                                                                        |
-| `seed/seed.ts`, `ledger.ts` | Deterministic seed: a business with orders, payments, bank lines, invoices, a ledger, collections, and a rival business. Writes `.seed-manifest.json` |
-| `write-env.ts`              | Builds `.env.test` from the running local stack                                                                                                       |
-| `auth.setup.ts`             | Signs in once through the UI and saves the session                                                                                                    |
-| `fixtures.ts`               | `test` with the no-hosted-traffic guard, `expectNoHorizontalOverflow`, `readManifest`                                                                 |
-| `helpers/db.ts`             | Service-role reads, snapshots and restores for tests that change data                                                                                 |
-| `stand-in-agent.ts`         | Answers the server-side calls to the AI agent (invoices, stock, journals)                                                                             |
-| `helpers/fake-langgraph.ts` | The LangGraph API the assistant panel talks to from the browser: threads, history, streamed runs, interrupts, answered per question from a plan       |
-| `*.spec.ts`                 | Read-only tests, run at desktop (1280), tablet (768) and mobile (390), in light and dark                                                              |
-| `*-edit.spec.ts`            | Tests that change data: run last, in the `mutations` project, and restore what they changed                                                           |
+| Path                                                                                | Purpose                                                                                                                                               |
+| ----------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `env.ts`                                                                            | Loads `.env.test`; the local-only safety guard                                                                                                        |
+| `seed/seed.ts`, `ledger.ts`                                                         | Deterministic seed: a business with orders, payments, bank lines, invoices, a ledger, collections, and a rival business. Writes `.seed-manifest.json` |
+| `write-env.ts`                                                                      | Builds `.env.test` from the running local stack                                                                                                       |
+| `auth.setup.ts`                                                                     | Signs in once through the UI and saves the session                                                                                                    |
+| `fixtures.ts`                                                                       | `test` with the no-hosted-traffic guard, `expectNoHorizontalOverflow`, `readManifest`                                                                 |
+| `helpers/db.ts`                                                                     | Service-role reads, snapshots and restores for tests that change data                                                                                 |
+| `stand-in-agent.ts`                                                                 | Answers the server-side calls to the AI agent (invoices, stock, journals)                                                                             |
+| `helpers/fake-langgraph.ts`                                                         | The LangGraph API the assistant panel talks to from the browser: threads, history, streamed runs, interrupts, answered per question from a plan       |
+| `assistant-contract.spec.ts`, `assistant-flag.spec.ts`, `assistant-privacy.spec.ts` | No-browser checks run once: the UI contract against the backend's, the rollout flag, and that the retention on screen matches the server's            |
+| `assistant-feedback-edit.spec.ts`                                                   | Thumbs ratings save one row of ids per rating, and only their owner can read or change it (mutations project)                                         |
+| `*.spec.ts`                                                                         | Read-only tests, run at desktop (1280), tablet (768) and mobile (390), in light and dark                                                              |
+| `*-edit.spec.ts`                                                                    | Tests that change data: run last, in the `mutations` project, and restore what they changed                                                           |
 
 ## Writing a page's tests
 

@@ -7,7 +7,7 @@
 import { useEffect, useState } from 'react';
 import { ChatCircle } from 'phosphor-react';
 import { cn } from '~/lib/utils';
-import { useAssistant } from '~/providers/AssistantProvider';
+import { useOptionalAssistant } from '~/providers/AssistantProvider';
 
 export function AssistantLauncher({
   variant,
@@ -18,12 +18,15 @@ export function AssistantLauncher({
   collapsed?: boolean;
   onActivate?: () => void;
 }) {
-  const { open, toggle, onChatPage, composerRef } = useAssistant();
+  const assistant = useOptionalAssistant();
   // Known only in the browser; set after hydration so the server's HTML matches.
   const [shortcut, setShortcut] = useState('Ctrl+J');
   useEffect(() => {
     if (/Mac|iPhone|iPad/.test(navigator.platform)) setShortcut('⌘J');
   }, []);
+  // Switched off (lib/assistant-flag.ts): there is nothing to open.
+  if (!assistant) return null;
+  const { open, toggle, onChatPage, composerRef } = assistant;
   const activate = () => {
     onActivate?.();
     if (onChatPage) composerRef.current?.focus();

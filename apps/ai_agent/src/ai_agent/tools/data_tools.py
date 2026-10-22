@@ -128,6 +128,16 @@ async def load_coverage(user: AgentUser) -> list[dict[str, Any]]:
     )
 
 
+async def load_sources(user: AgentUser) -> list[dict[str, Any]]:
+    """Which data sources are connected and when each last synced (no credentials)."""
+    return await _records(
+        user,
+        "select provider, display_name, sync_status, "
+        "sync_error is not null as has_error, last_synced_at "
+        "from external_sources order by provider",
+    )
+
+
 async def _period(
     user: AgentUser, start_date: str | None, end_date: str | None
 ) -> tuple[dt.date, dt.date, dict[str, Any]]:

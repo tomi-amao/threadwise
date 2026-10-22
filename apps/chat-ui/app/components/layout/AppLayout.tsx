@@ -9,7 +9,7 @@ import React from 'react';
 import { Outlet, Navigate } from 'react-router';
 import { useAuth } from '~/providers/AuthProvider';
 import { SidebarProvider, useSidebar } from '~/providers/SidebarProvider';
-import { AssistantProvider, useAssistant } from '~/providers/AssistantProvider';
+import { AssistantProvider, useOptionalAssistant } from '~/providers/AssistantProvider';
 import { AssistantPanel } from '~/components/assistant/AssistantPanel';
 import { AssistantLauncher } from '~/components/assistant/Launcher';
 import { DEFAULT_PANEL, type PanelState } from '~/lib/assistant-panel';
@@ -20,7 +20,9 @@ import { Button } from '~/components/ui/button';
 
 function AppLayoutContent() {
   const { collapsed, setMobileOpen } = useSidebar();
-  const { open, width, onChatPage } = useAssistant();
+  // No provider means the assistant is switched off (lib/assistant-flag.ts).
+  const assistant = useOptionalAssistant();
+  const { open, width, onChatPage } = assistant ?? { open: false, width: 0, onChatPage: false };
   // Docked (DOCK_MIN_VIEWPORT and wider, see lib/assistant-panel.ts), the page makes room for
   // the panel but always keeps 1024px beside the full sidebar: the panel gives way first.
   const reserve = open && !onChatPage;
@@ -59,12 +61,19 @@ function AppLayoutContent() {
         <Outlet />
       </main>
 
-      {!onChatPage && <AssistantPanel />}
+      {assistant && !onChatPage && <AssistantPanel />}
     </div>
   );
 }
 
-export function AppLayout({ initialPanel = DEFAULT_PANEL }: { initialPanel?: PanelState }) {
+export function AppLayout({
+  initialPanel = DEFAULT_PANEL,
+  assistant = true,
+}: {
+  initialPanel?: PanelState;
+  /** Whether the assistant is switched on (lib/assistant-flag.ts). */
+  assistant?: boolean;
+}) {
   const { user, loading } = useAuth();
 
   // Show loading state while checking authentication
@@ -86,9 +95,13 @@ export function AppLayout({ initialPanel = DEFAULT_PANEL }: { initialPanel?: Pan
 
   return (
     <SidebarProvider>
-      <AssistantProvider initialPanel={initialPanel}>
+      {assistant ? (
+        <AssistantProvider initialPanel={initialPanel}>
+          <AppLayoutContent />
+        </AssistantProvider>
+      ) : (
         <AppLayoutContent />
-      </AssistantProvider>
+      )}
     </SidebarProvider>
   );
 }

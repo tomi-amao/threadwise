@@ -180,7 +180,9 @@ distinct data paths, and it matters which one a given feature uses:
   read by the `routes/app.tsx` loader. `/chat` shows the same conversation full width.
   Pages tell it which record is open (`useAssistantRecord`); the agent can propose changes
   (invoice status, a transaction's account) and remember preferences, but only after the user
-  approves a proposal card: nothing writes without a click.
+  approves a proposal card: nothing writes without a click. The panel is behind a setting
+  (`ASSISTANT_ENABLED`, `app/lib/assistant-flag.ts`): on in development, **off in production** until
+  set. Operating notes (limits, logs, tracing, retention): `apps/ai_agent/docs/operations.md`.
   Details: `docs/chat-redesign-plan.md` (sections 3, 4 and 12).
 - `components/dashboard/`, `components/reports/`, etc. are organized by feature/domain,
   mirroring the route list above.

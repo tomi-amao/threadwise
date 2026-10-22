@@ -42,6 +42,7 @@ from .test_chat_agent import (  # noqa: F401
     ScriptedModel,
     _stub_coverage,
     _stub_profile,
+    _stub_sources,
     call,
 )
 from .test_chat_agent import seed as _seed
@@ -58,6 +59,7 @@ def _local_db(monkeypatch):
 def stub_business(monkeypatch):
     monkeypatch.setattr(chat_agent, "load_profile", _stub_profile)
     monkeypatch.setattr(chat_agent, "load_coverage", _stub_coverage)
+    monkeypatch.setattr(chat_agent, "load_sources", _stub_sources)
 
 
 def make_agent(model: ScriptedModel, store: Any = None) -> Any:

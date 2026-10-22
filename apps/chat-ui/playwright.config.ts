@@ -16,7 +16,8 @@ const STAND_IN_URL = `http://127.0.0.1:${STAND_IN_PORT}`;
 /** Setup runs once; tests that change data run last, in their own project. */
 const PAGE_TEST_IGNORE = /auth\.setup\.ts|-edit\.spec\.ts/;
 /** Checks that do not depend on width or theme (API security, the UI contract): one project. */
-const ONCE_ONLY = /rls\.spec\.ts|assistant-contract\.spec\.ts/;
+const ONCE_ONLY =
+  /rls\.spec\.ts|assistant-contract\.spec\.ts|assistant-flag\.spec\.ts|assistant-privacy\.spec\.ts/;
 
 const desktop = { ...devices['Desktop Chrome'], viewport: { width: 1280, height: 900 } };
 
@@ -114,6 +115,8 @@ export default defineConfig<{ theme: ThemeOption }>({
         // answered by each spec's mock (e2e/helpers/fake-langgraph.ts): an unmocked call fails
         // instead of reaching a real agent a developer has running on :2024.
         VITE_LANGGRAPH_API_URL: 'http://127.0.0.1:8098',
+        // The assistant is behind a setting (app/lib/assistant-flag.ts); tests need it on.
+        ASSISTANT_ENABLED: 'true',
       },
     },
     {

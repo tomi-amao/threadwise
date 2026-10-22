@@ -141,6 +141,14 @@ classifier, router or second "what chart?" LLM call.
   so `build_agent()` builds nothing at import; `agents/chat_graph.py` (what langgraph.json
   points at) calls it. Tests import `build_agent` and pass a scripted fake model.
 - **No checkpointer in code**: the LangGraph server supplies one (TTL in langgraph.json).
+- **Limits, logs, evals** (details: `docs/operations.md`, `docs/evals.md`): a per-user run limit
+  (`auth.py`, per process), a per-turn token cap and a structured turn log
+  (`agents/limits_middleware.py`; no questions, answers or figures in logs), ids in thread and run
+  metadata are keyed hashes (`core/tracing.py`, set `TRACE_HASH_SALT`), model clients retry once.
+  The golden set (`python -m ai_agent.evals`) has 56 cases with expected figures taken from the
+  seed manifest, never typed; its oracle (a scripted perfect model) must score 100% and runs in CI
+  (`.github/workflows/backend-data.yml`); a real model is measured nightly. Measure before
+  changing a model default: the 3.5 Gemini models were 3 to 17 times slower than the 2.5 ones.
 - **Page context, actions, memory**: the browser's page context is a name only: the server
   re-reads the record as the user (`agents/page_context.py`) and the label is never used. Action
   tools (`tools/action_tools.py`) read, build a `Proposal` from the read, pause on an interrupt,

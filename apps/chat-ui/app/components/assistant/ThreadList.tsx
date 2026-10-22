@@ -17,6 +17,7 @@ import {
 } from '~/components/ui/dialog';
 import { cn } from '~/lib/utils';
 import { useAssistant } from '~/providers/AssistantProvider';
+import { PRIVACY_NOTE } from '~/lib/assistant-privacy';
 import { formatDate } from './format';
 
 export function threadTitle(thread: Thread | undefined): string {
@@ -30,6 +31,7 @@ export function ThreadList({ onOpen }: { onOpen?: () => void }) {
   const [draft, setDraft] = useState('');
   const [deleting, setDeleting] = useState<Thread | null>(null);
   const [failed, setFailed] = useState<string | null>(null);
+  const [deletingAll, setDeletingAll] = useState(false);
 
   const startNew = () => {
     assistant.newThread();
@@ -149,6 +151,47 @@ export function ThreadList({ onOpen }: { onOpen?: () => void }) {
           );
         })}
       </ul>
+
+      <div className="mt-3 space-y-2 border-t pt-3">
+        <p className="text-xs text-muted-foreground">{PRIVACY_NOTE}</p>
+        {assistant.threads.length > 0 && (
+          <Button size="sm" variant="outline" onClick={() => setDeletingAll(true)}>
+            <Trash size={14} aria-hidden /> Delete all conversations
+          </Button>
+        )}
+      </div>
+
+      <Dialog open={deletingAll} onOpenChange={setDeletingAll}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete all your conversations?</DialogTitle>
+            <DialogDescription>
+              Every conversation with the assistant will be deleted. This cannot be undone. Your
+              business data is not affected, and what the assistant remembers is kept (delete it
+              under Memory).
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDeletingAll(false)}>
+              Keep them
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={async () => {
+                setDeletingAll(false);
+                try {
+                  await assistant.deleteAllThreads();
+                  setFailed(null);
+                } catch {
+                  setFailed('Your conversations could not all be deleted. Try again.');
+                }
+              }}
+            >
+              Delete everything
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={deleting != null} onOpenChange={open => !open && setDeleting(null)}>
         <DialogContent>

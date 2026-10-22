@@ -1,0 +1,204 @@
+name: Backend data tests and evals
+
+# The backend tests that need a database (the chat agent's tools, the action tools against the
+# real endpoint, the scoped SQL) skip themselves in the normal backend job, which has none.
+# This workflow starts the throwaway LOCAL Supabase stack that e2e.yml uses, seeds it, and runs
+# them, plus the golden-set evals:
+#
+#   - on every relevant PR: the oracle run (a scripted perfect model). It tests our machinery
+#     (tools, middleware, scoring, tenancy) and needs no key, so it can gate a merge.
+#   - nightly and on demand: the same golden set against the real model. It measures the model
+#     and needs GOOGLE_API_KEY; with no key it is skipped, not failed.
+#
+# See apps/ai_agent/docs/evals.md.
+
+on:
+  pull_request:
+    branches:
+      - main
+      - develop
+    paths:
+      - 'apps/ai_agent/**'
+      - 'supabase/**'
+      - 'apps/chat-ui/e2e/seed/**'
+      - '.github/workflows/backend-data.yml'
+  schedule:
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+    inputs:
+      real_model:
+        description: 'Also run the golden set against the real model'
+        type: boolean
+        default: true
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: '24'
+  PNPM_VERSION: '10.11.0'
+  PYTHON_VERSION: '3.13'
+
+jobs:
+  data-tests:
+    name: Database tests and oracle evals
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Setup Supabase CLI
+        uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      - name: Start local Supabase
+        run: supabase start -x studio,mailpit,imgproxy,edge-runtime,logflare,vector,supavisor
+
+      - name: Write the test env from the local stack
+        run: pnpm e2e:env
+
+      # Writes the businesses, the known totals (the manifest the tests and evals read) and the
+      # second, rival business.
+      - name: Seed test data
+        run: pnpm e2e:seed
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Cache Poetry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/pypoetry
+            ~/.cache/pip
+          key: ${{ runner.os }}-poetry-${{ hashFiles('apps/ai_agent/poetry.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-poetry-
+
+      - name: Install Poetry
+        run: |
+          curl -sSL https://install.python-poetry.org | python3 -
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+
+      - name: Install dependencies
+        working-directory: apps/ai_agent
+        run: poetry install --no-interaction --no-ansi
+
+      - name: Database-backed tests
+        working-directory: apps/ai_agent
+        run: >
+          poetry run pytest -v --tb=short
+          tests/test_scoped_sql.py tests/test_chat_agent.py
+          tests/test_actions.py tests/test_evals.py tests/test_ui_contract.py
+
+      - name: Golden-set evals (oracle)
+        working-directory: apps/ai_agent
+        run: poetry run python -m ai_agent.evals --report evals-oracle.json
+
+      - name: Upload the eval report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: evals-oracle
+          path: apps/ai_agent/evals-oracle.json
+          retention-days: 14
+
+      - name: Stop Supabase
+        if: always()
+        run: supabase stop --no-backup
+
+  real-model-evals:
+    name: Golden set against the real model
+    # Never on a pull request: it spends quota, and a model's answers vary from run to run.
+    if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.real_model)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Setup Supabase CLI
+        uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      - name: Start local Supabase
+        run: supabase start -x studio,mailpit,imgproxy,edge-runtime,logflare,vector,supavisor
+
+      - name: Write the test env and seed
+        run: |
+          pnpm e2e:env
+          pnpm e2e:seed
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install Poetry
+        run: |
+          curl -sSL https://install.python-poetry.org | python3 -
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+
+      - name: Install dependencies
+        working-directory: apps/ai_agent
+        run: poetry install --no-interaction --no-ansi
+
+      # A pause between cases keeps a free-tier key inside its per-minute limit. Cases the
+      # provider still refuses are reported as skipped, and the run as incomplete.
+      - name: Golden-set evals (real model)
+        if: env.GOOGLE_API_KEY != ''
+        working-directory: apps/ai_agent
+        run: poetry run python -m ai_agent.evals --model real --pause 4 --report evals-real.json
+
+      - name: No key to run the real model with
+        if: env.GOOGLE_API_KEY == ''
+        run: echo "GOOGLE_API_KEY is not set for this repository, so the real-model evals were skipped."
+
+      - name: Upload the eval report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: evals-real
+          path: apps/ai_agent/evals-real.json
+          retention-days: 30
+          if-no-files-found: ignore
+
+      - name: Stop Supabase
+        if: always()
+        run: supabase stop --no-backup

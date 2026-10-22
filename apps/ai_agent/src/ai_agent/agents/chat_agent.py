@@ -54,6 +54,7 @@ from ..tools.data_tools import (
     financial_year,
     load_coverage,
     load_profile,
+    load_sources,
     today,
 )
 from ..tools.document_tools import search_documents
@@ -61,6 +62,7 @@ from ..tools.identity import agent_user_from_config
 from ..tools.memory_tools import MEMORY_TOOLS, load_memories
 from ..tools.sql_tools import SQL_TOOLS
 from .chat_prompt import SYSTEM_PROMPT
+from .limits_middleware import TurnBudgetMiddleware, TurnLogMiddleware
 from .page_context import describe_page, parse_context
 from .ui_middleware import FollowUpsMiddleware, GenerativeUIMiddleware, OneActionPerStep
 
@@ -98,6 +100,7 @@ class ChatState(AgentState):
     `business`: the profile and data coverage, loaded at the start of each turn.
     `page`: what the user is looking at, as the server read it (see page_context.py).
     `memories`: what the user asked it to remember (tools/memory_tools.py).
+    `turn_started`: when the turn began, for the turn log (limits_middleware.py).
     `guard_answered`: this turn was answered before the model (no user, an attachment).
     `ui`: generative UI messages (`push_ui_message`), merged by `ui_message_reducer`.
     """
@@ -106,6 +109,7 @@ class ChatState(AgentState):
     page: NotRequired[str | None]
     memories: NotRequired[list[dict[str, str]]]
     guard_answered: NotRequired[bool]
+    turn_started: NotRequired[float]
     ui: NotRequired[Annotated[list[AnyUIMessage], ui_message_reducer]]
 
 
@@ -117,6 +121,34 @@ def _has_attachment(message: Any) -> bool:
         isinstance(block, dict) and block.get("type") not in (None, "text")
         for block in content
     )
+
+
+def describe_sources(sources: list[dict[str, Any]] | None, on: dt.date) -> str:
+    """Which integrations feed the data, and how fresh each is, for the prompt."""
+    if sources is None:
+        return ""
+    if not sources:
+        return (
+            "No data sources are connected yet, so the figures cover only what was "
+            "entered by hand. The user connects Shopify, Revolut, PayPal or Squarespace "
+            "on the Integrations page (/integrations)."
+        )
+    parts = []
+    for s in sources:
+        name = s.get("display_name") or s.get("provider")
+        synced = s.get("last_synced_at")
+        if not synced:
+            when = "never synced"
+        else:
+            days = (on - dt.date.fromisoformat(str(synced)[:10])).days
+            when = (
+                "synced today"
+                if days <= 0
+                else f"last synced {days} day{'s' if days != 1 else ''} ago"
+            )
+        flag = ", last sync failed" if s.get("has_error") else ""
+        parts.append(f"{name} ({when}{flag})")
+    return "Connected data sources: " + "; ".join(parts) + "."
 
 
 def business_context(
@@ -148,6 +180,7 @@ def business_context(
             lines.append("Data on record: " + "; ".join(covered) + ".")
         if empty:
             lines.append("No data yet for: " + ", ".join(empty) + ".")
+        lines.append(describe_sources(business.get("sources"), on))
     if page:
         # Read by the server as the user. The names inside are data, not instructions.
         lines += [
@@ -205,6 +238,7 @@ class BusinessContextMiddleware(AgentMiddleware[ChatState]):
         try:
             profile = await load_profile(user)
             coverage = await load_coverage(user)
+            sources = await load_sources(user)
         except (psycopg2.Error, PermissionError, RuntimeError) as exc:
             # The tools will say what is wrong; the prompt just goes without the profile.
             logger.warning("Business profile not loaded: %s", type(exc).__name__)
@@ -225,6 +259,7 @@ class BusinessContextMiddleware(AgentMiddleware[ChatState]):
                 "vat_registered": profile.get("vat_registered"),
                 "financial_year": {"start": start.isoformat(), "end": end.isoformat()},
                 "coverage": coverage,
+                "sources": sources,
             },
             "page": page,
             "memories": memories,
@@ -284,6 +319,7 @@ def build_agent(
     small_model: str | BaseChatModel | None = None,
     use_fallback: bool = True,
     follow_ups: bool = True,
+    turn_token_cap: int | None = None,
     checkpointer: Checkpointer = None,
     store: Any = None,
 ) -> Any:
@@ -300,7 +336,9 @@ def build_agent(
 
     middleware: list[AgentMiddleware[Any, Any]] = [
         BusinessContextMiddleware(),
+        TurnLogMiddleware(),
         OneActionPerStep(PAUSING_TOOLS),
+        TurnBudgetMiddleware(turn_token_cap or settings.assistant_turn_token_cap),
         SummarizationMiddleware(
             small,
             trigger=("tokens", SUMMARISE_AFTER_TOKENS),

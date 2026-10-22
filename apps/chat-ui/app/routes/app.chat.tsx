@@ -5,11 +5,12 @@
  */
 
 import { useState } from 'react';
-import type { MetaFunction } from 'react-router';
+import { redirect, type MetaFunction } from 'react-router';
 import { ClockCounterClockwise } from 'phosphor-react';
 import { Conversation } from '~/components/assistant/Conversation';
 import { ThreadList, threadTitle } from '~/components/assistant/ThreadList';
 import { Eyebrow } from '~/components/ui/eyebrow';
+import { assistantEnabled } from '~/lib/assistant-flag';
 import { cn } from '~/lib/utils';
 import { useAssistant } from '~/providers/AssistantProvider';
 
@@ -17,6 +18,12 @@ export const meta: MetaFunction = () => [
   { title: 'Assistant - ThreadWise' },
   { name: 'description', content: 'Ask about your business data' },
 ];
+
+/** With the assistant switched off there is no conversation to show. */
+export function loader() {
+  if (!assistantEnabled(process.env)) return redirect('/dashboard');
+  return null;
+}
 
 export default function ChatPage() {
   const assistant = useAssistant();

@@ -111,3 +111,27 @@ const DEFAULT_STARTERS = [
 export function startersFor(pathname: string): string[] {
   return STARTERS.find(([prefix]) => pathname.startsWith(prefix))?.[1] ?? DEFAULT_STARTERS;
 }
+
+/** After this long a turn says it is taking longer than usual (and offers Stop). */
+export const SLOW_AFTER_MS = 25_000;
+
+/**
+ * What to tell the user when a run fails, in plain words, and whether trying again makes
+ * sense. The cause is read from the HTTP status or the provider's error name; the raw message
+ * is never shown (it can quote the prompt).
+ */
+export function explainError(error: unknown): string {
+  const status = (error as { status?: unknown } | null)?.status;
+  const text = `${(error as { name?: string } | null)?.name ?? ''} ${
+    (error as { message?: string } | null)?.message ?? ''
+  }`;
+  if (status === 429) return 'You are asking too fast. Wait a moment, then try again.';
+  if (
+    /RateLimit|RESOURCE_EXHAUSTED|quota|overloaded|UNAVAILABLE|DEADLINE|timeout|\b50[234]\b/i.test(
+      text
+    )
+  ) {
+    return "The assistant's AI model is busy or unavailable right now. Try again in a minute.";
+  }
+  return 'The assistant could not answer. Try again.';
+}

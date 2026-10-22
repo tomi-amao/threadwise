@@ -268,6 +268,14 @@ page from these before inventing a component; if one is missing, add it to the k
   until it is settled. A proposal the browser cannot read is never shown as approvable.
 - **Memory** is a view in the panel listing what the assistant was asked to remember, with a
   delete on each item. Nothing is saved without approving it in the conversation first.
+- **When it goes wrong it says why, in plain words**: asking too fast, a busy or unavailable
+  model, a question that needed too much. The provider's own message is never shown (it can quote
+  the prompt). After 25 seconds a turn says it is taking longer than usual and offers Stop.
+- **Privacy is stated where the conversation starts**: what is sent to the model provider and how
+  long conversations are kept; the conversations view can delete one or all of them (with a
+  confirmation).
+- **It can be switched off** (`ASSISTANT_ENABLED`): off means nothing of it shows anywhere, including
+  the drawers' "Ask about this" and the product insights.
 - **Cards under an answer** are built from tool results, never from the model's text, on the kit
   (Statement, DataTable, the chart theme) with pence shown. Every card ends with a quiet Source
   row: what was read, the period, and a link to the page. Follow-up chips show under the latest
