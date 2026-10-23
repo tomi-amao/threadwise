@@ -1,0 +1,1289 @@
+{
+  "components": {
+    "bar-chart": {
+      "$defs": {
+        "BarPoint": {
+          "additionalProperties": false,
+          "properties": {
+            "label": {
+              "title": "Label",
+              "type": "string"
+            },
+            "value": {
+              "title": "Value",
+              "type": "number"
+            }
+          },
+          "required": ["label", "value"],
+          "title": "BarPoint",
+          "type": "object"
+        },
+        "Period": {
+          "additionalProperties": false,
+          "properties": {
+            "end": {
+              "description": "Last day, YYYY-MM-DD, inclusive.",
+              "title": "End",
+              "type": "string"
+            },
+            "start": {
+              "description": "First day, YYYY-MM-DD, inclusive.",
+              "title": "Start",
+              "type": "string"
+            }
+          },
+          "required": ["start", "end"],
+          "title": "Period",
+          "type": "object"
+        },
+        "Source": {
+          "additionalProperties": false,
+          "description": "Where a component's figures came from.",
+          "properties": {
+            "as_of": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "For a point-in-time figure.",
+              "title": "As Of"
+            },
+            "label": {
+              "description": "What was read, e.g. 'Posted journals'.",
+              "title": "Label",
+              "type": "string"
+            },
+            "link": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "The page the figures live on.",
+              "title": "Link"
+            },
+            "period": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Period"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "tool": {
+              "description": "The tool whose result this shows.",
+              "title": "Tool",
+              "type": "string"
+            }
+          },
+          "required": ["tool", "label"],
+          "title": "Source",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "currency": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Currency"
+        },
+        "format": {
+          "default": "money",
+          "enum": ["money", "number", "percent", "date", "text"],
+          "title": "Format",
+          "type": "string"
+        },
+        "points": {
+          "items": {
+            "$ref": "#/$defs/BarPoint"
+          },
+          "maxItems": 60,
+          "minItems": 1,
+          "title": "Points",
+          "type": "array"
+        },
+        "source": {
+          "$ref": "#/$defs/Source"
+        },
+        "title": {
+          "title": "Title",
+          "type": "string"
+        }
+      },
+      "required": ["title", "points", "source"],
+      "title": "BarChart",
+      "type": "object"
+    },
+    "follow-ups": {
+      "$defs": {
+        "FollowUp": {
+          "additionalProperties": false,
+          "properties": {
+            "label": {
+              "description": "What the chip says.",
+              "maxLength": 60,
+              "minLength": 1,
+              "title": "Label",
+              "type": "string"
+            },
+            "prompt": {
+              "description": "What it sends.",
+              "maxLength": 300,
+              "minLength": 1,
+              "title": "Prompt",
+              "type": "string"
+            }
+          },
+          "required": ["label", "prompt"],
+          "title": "FollowUp",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "description": "Questions to ask next, shown as chips under the latest answer only.",
+      "properties": {
+        "items": {
+          "items": {
+            "$ref": "#/$defs/FollowUp"
+          },
+          "maxItems": 4,
+          "minItems": 2,
+          "title": "Items",
+          "type": "array"
+        }
+      },
+      "required": ["items"],
+      "title": "FollowUps",
+      "type": "object"
+    },
+    "metric": {
+      "$defs": {
+        "MetricDetail": {
+          "additionalProperties": false,
+          "properties": {
+            "format": {
+              "default": "number",
+              "enum": ["money", "number", "percent", "date", "text"],
+              "title": "Format",
+              "type": "string"
+            },
+            "label": {
+              "title": "Label",
+              "type": "string"
+            },
+            "value": {
+              "title": "Value",
+              "type": "number"
+            }
+          },
+          "required": ["label", "value"],
+          "title": "MetricDetail",
+          "type": "object"
+        },
+        "Period": {
+          "additionalProperties": false,
+          "properties": {
+            "end": {
+              "description": "Last day, YYYY-MM-DD, inclusive.",
+              "title": "End",
+              "type": "string"
+            },
+            "start": {
+              "description": "First day, YYYY-MM-DD, inclusive.",
+              "title": "Start",
+              "type": "string"
+            }
+          },
+          "required": ["start", "end"],
+          "title": "Period",
+          "type": "object"
+        },
+        "Source": {
+          "additionalProperties": false,
+          "description": "Where a component's figures came from.",
+          "properties": {
+            "as_of": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "For a point-in-time figure.",
+              "title": "As Of"
+            },
+            "label": {
+              "description": "What was read, e.g. 'Posted journals'.",
+              "title": "Label",
+              "type": "string"
+            },
+            "link": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "The page the figures live on.",
+              "title": "Link"
+            },
+            "period": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Period"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "tool": {
+              "description": "The tool whose result this shows.",
+              "title": "Tool",
+              "type": "string"
+            }
+          },
+          "required": ["tool", "label"],
+          "title": "Source",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "description": "One headline figure, with a few supporting ones.",
+      "properties": {
+        "currency": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Currency"
+        },
+        "details": {
+          "items": {
+            "$ref": "#/$defs/MetricDetail"
+          },
+          "maxItems": 4,
+          "title": "Details",
+          "type": "array"
+        },
+        "format": {
+          "default": "money",
+          "enum": ["money", "number", "percent", "date", "text"],
+          "title": "Format",
+          "type": "string"
+        },
+        "label": {
+          "title": "Label",
+          "type": "string"
+        },
+        "source": {
+          "$ref": "#/$defs/Source"
+        },
+        "value": {
+          "title": "Value",
+          "type": "number"
+        }
+      },
+      "required": ["label", "value", "source"],
+      "title": "Metric",
+      "type": "object"
+    },
+    "summary-list": {
+      "$defs": {
+        "Period": {
+          "additionalProperties": false,
+          "properties": {
+            "end": {
+              "description": "Last day, YYYY-MM-DD, inclusive.",
+              "title": "End",
+              "type": "string"
+            },
+            "start": {
+              "description": "First day, YYYY-MM-DD, inclusive.",
+              "title": "Start",
+              "type": "string"
+            }
+          },
+          "required": ["start", "end"],
+          "title": "Period",
+          "type": "object"
+        },
+        "Source": {
+          "additionalProperties": false,
+          "description": "Where a component's figures came from.",
+          "properties": {
+            "as_of": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "For a point-in-time figure.",
+              "title": "As Of"
+            },
+            "label": {
+              "description": "What was read, e.g. 'Posted journals'.",
+              "title": "Label",
+              "type": "string"
+            },
+            "link": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "The page the figures live on.",
+              "title": "Link"
+            },
+            "period": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Period"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "tool": {
+              "description": "The tool whose result this shows.",
+              "title": "Tool",
+              "type": "string"
+            }
+          },
+          "required": ["tool", "label"],
+          "title": "Source",
+          "type": "object"
+        },
+        "SummaryRow": {
+          "additionalProperties": false,
+          "properties": {
+            "deduct": {
+              "default": false,
+              "description": "Shown in brackets, as a deduction.",
+              "title": "Deduct",
+              "type": "boolean"
+            },
+            "indent": {
+              "default": false,
+              "description": "A part of the row above it.",
+              "title": "Indent",
+              "type": "boolean"
+            },
+            "kind": {
+              "default": "line",
+              "enum": ["line", "total", "grand"],
+              "title": "Kind",
+              "type": "string"
+            },
+            "label": {
+              "title": "Label",
+              "type": "string"
+            },
+            "value": {
+              "title": "Value",
+              "type": "number"
+            }
+          },
+          "required": ["label", "value"],
+          "title": "SummaryRow",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "description": "Label-left, amount-right rows: a statement in miniature.",
+      "properties": {
+        "currency": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Currency"
+        },
+        "format": {
+          "default": "money",
+          "enum": ["money", "number", "percent", "date", "text"],
+          "title": "Format",
+          "type": "string"
+        },
+        "rows": {
+          "items": {
+            "$ref": "#/$defs/SummaryRow"
+          },
+          "maxItems": 20,
+          "minItems": 1,
+          "title": "Rows",
+          "type": "array"
+        },
+        "source": {
+          "$ref": "#/$defs/Source"
+        },
+        "title": {
+          "title": "Title",
+          "type": "string"
+        }
+      },
+      "required": ["title", "rows", "source"],
+      "title": "SummaryList",
+      "type": "object"
+    },
+    "table": {
+      "$defs": {
+        "Column": {
+          "additionalProperties": false,
+          "properties": {
+            "format": {
+              "default": "text",
+              "enum": ["money", "number", "percent", "date", "text"],
+              "title": "Format",
+              "type": "string"
+            },
+            "key": {
+              "title": "Key",
+              "type": "string"
+            },
+            "label": {
+              "title": "Label",
+              "type": "string"
+            }
+          },
+          "required": ["key", "label"],
+          "title": "Column",
+          "type": "object"
+        },
+        "Period": {
+          "additionalProperties": false,
+          "properties": {
+            "end": {
+              "description": "Last day, YYYY-MM-DD, inclusive.",
+              "title": "End",
+              "type": "string"
+            },
+            "start": {
+              "description": "First day, YYYY-MM-DD, inclusive.",
+              "title": "Start",
+              "type": "string"
+            }
+          },
+          "required": ["start", "end"],
+          "title": "Period",
+          "type": "object"
+        },
+        "Source": {
+          "additionalProperties": false,
+          "description": "Where a component's figures came from.",
+          "properties": {
+            "as_of": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "For a point-in-time figure.",
+              "title": "As Of"
+            },
+            "label": {
+              "description": "What was read, e.g. 'Posted journals'.",
+              "title": "Label",
+              "type": "string"
+            },
+            "link": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "The page the figures live on.",
+              "title": "Link"
+            },
+            "period": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Period"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "tool": {
+              "description": "The tool whose result this shows.",
+              "title": "Tool",
+              "type": "string"
+            }
+          },
+          "required": ["tool", "label"],
+          "title": "Source",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "columns": {
+          "items": {
+            "$ref": "#/$defs/Column"
+          },
+          "maxItems": 8,
+          "minItems": 1,
+          "title": "Columns",
+          "type": "array"
+        },
+        "currency": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Currency"
+        },
+        "row_links": {
+          "anyOf": [
+            {
+              "items": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "One per row: the page that opens that row.",
+          "title": "Row Links"
+        },
+        "rows": {
+          "items": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "type": "object"
+          },
+          "maxItems": 50,
+          "title": "Rows",
+          "type": "array"
+        },
+        "source": {
+          "$ref": "#/$defs/Source"
+        },
+        "title": {
+          "title": "Title",
+          "type": "string"
+        },
+        "total_rows": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "How many rows matched, when only some are shown.",
+          "title": "Total Rows"
+        }
+      },
+      "required": ["title", "columns", "rows", "source"],
+      "title": "Table",
+      "type": "object"
+    }
+  },
+  "examples": {
+    "bar-chart": [
+      {
+        "currency": "GBP",
+        "format": "money",
+        "points": [
+          {
+            "label": "2026-08",
+            "value": 15600.0
+          },
+          {
+            "label": "2026-09",
+            "value": 16100.0
+          },
+          {
+            "label": "2026-10",
+            "value": 15300.0
+          }
+        ],
+        "source": {
+          "label": "Orders, not cancelled",
+          "link": "/orders?from=2026-04-01&to=2027-03-31",
+          "period": {
+            "end": "2027-03-31",
+            "start": "2026-04-01"
+          },
+          "tool": "sales_summary"
+        },
+        "title": "Net sales by month"
+      }
+    ],
+    "follow-ups": [
+      {
+        "items": [
+          {
+            "label": "Compare with last year",
+            "prompt": "How does this compare with last financial year?"
+          },
+          {
+            "label": "Biggest expenses",
+            "prompt": "What were my biggest expenses this financial year?"
+          }
+        ]
+      }
+    ],
+    "metric": [
+      {
+        "currency": "GBP",
+        "details": [
+          {
+            "format": "number",
+            "label": "Orders",
+            "value": 610.0
+          },
+          {
+            "format": "money",
+            "label": "Average order",
+            "value": 223.64
+          },
+          {
+            "format": "money",
+            "label": "Refunds",
+            "value": 250.0
+          }
+        ],
+        "format": "money",
+        "label": "Net sales",
+        "source": {
+          "label": "Orders, not cancelled",
+          "link": "/orders?from=2026-04-01&to=2027-03-31",
+          "period": {
+            "end": "2027-03-31",
+            "start": "2026-04-01"
+          },
+          "tool": "sales_summary"
+        },
+        "value": 136170.5
+      }
+    ],
+    "summary-list": [
+      {
+        "currency": "GBP",
+        "format": "money",
+        "rows": [
+          {
+            "deduct": false,
+            "indent": false,
+            "kind": "line",
+            "label": "Revenue",
+            "value": 28500.0
+          },
+          {
+            "deduct": true,
+            "indent": false,
+            "kind": "line",
+            "label": "Cost of sales",
+            "value": 12000.0
+          },
+          {
+            "deduct": false,
+            "indent": false,
+            "kind": "total",
+            "label": "Gross profit",
+            "value": 16500.0
+          },
+          {
+            "deduct": true,
+            "indent": false,
+            "kind": "line",
+            "label": "Expenses",
+            "value": 12050.84
+          },
+          {
+            "deduct": false,
+            "indent": false,
+            "kind": "grand",
+            "label": "Net profit",
+            "value": 4449.16
+          }
+        ],
+        "source": {
+          "label": "Posted journals",
+          "link": "/reports?from=2026-04-01&to=2027-03-31",
+          "period": {
+            "end": "2027-03-31",
+            "start": "2026-04-01"
+          },
+          "tool": "profit_and_loss"
+        },
+        "title": "Profit and loss"
+      },
+      {
+        "currency": "GBP",
+        "format": "money",
+        "rows": [
+          {
+            "deduct": false,
+            "indent": false,
+            "kind": "line",
+            "label": "Owed to you (3)",
+            "value": 4860.0
+          },
+          {
+            "deduct": false,
+            "indent": true,
+            "kind": "line",
+            "label": "of which overdue",
+            "value": 2460.0
+          },
+          {
+            "deduct": false,
+            "indent": false,
+            "kind": "line",
+            "label": "You owe (2)",
+            "value": 3780.0
+          },
+          {
+            "deduct": false,
+            "indent": true,
+            "kind": "line",
+            "label": "of which overdue",
+            "value": 180.0
+          }
+        ],
+        "source": {
+          "as_of": "2026-10-18",
+          "label": "Open and part-paid invoices",
+          "link": "/invoices?tab=open",
+          "tool": "outstanding_invoices"
+        },
+        "title": "Unpaid invoices"
+      },
+      {
+        "currency": "GBP",
+        "format": "money",
+        "rows": [
+          {
+            "deduct": false,
+            "indent": false,
+            "kind": "line",
+            "label": "Revolut GBP",
+            "value": 90000.0
+          },
+          {
+            "deduct": false,
+            "indent": false,
+            "kind": "line",
+            "label": "PayPal",
+            "value": 10956.91
+          },
+          {
+            "deduct": false,
+            "indent": false,
+            "kind": "grand",
+            "label": "Total",
+            "value": 100956.91
+          }
+        ],
+        "source": {
+          "as_of": "2026-10-18",
+          "label": "Bank balances, plus transactions since",
+          "link": "/transactions",
+          "tool": "cash_position"
+        },
+        "title": "Cash in the bank"
+      }
+    ],
+    "table": [
+      {
+        "columns": [
+          {
+            "format": "text",
+            "key": "product",
+            "label": "Product"
+          },
+          {
+            "format": "number",
+            "key": "units",
+            "label": "Units"
+          },
+          {
+            "format": "number",
+            "key": "orders",
+            "label": "Orders"
+          },
+          {
+            "format": "money",
+            "key": "revenue",
+            "label": "Revenue"
+          }
+        ],
+        "currency": "GBP",
+        "row_links": ["/products?product=p-1", "/products?product=p-2"],
+        "rows": [
+          {
+            "orders": 295,
+            "product": "Selvedge Work Trouser",
+            "revenue": 64395.0,
+            "units": 477
+          },
+          {
+            "orders": 305,
+            "product": "Wool Overshirt",
+            "revenue": 58900.0,
+            "units": 475
+          }
+        ],
+        "source": {
+          "label": "Order lines, not cancelled",
+          "link": "/products",
+          "period": {
+            "end": "2027-03-31",
+            "start": "2026-04-01"
+          },
+          "tool": "top_products"
+        },
+        "title": "Top products by revenue"
+      },
+      {
+        "columns": [
+          {
+            "format": "text",
+            "key": "customer",
+            "label": "Customer"
+          },
+          {
+            "format": "number",
+            "key": "orders",
+            "label": "Orders"
+          },
+          {
+            "format": "date",
+            "key": "last_order",
+            "label": "Last order"
+          },
+          {
+            "format": "money",
+            "key": "spent",
+            "label": "Spent"
+          }
+        ],
+        "currency": "GBP",
+        "row_links": ["/customers?customer=c-1"],
+        "rows": [
+          {
+            "customer": "Noor Aziz",
+            "last_order": "2026-10-16",
+            "orders": 93,
+            "spent": 22644.3
+          }
+        ],
+        "source": {
+          "label": "Orders, net of refunds",
+          "link": "/customers",
+          "period": {
+            "end": "2027-03-31",
+            "start": "2026-04-01"
+          },
+          "tool": "top_customers"
+        },
+        "title": "Top customers"
+      },
+      {
+        "columns": [
+          {
+            "format": "text",
+            "key": "invoice_number",
+            "label": "Invoice"
+          },
+          {
+            "format": "text",
+            "key": "counterparty",
+            "label": "Who"
+          },
+          {
+            "format": "date",
+            "key": "due_date",
+            "label": "Due"
+          },
+          {
+            "format": "number",
+            "key": "days_overdue",
+            "label": "Days late"
+          },
+          {
+            "format": "money",
+            "key": "gross_amount",
+            "label": "Amount"
+          }
+        ],
+        "currency": "GBP",
+        "row_links": ["/invoices?invoice=i-1"],
+        "rows": [
+          {
+            "counterparty": "Harbour & Co",
+            "days_overdue": 41,
+            "due_date": "2026-09-07",
+            "gross_amount": 960.0,
+            "invoice_number": "INV-OUT-2003"
+          }
+        ],
+        "source": {
+          "as_of": "2026-10-18",
+          "label": "Open and part-paid invoices",
+          "link": "/invoices?tab=open",
+          "tool": "outstanding_invoices"
+        },
+        "title": "Invoices, oldest due first"
+      },
+      {
+        "columns": [
+          {
+            "format": "date",
+            "key": "date",
+            "label": "Date"
+          },
+          {
+            "format": "text",
+            "key": "description",
+            "label": "Description"
+          },
+          {
+            "format": "text",
+            "key": "direction",
+            "label": "In/out"
+          },
+          {
+            "format": "money",
+            "key": "amount",
+            "label": "Amount"
+          }
+        ],
+        "row_links": ["/transactions?transactionId=t-1"],
+        "rows": [
+          {
+            "amount": 31.2,
+            "date": "2026-09-28",
+            "description": "Royal Mail Click & Drop",
+            "direction": "out"
+          }
+        ],
+        "source": {
+          "label": "Bank transactions, not excluded",
+          "link": "/transactions?q=royal+mail&from=2026-09-01&to=2026-09-30",
+          "period": {
+            "end": "2026-09-30",
+            "start": "2026-09-01"
+          },
+          "tool": "search_transactions"
+        },
+        "title": "Bank transactions",
+        "total_rows": 14
+      },
+      {
+        "columns": [
+          {
+            "format": "text",
+            "key": "c0",
+            "label": "status"
+          },
+          {
+            "format": "number",
+            "key": "c1",
+            "label": "count"
+          }
+        ],
+        "rows": [
+          {
+            "c0": "delivered",
+            "c1": 580
+          },
+          {
+            "c0": "shipped",
+            "c1": 141
+          }
+        ],
+        "source": {
+          "label": "A custom read-only query",
+          "tool": "run_sql"
+        },
+        "title": "Custom query"
+      }
+    ]
+  },
+  "interrupt_examples": {
+    "clarify": [
+      {
+        "kind": "clarify",
+        "options": [
+          {
+            "label": "This month"
+          },
+          {
+            "label": "Last month"
+          },
+          {
+            "label": "This financial year"
+          }
+        ],
+        "question": "Which period do you mean?"
+      }
+    ],
+    "proposal": [
+      {
+        "action": "set_invoice_status",
+        "approve_label": "Mark as paid",
+        "changes": [
+          {
+            "after": "Paid",
+            "before": "Open",
+            "label": "Status"
+          }
+        ],
+        "description": "Harbour & Co, \u00a3960.00. Posts the payment journal.",
+        "dismiss_label": "Leave it",
+        "kind": "proposal",
+        "link": "/invoices?invoice=i-1",
+        "title": "Mark invoice INV-OUT-2003 as paid"
+      }
+    ]
+  },
+  "interrupts": {
+    "clarify": {
+      "$defs": {
+        "ClarifyOption": {
+          "additionalProperties": false,
+          "properties": {
+            "label": {
+              "maxLength": 60,
+              "minLength": 1,
+              "title": "Label",
+              "type": "string"
+            }
+          },
+          "required": ["label"],
+          "title": "ClarifyOption",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "description": "A question the agent pauses on (an interrupt); the user answers with a chip.",
+      "properties": {
+        "kind": {
+          "const": "clarify",
+          "default": "clarify",
+          "title": "Kind",
+          "type": "string"
+        },
+        "options": {
+          "items": {
+            "$ref": "#/$defs/ClarifyOption"
+          },
+          "maxItems": 4,
+          "minItems": 2,
+          "title": "Options",
+          "type": "array"
+        },
+        "question": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Question",
+          "type": "string"
+        }
+      },
+      "required": ["question", "options"],
+      "title": "Clarify",
+      "type": "object"
+    },
+    "proposal": {
+      "$defs": {
+        "Change": {
+          "additionalProperties": false,
+          "properties": {
+            "after": {
+              "maxLength": 120,
+              "title": "After",
+              "type": "string"
+            },
+            "before": {
+              "anyOf": [
+                {
+                  "maxLength": 120,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Before"
+            },
+            "label": {
+              "description": "What changes, e.g. 'Status'.",
+              "maxLength": 60,
+              "title": "Label",
+              "type": "string"
+            }
+          },
+          "required": ["label", "after"],
+          "title": "Change",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "description": "A change the agent proposes and will only make if the user approves it.\n\nThe agent pauses (an interrupt) with this payload; the browser shows what will change\nand resumes with `{\"decision\": \"approve\" | \"dismiss\"}`. Everything shown here is built\nby the server from the record as the user can see it, never from the model's words.",
+      "properties": {
+        "action": {
+          "description": "The tool that will run.",
+          "maxLength": 40,
+          "title": "Action",
+          "type": "string"
+        },
+        "approve_label": {
+          "default": "Approve",
+          "maxLength": 30,
+          "title": "Approve Label",
+          "type": "string"
+        },
+        "changes": {
+          "items": {
+            "$ref": "#/$defs/Change"
+          },
+          "maxItems": 6,
+          "minItems": 1,
+          "title": "Changes",
+          "type": "array"
+        },
+        "description": {
+          "anyOf": [
+            {
+              "maxLength": 300,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Description"
+        },
+        "dismiss_label": {
+          "default": "Dismiss",
+          "maxLength": 30,
+          "title": "Dismiss Label",
+          "type": "string"
+        },
+        "kind": {
+          "const": "proposal",
+          "default": "proposal",
+          "title": "Kind",
+          "type": "string"
+        },
+        "link": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The record's page.",
+          "title": "Link"
+        },
+        "title": {
+          "maxLength": 120,
+          "minLength": 1,
+          "title": "Title",
+          "type": "string"
+        }
+      },
+      "required": ["action", "title", "changes"],
+      "title": "Proposal",
+      "type": "object"
+    }
+  },
+  "version": 1
+}

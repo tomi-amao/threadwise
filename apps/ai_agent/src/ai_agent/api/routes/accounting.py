@@ -15,9 +15,10 @@ import logging
 from typing import Any, Dict, List, Literal, Optional
 from uuid import UUID
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from pydantic import BaseModel, Field
 
+from ..deps import entity_guard, owned_invoice, owned_journal, require_internal
 from ...normalization.utils import extract_rows
 from ...services.reconciliation_service import reconciliation_service
 from ...services.journal_service import journal_service, JournalError
@@ -27,7 +28,9 @@ from ...services.paypal_cleaning_service import paypal_cleaning_service
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(entity_guard)])
+# Machine-only routes (no business in the request) live on their own router.
+internal_router = APIRouter(dependencies=[Depends(require_internal)])
 
 
 # =============================================================================
@@ -328,7 +331,7 @@ async def _fetch_clearing_top_entries(client, limit: int = 100) -> List[Dict[str
     return entries
 
 
-@router.get("/health-checks")
+@internal_router.get("/health-checks")
 async def get_accounting_health_checks(include_detail: bool = False):
     """Assertions about ledger and inventory integrity.
 
@@ -572,7 +575,7 @@ async def suggest_draft_accounts(request: SuggestDraftAccountsRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/journals/{journal_id}/reverse")
+@router.post("/journals/{journal_id}/reverse", dependencies=[Depends(owned_journal)])
 async def reverse_journal(journal_id: str, request: ReverseJournalRequest):
     """Reverse a posted journal.
 
@@ -600,7 +603,7 @@ async def reverse_journal(journal_id: str, request: ReverseJournalRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/journals/{journal_id}/post-draft")
+@router.post("/journals/{journal_id}/post-draft", dependencies=[Depends(owned_journal)])
 async def post_draft_journal(journal_id: str, request: PostDraftJournalRequest):
     """Fix a draft journal's account and post it — the Review tab's action.
 
@@ -856,7 +859,7 @@ async def list_invoices(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/invoices/{invoice_id}")
+@router.get("/invoices/{invoice_id}", dependencies=[Depends(owned_invoice)])
 async def get_invoice(invoice_id: str):
     """Get a single invoice with contact and line items."""
     try:
@@ -871,7 +874,7 @@ async def get_invoice(invoice_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.patch("/invoices/{invoice_id}/status")
+@router.patch("/invoices/{invoice_id}/status", dependencies=[Depends(owned_invoice)])
 async def update_invoice_status(invoice_id: str, request: UpdateInvoiceStatusRequest):
     """Move an invoice through its lifecycle, posting the journals it implies.
 
@@ -920,7 +923,7 @@ async def update_invoice_status(invoice_id: str, request: UpdateInvoiceStatusReq
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.delete("/invoices/{invoice_id}")
+@router.delete("/invoices/{invoice_id}", dependencies=[Depends(owned_invoice)])
 async def delete_invoice(invoice_id: str, entity_id: str):
     """Delete a draft, cancelled or void invoice, its line items and its stored document.
 
@@ -956,7 +959,7 @@ class UpdateInvoiceRequest(BaseModel):
     )
 
 
-@router.patch("/invoices/{invoice_id}")
+@router.patch("/invoices/{invoice_id}", dependencies=[Depends(owned_invoice)])
 async def update_invoice(invoice_id: str, request: UpdateInvoiceRequest):
     """Update editable invoice fields (type, notes) and line item GL accounts.
 
@@ -1016,7 +1019,7 @@ class StockDecisionsRequest(BaseModel):
     decisions: List[StockDecision] = Field(..., min_length=1)
 
 
-@router.post("/invoices/{invoice_id}/stock")
+@router.post("/invoices/{invoice_id}/stock", dependencies=[Depends(owned_invoice)])
 async def apply_stock_decisions(invoice_id: str, request: StockDecisionsRequest):
     """Decide how each line of a purchase invoice is treated as stock, in one call.
 

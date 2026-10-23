@@ -15,8 +15,9 @@ const STAND_IN_URL = `http://127.0.0.1:${STAND_IN_PORT}`;
 
 /** Setup runs once; tests that change data run last, in their own project. */
 const PAGE_TEST_IGNORE = /auth\.setup\.ts|-edit\.spec\.ts/;
-/** The API-level security checks do not depend on width or theme: run them in one project. */
-const ONCE_ONLY = /rls\.spec\.ts/;
+/** Checks that do not depend on width or theme (API security, the UI contract): one project. */
+const ONCE_ONLY =
+  /rls\.spec\.ts|assistant-contract\.spec\.ts|assistant-flag\.spec\.ts|assistant-privacy\.spec\.ts/;
 
 const desktop = { ...devices['Desktop Chrome'], viewport: { width: 1280, height: 900 } };
 
@@ -110,10 +111,12 @@ export default defineConfig<{ theme: ThemeOption }>({
         VITE_SUPABASE_PUBLISHABLE_KEY: anonKey,
         // Server-side calls to the agent go to the stand-in below, never a real agent.
         AI_AGENT_URL: STAND_IN_URL,
-        // The browser's own calls to the agent default to :2024, where a developer may have their
-        // real dev server running (it can hang the page's network). Point them at the stand-in too:
-        // specs that exercise those calls mock them, the rest fail fast.
-        VITE_AI_AGENT_URL: STAND_IN_URL,
+        // The browser's LangGraph calls (the assistant) go to an address where nothing listens,
+        // answered by each spec's mock (e2e/helpers/fake-langgraph.ts): an unmocked call fails
+        // instead of reaching a real agent a developer has running on :2024.
+        VITE_LANGGRAPH_API_URL: 'http://127.0.0.1:8098',
+        // The assistant is behind a setting (app/lib/assistant-flag.ts); tests need it on.
+        ASSISTANT_ENABLED: 'true',
       },
     },
     {

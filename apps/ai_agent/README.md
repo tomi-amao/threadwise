@@ -2,6 +2,9 @@
 
 A FastAPI-based AI agent service for the ThreadWise application, providing intelligent conversation threading and analysis capabilities.
 
+How the service works (architecture, security, the chat agent, the data pipeline, accounting, the
+API) is documented in [docs/](docs/README.md). This page covers first-time setup.
+
 ## 🚀 Quick Start
 
 ### Prerequisites

@@ -18,9 +18,10 @@ import logging
 from typing import Any, Dict, List, Optional
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
+from ..deps import CurrentUser, assert_owned, current_user, require_internal
 from ...normalization.service import normalization_service
 from ...normalization.inngest_functions import (
     trigger_normalization,
@@ -31,7 +32,9 @@ from ...normalization.inngest_functions import (
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(require_internal)])
+# The one route the app itself calls (a user retrying their own source's failed events).
+user_router = APIRouter(dependencies=[Depends(current_user)])
 
 
 # =============================================================================
@@ -212,15 +215,20 @@ async def normalize_source(request: NormalizeSourceRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/reprocess-failed")
-async def reprocess_failed(request: Optional[ReprocessFailedRequest] = None):
+@user_router.post("/reprocess-failed")
+async def reprocess_failed(
+    user: CurrentUser, request: Optional[ReprocessFailedRequest] = None
+):
     """Queue failed events for reprocessing via Inngest.
     
     Events are retried with force=True to override previous failures.
     """
     try:
         source_id = request.source_id if request else None
-        limit = request.limit if request else 100
+        limit = min(request.limit if request else 100, 500)
+        if not source_id:
+            raise HTTPException(status_code=400, detail="source_id is required")
+        await assert_owned(user, "external_sources", source_id)
         
         success = await trigger_reprocess_failed(
             source_id=source_id,

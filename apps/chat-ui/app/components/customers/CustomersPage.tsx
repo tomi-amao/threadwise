@@ -38,6 +38,7 @@ import {
   type Sort,
   type Tab,
 } from './model';
+import { useAssistantRecord } from '~/providers/AssistantProvider';
 
 const PAGE_SIZE = 50;
 
@@ -57,6 +58,15 @@ export function CustomersPage({
   const rawSort = sp.get('sort');
   const sort: Sort = isSort(rawSort) ? rawSort : 'spent';
   const openId = sp.get('customer');
+  useAssistantRecord(
+    openId
+      ? {
+          type: 'customer',
+          id: openId,
+          label: customers.find(c => c.id === openId)?.name ?? null,
+        }
+      : null
+  );
 
   const summary = useMemo(() => summarise(customers), [customers]);
   const counts = useMemo(

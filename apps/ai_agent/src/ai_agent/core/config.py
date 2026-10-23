@@ -13,7 +13,8 @@ from langchain.chat_models import init_chat_model
 from pydantic import BaseModel
 from pydantic_settings import BaseSettings
 
-load_dotenv(dotenv_path=".env", override=True)
+# override=False: a variable already set in the real environment wins over .env
+load_dotenv(dotenv_path=".env", override=False)
 
 # =============================================================================
 # PYDANTIC SETTINGS
@@ -30,7 +31,22 @@ class Settings(BaseSettings):
     local_llm_base_url: str = "http://localhost:1234/v1"
     default_model: str = "qwen/qwen3-vl-4b"
     default_chat_model: str = "google_genai:gemini-2.5-flash-lite"
-    
+    # The chat agent (agents/chat_agent.py): provider-prefixed ids for init_chat_model.
+    # The main loop, the model it falls back to, and a small one for summaries.
+    # Measured on 2026-10-22 (docs/evals.md): the 3.5 models took 18-22s for a one-tool question
+    # and 20-34s for the follow-up step; the 2.5 models 5-9s and about 1s. Different models
+    # have separate free-tier quotas, so the fallback is the other family.
+    agent_model: str = "google_genai:gemini-2.5-flash"
+    agent_fallback_model: Optional[str] = "google_genai:gemini-3.5-flash"
+    agent_small_model: str = "google_genai:gemini-2.5-flash-lite"
+
+    # Limits on the assistant (see docs/operations.md)
+    assistant_runs_per_window: int = 30
+    assistant_rate_window_s: int = 600
+    assistant_turn_token_cap: int = 150_000
+    # Keyed hash for ids in traces and metadata (core/tracing.py). Set it in production.
+    trace_hash_salt: Optional[str] = None
+
     # LangGraph
     langgraph_base_url: str = "http://localhost:2024"
     
@@ -49,7 +65,12 @@ class Settings(BaseSettings):
     supabase_url: Optional[str] = None
     supabase_key: Optional[str] = None
     supabase_anon_key: Optional[str] = None
-    supabase_access_token: Optional[str] = None  # PAT for MCP auth
+    # Shared secret for machine callers of internal-only routes (X-Internal-Key). Unset = closed.
+    internal_api_key: Optional[str] = None
+    # Origins the browser app is served from (CORS). Comma-separated in the environment.
+    cors_allow_origins: str = "http://localhost:5174,http://localhost:5180"
+    # Only for legacy projects that still sign user tokens with a shared HS256 secret.
+    supabase_jwt_secret: Optional[str] = None
     
     # Development settings
     inngest_dev: Optional[str] = None

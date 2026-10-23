@@ -358,7 +358,8 @@ const agentFail = (error: unknown): JournalActionResult =>
 export async function reverseJournal(
   supabase: SupabaseClient,
   entityId: string,
-  id: string
+  id: string,
+  token: string
 ): Promise<JournalActionResult> {
   const journal = await visibleJournal(supabase, id);
   if (!journal) return fail('That journal was not found.', 404);
@@ -366,6 +367,7 @@ export async function reverseJournal(
   try {
     await callAgent(
       `/accounting/journals/${id}/reverse`,
+      token,
       jsonInit('POST', { entity_id: entityId })
     );
     return { ok: true, message: 'Journal reversed. It no longer counts in any total.' };
@@ -379,7 +381,8 @@ export async function postDraft(
   supabase: SupabaseClient,
   entityId: string,
   id: string,
-  accountId: string
+  accountId: string,
+  token: string
 ): Promise<JournalActionResult> {
   const journal = await visibleJournal(supabase, id);
   if (!journal) return fail('That journal was not found.', 404);
@@ -393,6 +396,7 @@ export async function postDraft(
   try {
     await callAgent(
       `/accounting/journals/${id}/post-draft`,
+      token,
       jsonInit('POST', { entity_id: entityId, account_id: accountId })
     );
     return { ok: true, message: 'Journal posted' };
@@ -404,11 +408,13 @@ export async function postDraft(
 /** Ask the agent to guess an account for each draft. Advice only: nothing is posted. */
 export async function suggestForDrafts(
   entityId: string,
-  journalIds: string[]
+  journalIds: string[],
+  token: string
 ): Promise<JournalActionResult> {
   try {
     const result = await callAgent<{ suggestions?: Record<string, unknown> }>(
       '/accounting/journals/suggest-accounts',
+      token,
       jsonInit('POST', { entity_id: entityId, journal_ids: journalIds })
     );
     return { ok: true, message: 'Suggestions ready', suggestions: result.suggestions ?? {} };

@@ -352,11 +352,20 @@ function detailOf(body: string): string {
   return body || 'The accounting service did not respond';
 }
 
-/** Call the AI agent; throws AgentError with the agent's own message and status on failure. */
-export async function callAgent<T>(path: string, init: RequestInit = {}): Promise<T> {
+/**
+ * Call the AI agent as the signed-in user (`token` from `requestAccessToken(request)`);
+ * throws AgentError with the agent's own message and status on failure.
+ */
+export async function callAgent<T>(
+  path: string,
+  token: string,
+  init: RequestInit = {}
+): Promise<T> {
   let response: Response;
   try {
-    response = await fetch(`${getApiBaseUrl()}${path}`, init);
+    const headers = new Headers(init.headers);
+    headers.set('Authorization', `Bearer ${token}`);
+    response = await fetch(`${getApiBaseUrl()}${path}`, { ...init, headers });
   } catch {
     throw new AgentError('The accounting service is not reachable. Try again in a moment.', 503);
   }

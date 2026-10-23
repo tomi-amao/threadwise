@@ -138,7 +138,11 @@ test.describe('the list follows what is added', () => {
     await page.getByRole('dialog').getByLabel('Choose invoice files').setInputFiles(pdf('new.pdf'));
     await page.getByRole('dialog').getByRole('button', { name: 'Add 1 invoice' }).click();
     await expect(page).toHaveURL(/invoice=/);
+    // Wait for the drawer itself: Escape before it has opened closes nothing, and while it is
+    // open the page behind it is hidden from assistive technology (so the tab cannot be read).
+    await expect(page.getByRole('dialog')).toBeVisible();
     await page.keyboard.press('Escape');
+    await expect(page.getByRole('dialog')).toHaveCount(0);
     await expect.poll(countOf).toBe(total + 1);
     await expect(table(page).locator('tr', { hasText: 'Stand-in Supplier Ltd' })).toBeVisible();
   });

@@ -24,6 +24,7 @@ import {
 import { useRealtime } from 'inngest/react';
 import { cn } from '~/lib/utils';
 import { getApiBaseUrl } from '~/lib/api/base-url';
+import { agentFetch } from '~/lib/api/agent-auth';
 
 interface SyncProgressData {
   endpoint: string;
@@ -102,7 +103,7 @@ export function SyncProgressToast({
 
   // Fetch subscription token
   const refreshToken = async () => {
-    const response = await fetch(`${baseUrl}/realtime/subscription-token`, {
+    const response = await agentFetch(`${baseUrl}/realtime/subscription-token`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({

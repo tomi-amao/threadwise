@@ -10,6 +10,7 @@
  */
 
 import { getApiBaseUrl } from './base-url';
+import { agentFetch } from './agent-auth';
 
 // ============================================================================
 // Types
@@ -30,13 +31,7 @@ export interface Journal {
   entity_id: string;
   journal_date: string;
   journal_type:
-    | 'accrual'
-    | 'settlement'
-    | 'adjustment'
-    | 'reversal'
-    | 'purchase'
-    | 'expense'
-    | 'payment';
+    'accrual' | 'settlement' | 'adjustment' | 'reversal' | 'purchase' | 'expense' | 'payment';
   description: string | null;
   source_type: string | null;
   source_id: string | null;
@@ -80,7 +75,7 @@ export interface ChartOfAccountEntry {
 export async function fetchChartOfAccounts(entityId: string): Promise<ChartOfAccountEntry[]> {
   const baseUrl = getApiBaseUrl();
   const params = new URLSearchParams({ entity_id: entityId });
-  const response = await fetch(`${baseUrl}/accounting/chart-of-accounts?${params}`, {
+  const response = await agentFetch(`${baseUrl}/accounting/chart-of-accounts?${params}`, {
     method: 'GET',
     headers: { 'Content-Type': 'application/json' },
   });
@@ -118,7 +113,7 @@ export interface ReviewSummary {
 export async function fetchReviewSummary(entityId: string): Promise<ReviewSummary> {
   const baseUrl = getApiBaseUrl();
   const params = new URLSearchParams({ entity_id: entityId });
-  const response = await fetch(`${baseUrl}/accounting/journals/review-summary?${params}`, {
+  const response = await agentFetch(`${baseUrl}/accounting/journals/review-summary?${params}`, {
     method: 'GET',
     headers: { 'Content-Type': 'application/json' },
   });
@@ -148,7 +143,7 @@ export async function suggestDraftAccounts(
   journalIds?: string[]
 ): Promise<Record<string, DraftAccountSuggestion>> {
   const baseUrl = getApiBaseUrl();
-  const response = await fetch(`${baseUrl}/accounting/journals/suggest-accounts`, {
+  const response = await agentFetch(`${baseUrl}/accounting/journals/suggest-accounts`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -187,7 +182,7 @@ export async function postDraftJournal(
   accountId: string
 ): Promise<Journal> {
   const baseUrl = getApiBaseUrl();
-  const response = await fetch(`${baseUrl}/accounting/journals/${journalId}/post-draft`, {
+  const response = await agentFetch(`${baseUrl}/accounting/journals/${journalId}/post-draft`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ entity_id: entityId, account_id: accountId }),
@@ -212,7 +207,7 @@ export async function generateAllJournals(
   scope?: JournalScope
 ): Promise<TriggerGenerateAllResponse> {
   const baseUrl = getApiBaseUrl();
-  const response = await fetch(`${baseUrl}/accounting/journals/generate-all`, {
+  const response = await agentFetch(`${baseUrl}/accounting/journals/generate-all`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({

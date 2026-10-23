@@ -1,5 +1,5 @@
 import AxeBuilder from '@axe-core/playwright';
-import type { Page } from '@playwright/test';
+import type { Page, Route } from '@playwright/test';
 import { test, expect, expectNoHorizontalOverflow, readManifest } from './fixtures';
 
 const p = readManifest().products;
@@ -130,10 +130,39 @@ test.describe('products', () => {
   });
 
   test('the assistant answers in place, and says so when it cannot', async ({ page }) => {
-    // The agent is not part of these tests: stand in for its two endpoints.
-    await page.route('**/threads', route => route.fulfill({ json: { thread_id: 't-1' } }));
-    await page.route('**/threads/t-1/runs/wait', route =>
-      route.fulfill({ json: { messages: [{ type: 'ai', content: 'Raise the price by 5%.' }] } })
+    // The agent is not part of these tests: stand in for its two endpoints. Like the real
+    // server, it answers the browser's preflight and refuses a request with no user token.
+    const cors = {
+      'access-control-allow-origin': '*',
+      // `*` does not cover Authorization, so it is named.
+      'access-control-allow-headers': 'authorization, content-type',
+      'access-control-allow-methods': '*',
+    };
+    let runStatus = 200;
+    const standIn = (route: Route, status: number, body: unknown) =>
+      route.fulfill({
+        status,
+        headers: { ...cors, 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+    const guarded = (answer: (route: Route) => Promise<void>) => async (route: Route) => {
+      const request = route.request();
+      if (request.method() === 'OPTIONS') return route.fulfill({ status: 204, headers: cors });
+      if (!/^Bearer \S+/.test(request.headers()['authorization'] ?? ''))
+        return standIn(route, 401, { detail: 'Missing bearer token' });
+      return answer(route);
+    };
+    await page.route(
+      '**/threads',
+      guarded(route => standIn(route, 200, { thread_id: 't-1' }))
+    );
+    await page.route(
+      '**/threads/t-1/runs/wait',
+      guarded(route =>
+        runStatus === 200
+          ? standIn(route, 200, { messages: [{ type: 'ai', content: 'Raise the price by 5%.' }] })
+          : standIn(route, runStatus, {})
+      )
     );
     const drawer = await openProduct(page, p.topName);
     const pricing = drawer.getByRole('button', { name: /Pricing analysis/ });
@@ -142,8 +171,7 @@ test.describe('products', () => {
     await pricing.click(); // a second press hides the answer
     await expect(drawer.getByText('Raise the price by 5%.')).toHaveCount(0);
 
-    await page.unroute('**/threads/t-1/runs/wait');
-    await page.route('**/threads/t-1/runs/wait', route => route.fulfill({ status: 500, body: '' }));
+    runStatus = 500;
     await drawer.getByRole('button', { name: /Demand forecast/ }).click();
     await expect(drawer.getByRole('alert')).toContainText('could not answer');
   });

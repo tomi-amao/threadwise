@@ -1,72 +1,95 @@
-"""SQL Tools for database interaction.
+"""The chat agent's SQL fallback, run as the signed-in user.
 
-Provides lazy SQL toolkit and tools via get_toolkit() and get_sql_tools().
-All heavy initialization (DB connection, LLM, toolkit creation) is deferred
-until first use to avoid blocking LangGraph server startup.
+`list_tables`, `describe_tables` and `run_sql` are for questions the typed tools in
+`data_tools.py` cannot answer. Every query is checked and then run as the caller with
+row-level security on (`core/scoped_sql.py`), so whatever the model writes, it only
+ever sees that user's business. A refusal comes back to the model as text so it can
+correct the query.
 """
 
+import asyncio
 import logging
 from functools import lru_cache
-from typing import TypedDict
+from typing import Any
 
-from langchain_community.agent_toolkits import SQLDatabaseToolkit
+import psycopg2  # type: ignore[import-untyped]
+from langchain.tools import ToolRuntime, tool
 
-from ..core.config import get_local_llm
-from ..core.database import get_db
+from ..core.scoped_sql import ALLOWED_RELATIONS, QueryRefused, _connect, run_query
+from .identity import agent_user, json_safe, progress
 
 logger = logging.getLogger(__name__)
 
 
-# =============================================================================
-# STATE SCHEMA
-# =============================================================================
-
-
-class State(TypedDict):
-    """State schema for SQL agent."""
-    question: str
-    query: str
-    result: str
-    answer: str
-
-
-# =============================================================================
-# SQL TOOLKIT (LAZY)
-# =============================================================================
-
-
 @lru_cache(maxsize=1)
-def get_toolkit() -> SQLDatabaseToolkit | None:
-    """Get or create the SQL toolkit (lazy singleton).
+def _columns() -> dict[str, list[tuple[str, str]]]:
+    """Column names and types of the queryable tables (schema only, no business data)."""
+    conn = _connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "select table_name, column_name, data_type "
+                "from information_schema.columns "
+                "where table_schema = 'public' and table_name = any(%s) "
+                "order by table_name, ordinal_position",
+                (sorted(ALLOWED_RELATIONS),),
+            )
+            out: dict[str, list[tuple[str, str]]] = {}
+            for table, column, data_type in cur.fetchall():
+                out.setdefault(table, []).append((column, data_type))
+            return out
+    finally:
+        conn.close()
 
-    Uses the shared database connection from core.database to avoid
-    duplicate psycopg2 connections.
 
-    Returns:
-        SQLDatabaseToolkit instance or None if database unavailable.
+@tool
+async def list_tables(runtime: ToolRuntime) -> str:
+    """List the tables and views run_sql can query. Use the typed tools first."""
+    agent_user(runtime)
+    return ", ".join(sorted(ALLOWED_RELATIONS))
+
+
+@tool
+async def describe_tables(table_names: list[str], runtime: ToolRuntime) -> str:
+    """Columns and types of the named tables or views, before writing run_sql."""
+    agent_user(runtime)
+    try:
+        columns = await asyncio.to_thread(_columns)
+    except Exception as exc:
+        logger.error("Could not read the schema: %s", exc)
+        return "Error: the schema is not available right now."
+    blocks = []
+    for raw in table_names:
+        name = raw.strip().strip('"')
+        if name not in ALLOWED_RELATIONS:
+            blocks.append(f"{name}: not available. Call list_tables.")
+            continue
+        cols = ", ".join(f"{c} ({t})" for c, t in columns.get(name, []))
+        blocks.append(f"{name}: {cols}")
+    return "\n".join(blocks) or "Name at least one table."
+
+
+@tool
+async def run_sql(query: str, runtime: ToolRuntime) -> dict[str, Any]:
+    """Run one read-only PostgreSQL SELECT over this business's data (max 200 rows).
+
+    Only when no typed tool answers the question. Returns the columns and rows, or an
+    error saying what to change. Rows are already limited to this business.
     """
-    db = get_db()
-    if db is None:
-        logger.warning("SQL toolkit not initialized - database connection failed")
-        return None
+    user = agent_user(runtime)
+    progress(runtime, "Running a custom query")
+    try:
+        result = await asyncio.to_thread(run_query, user.user_id, query)
+    except QueryRefused as exc:
+        return {"error": str(exc)}
+    except psycopg2.Error as exc:
+        first_line = str(exc).strip().splitlines()[0] if str(exc).strip() else "failed"
+        return {"error": first_line}
+    return {
+        "columns": result.columns,
+        "rows": json_safe(result.rows),
+        "truncated": result.truncated,
+    }
 
-    model = get_local_llm("qwen/qwen3-vl-4b")
-    toolkit = SQLDatabaseToolkit(db=db, llm=model)
-    logger.info(f"SQL Tools - Database dialect: {db.dialect}")
-    logger.info(f"SQL Tools - Available tables: {db.get_usable_table_names()}")
-    return toolkit
 
-
-@lru_cache(maxsize=1)
-def get_sql_tools() -> list:
-    """Get the SQL tools list (lazy singleton).
-
-    Returns:
-        List of LangChain tools from the SQL toolkit, or empty list.
-    """
-    tk = get_toolkit()
-    if tk is None:
-        return []
-    tools = tk.get_tools()
-    logger.info(f"Available SQL Tools: {[t.name for t in tools]}")
-    return tools
+SQL_TOOLS = [list_tables, describe_tables, run_sql]

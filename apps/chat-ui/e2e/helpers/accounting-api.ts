@@ -317,7 +317,8 @@ export async function mockAccountingApi(
   const cors = {
     'access-control-allow-origin': '*',
     'access-control-allow-methods': 'GET,PATCH,POST,OPTIONS',
-    'access-control-allow-headers': 'content-type',
+    // `*` does not cover Authorization, so it is named.
+    'access-control-allow-headers': 'authorization, content-type',
   };
   const json = (route: Route, body: unknown, status = 200) =>
     route.fulfill({
@@ -332,6 +333,9 @@ export async function mockAccountingApi(
 
     const url = new URL(request.url());
     const path = url.pathname;
+    // The agent refuses anyone who is not signed in: so does this stand-in.
+    if (!/^Bearer \S+/.test(request.headers()['authorization'] ?? ''))
+      return json(route, { detail: 'Missing bearer token' }, 401);
 
     if (path.endsWith('/accounting/chart-of-accounts')) {
       return json(route, { entity_id: ENTITY, accounts: ACCOUNTS });

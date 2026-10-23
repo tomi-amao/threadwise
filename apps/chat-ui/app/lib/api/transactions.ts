@@ -6,6 +6,7 @@
  */
 
 import { getApiBaseUrl } from './base-url';
+import { agentFetch } from './agent-auth';
 
 // ============================================================================
 // Types
@@ -143,7 +144,7 @@ export async function listTransactions(
   if (params.page) query.set('page', String(params.page));
   if (params.pageSize) query.set('page_size', String(params.pageSize));
 
-  const response = await fetch(`${baseUrl}/accounting/transactions?${query}`);
+  const response = await agentFetch(`${baseUrl}/accounting/transactions?${query}`);
   if (!response.ok) {
     const text = await response.text();
     throw new Error(`Failed to list transactions: ${text}`);
@@ -157,7 +158,7 @@ export async function getTransaction(
 ): Promise<TransactionDetailResponse> {
   const baseUrl = getApiBaseUrl();
   const query = new URLSearchParams({ entity_id: entityId });
-  const response = await fetch(`${baseUrl}/accounting/transactions/${transactionId}?${query}`);
+  const response = await agentFetch(`${baseUrl}/accounting/transactions/${transactionId}?${query}`);
   if (!response.ok) {
     const text = await response.text();
     throw new Error(`Failed to fetch transaction: ${text}`);
@@ -172,11 +173,14 @@ export async function updateTransaction(
 ): Promise<UpdateTransactionResponse> {
   const baseUrl = getApiBaseUrl();
   const query = new URLSearchParams({ entity_id: entityId });
-  const response = await fetch(`${baseUrl}/accounting/transactions/${transactionId}?${query}`, {
-    method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  });
+  const response = await agentFetch(
+    `${baseUrl}/accounting/transactions/${transactionId}?${query}`,
+    {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }
+  );
   if (!response.ok) {
     const text = await response.text();
     throw new Error(`Failed to update transaction: ${text}`);

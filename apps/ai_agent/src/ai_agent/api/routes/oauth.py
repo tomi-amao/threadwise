@@ -12,10 +12,11 @@ import json
 import logging
 from urllib.parse import urlencode
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import RedirectResponse
 
 from ...core.config import settings
+from ..deps import CurrentUser, current_user
 from ...integrations.zoho_calendar import ZohoCalendarAdapter
 from ...integrations.zoho_calendar.oauth import (
     ZohoOAuthError,
@@ -47,23 +48,25 @@ def _redirect_to_integrations(zoho_calendar: str, reason: str = "") -> RedirectR
     )
 
 
-@router.get("/zoho_calendar/start")
-async def zoho_calendar_oauth_start(entity_id: str = Query(...)):
-    """Redirect to Zoho's consent screen for the given entity.
+@router.get("/zoho_calendar/authorize-url", dependencies=[Depends(current_user)])
+async def zoho_calendar_authorize_url(user: CurrentUser):
+    """The Zoho consent-screen URL for the caller's own business.
 
-    The frontend's Connect button is a plain <a href> to this route — it
-    never constructs the authorize URL itself, so it never needs to know
-    Zoho's client_id or scopes.
+    The browser cannot send an Authorization header on a plain link or redirect, so the
+    frontend asks for this URL (signed in) and then navigates to it. The business comes from
+    the verified token, never from the request, and is what the signed `state` carries into
+    the callback below (the callback is public: Zoho redirects the browser to it).
     """
     if not settings.zoho_client_id or not settings.zoho_client_secret:
         raise HTTPException(
             status_code=500,
             detail=(
-                "Zoho Calendar is not configured on this server — "
+                "Zoho Calendar is not configured on this server - "
                 "ZOHO_CLIENT_ID/ZOHO_CLIENT_SECRET are unset."
             ),
         )
-    return RedirectResponse(build_authorize_url(entity_id))
+    assert user.entity_id is not None
+    return {"url": build_authorize_url(user.entity_id)}
 
 
 @router.get("/zoho_calendar/callback")

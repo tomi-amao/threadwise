@@ -25,12 +25,31 @@ import { Statement } from '~/components/ui/statement';
 import { Tabs } from '~/components/ui/tabs';
 import { ThemeToggle } from '~/components/ui/theme-toggle';
 import { BarChart, LineChart, ShareChart } from '~/components/charts';
+import { AssistantCard } from '~/components/assistant/cards';
+import {
+  parseClarify,
+  parseProposal,
+  parseUiMessage,
+  type ParsedUi,
+} from '~/components/assistant/catalogue';
+import { ClarifyPrompt, FollowUpChips, ProposalCard } from '~/components/assistant/chips';
+import contract from '~/components/assistant/ui-contract.json';
 
 export const meta: MetaFunction = () => [{ title: 'UI kit - ThreadWise' }];
 
 const MONTHS = ['Nov', 'Dec', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct'];
 const SALES = [21400, 34800, 12600, 9800, 15200, 58200, 17900, 12300, 10400, 16800, 47300, 14200];
 const TONES: ChipTone[] = ['active', 'planned', 'done', 'draft', 'negative', 'income', 'plain'];
+
+/** Every example in the UI contract, through the same validation the thread uses. */
+const ASSISTANT_EXAMPLES: ParsedUi[] = Object.entries(contract.examples).flatMap(([name, list]) =>
+  (list as unknown[]).flatMap((props, i) => {
+    const ui = parseUiMessage({ id: `${name}-${i}`, name, props });
+    return ui ? [ui] : [];
+  })
+);
+const CLARIFY_EXAMPLE = parseClarify(contract.interrupt_examples.clarify[0]);
+const PROPOSAL_EXAMPLE = parseProposal(contract.interrupt_examples.proposal[0]);
 
 function Block({ id, title, children }: { id: string; title: string; children: React.ReactNode }) {
   return (
@@ -45,6 +64,7 @@ export default function UiKit() {
   const [filter, setFilter] = useState<'all' | 'in' | 'out'>('all');
   const [tab, setTab] = useState<'overview' | 'plan' | 'costs'>('overview');
   const [open, setOpen] = useState(false);
+  const [sent, setSent] = useState<string | null>(null);
 
   return (
     <Page>
@@ -294,6 +314,33 @@ export default function UiKit() {
               ]}
             />
           </div>
+        </div>
+      </Block>
+
+      <Block id="assistant" title="Assistant (generative UI)">
+        <div className="grid gap-4 lg:grid-cols-2">
+          {ASSISTANT_EXAMPLES.filter(ui => ui.name !== 'follow-ups').map(ui => (
+            <AssistantCard key={ui.id} ui={ui} />
+          ))}
+        </div>
+        <div className="mt-6 space-y-4">
+          {ASSISTANT_EXAMPLES.map(ui =>
+            ui.name === 'follow-ups' ? (
+              <FollowUpChips key={ui.id} data={ui.props} onSelect={setSent} />
+            ) : null
+          )}
+          {CLARIFY_EXAMPLE && (
+            <ClarifyPrompt clarify={CLARIFY_EXAMPLE} onAnswer={a => setSent(a)} />
+          )}
+          {PROPOSAL_EXAMPLE && (
+            <ProposalCard
+              proposal={PROPOSAL_EXAMPLE}
+              onDecide={decision => setSent(`Would ${decision}: ${PROPOSAL_EXAMPLE.title}`)}
+            />
+          )}
+          <p role="status" className="text-sm text-text-2">
+            {sent ? `Would send: ${sent}` : 'Click a suggestion to see what it sends.'}
+          </p>
         </div>
       </Block>
 

@@ -28,6 +28,56 @@ test.describe('ui kit', () => {
     ).toEqual([]);
   });
 
+  test('assistant cards render every example, each with its source', async ({ page }) => {
+    const block = page.getByTestId('assistant');
+    for (const name of ['Profit and loss', 'Net sales', 'Net sales by month', 'Top customers']) {
+      await expect(block.getByRole('region', { name, exact: true }).first()).toBeVisible();
+    }
+    const pnl = block.getByRole('region', { name: 'Profit and loss', exact: true });
+    await expect(pnl.getByText('£4,449.16')).toBeVisible();
+    await expect(pnl.getByText('(£12,000.00)')).toBeVisible(); // a deduction, bracketed
+    await expect(pnl.getByRole('link', { name: 'Open in Reports' })).toHaveAttribute(
+      'href',
+      '/reports?from=2026-04-01&to=2027-03-31'
+    );
+    await expect(pnl.getByText('1 Apr 2026 to 31 Mar 2027')).toBeVisible();
+    // A row links to the record on its page.
+    const invoices = block.getByRole('region', { name: 'Invoices, oldest due first' });
+    await expect(invoices.getByRole('link', { name: 'INV-OUT-2003' })).toHaveAttribute(
+      'href',
+      '/invoices?invoice=i-1'
+    );
+    await expect(block.getByText('Showing 1 of 14.')).toBeVisible();
+  });
+
+  test('a follow-up chip sends its full prompt, and a clarifying option its label', async ({
+    page,
+  }) => {
+    const block = page.getByTestId('assistant');
+    const status = block.getByRole('status');
+    await block
+      .getByRole('navigation', { name: 'Suggested questions' })
+      .getByRole('button', { name: 'Compare with last year' })
+      .click();
+    await expect(status).toHaveText('Would send: How does this compare with last financial year?');
+    await block
+      .getByRole('group', { name: 'Which period do you mean?' })
+      .getByRole('button', { name: 'Last month' })
+      .click();
+    await expect(status).toHaveText('Would send: Last month');
+
+    // A proposed change shows what will change, and says nothing happens until approved.
+    const proposal = block.getByRole('region', {
+      name: 'Proposed change: Mark invoice INV-OUT-2003 as paid',
+    });
+    await expect(proposal.getByText('Nothing changes until you approve it.')).toBeVisible();
+    await expect(proposal.getByText('Open', { exact: true })).toBeVisible();
+    await proposal.getByRole('button', { name: 'Leave it' }).click();
+    await expect(status).toHaveText('Would send: Would dismiss: Mark invoice INV-OUT-2003 as paid');
+    await proposal.getByRole('button', { name: 'Mark as paid' }).click();
+    await expect(status).toHaveText('Would send: Would approve: Mark invoice INV-OUT-2003 as paid');
+  });
+
   test('charts render with a text alternative', async ({ page }) => {
     const charts = page.getByTestId('charts');
     await expect(charts.getByRole('img', { name: 'Monthly gross revenue' })).toBeVisible();

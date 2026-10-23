@@ -11,8 +11,9 @@ and accounting. It lives in a pnpm/Poetry hybrid monorepo — the frontend
 unless a task explicitly touches it.
 
 This service does three distinct jobs:
-1. **Chat agent** — a LangGraph StateGraph that answers analytics questions
-   (SQL), generic questions, and extracts structured data from uploaded documents.
+
+1. **Chat agent** — a `create_agent` tool-calling loop that answers questions about
+   the signed-in user's business from typed data tools (SQL as a fallback). Read-only.
 2. **ETL / normalization pipeline** — pulls transactions from external providers
    (Shopify, Revolut, PayPal, Squarespace) via Inngest, normalizes them into a
    canonical schema, and persists them to Supabase/Postgres. Zoho Calendar is
@@ -20,9 +21,13 @@ This service does three distinct jobs:
 3. **Accounting engine** — turns normalized payments/transactions/invoices into
    double-entry journals against a chart of accounts.
 
+Longer explanations for people are in `docs/` (start at `docs/README.md`): architecture,
+security, chat agent, data pipeline, accounting, the route list, development. Update the matching
+page when you change one of those areas.
+
 ## Commands
 
-All commands run from `apps/ai_agent/` (Poetry is *not* usable from the repo root).
+All commands run from `apps/ai_agent/` (Poetry is _not_ usable from the repo root).
 
 ```bash
 # Install deps
@@ -59,7 +64,10 @@ invoked via Husky) run Black/isort/flake8/mypy/bandit on changed Python files at
 commit time.
 
 Only `tests/test_normalization.py` exists today — most services (journal_service,
-account_mapping, langgraph_service, mcp_client, etc.) have no test coverage yet.
+account_mapping, langgraph_service, etc.) have no test coverage yet. Auth and the agent are
+covered by `tests/test_auth.py`, `tests/test_api_auth.py`, `tests/test_scoped_sql.py` and
+`tests/test_chat_agent.py` (the last two use the local Supabase database and the e2e seed
+manifest when they exist, and skip those parts otherwise).
 
 ## Architecture
 
@@ -71,60 +79,129 @@ account_mapping, langgraph_service, mcp_client, etc.) have no test coverage yet.
   accounting, health). Service/Inngest imports are wrapped in try/except with a
   relative-then-absolute import fallback — this is intentional so the module works
   both under `poetry run uvicorn` and under the LangGraph CLI's own import context.
-- `langgraph.json` — declares the standalone LangGraph graph
-  (`ai_agent.agents.graph_agent:agent`) served independently of `main.py`'s FastAPI
-  app when run via `langgraph dev`/LangGraph Platform.
+- `langgraph.json` — declares the LangGraph graph (`threadwise-financial-agent` =
+  `ai_agent.agents.chat_graph:agent`) served by `langgraph dev`/LangGraph Platform,
+  which also mounts `main.py`'s FastAPI app (`http.app`). It registers the auth handler
+  (`auth.path` -> `src/ai_agent/auth.py`), the CORS origins, and thread retention
+  (`checkpointer.ttl`: 90 days, in minutes).
 
-### Chat agent (`agents/graph_agent.py`)
+### Authentication and authorization (every request)
 
-A single LangGraph `StateGraph` (`AgentState` TypedDict) implements this flow:
+Nothing here trusts the caller's word about who they are or which business they mean.
 
-```
-START → classify_query → retrieve_context → evaluate_context_sufficiency
-    → [sufficient?]
-        → yes: context_response → END
-        → no:  route by query_type
-            → extract_document → END        (file attachments)
-            → generic_response → END         (conversational)
-            → analytics_agent → push_visualization → END  (data queries)
-```
+- **Users:** a Supabase access token in `Authorization: Bearer`, verified locally against
+  the project's JWKS (`core/auth.py`; `SUPABASE_JWT_SECRET` only for legacy HS256 projects).
+  The business is looked up from the verified user id (`entities.owner_user_id`), never taken
+  from the request.
+- **LangGraph API** (threads, runs): `auth.py` rejects requests without a valid token (401),
+  stamps new threads with their owner and filters every thread/run to it. The auth file is
+  loaded by path, so it uses absolute imports; token verification runs in a thread because
+  the dev server rejects blocking calls on the event loop.
+- **REST routes** (`api/routes`, mounted by both `main.py` and `langgraph.json`'s `http.app`):
+  `api/deps.py` provides `current_user`, `entity_guard` (any `entity_id` in the query, path,
+  JSON body or form must be the caller's, else 403), `owned_*` dependencies for routes that
+  name a record by id alone (404 if it is another business's), and `require_internal`
+  (`X-Internal-Key` = `INTERNAL_API_KEY`; with no key configured those routes are closed).
+  Machine-only routes (`/integrations/entities`, `/embeddings/*`, `/normalization/*` except
+  `reprocess-failed`, `/inngest/*`, `/accounting/health-checks`) use the internal key.
+  Public: `/`, `/health`, `/stats`, the Zoho OAuth callback (signed `state`), and
+  `/api/inngest` (the Inngest SDK verifies request signatures; set `INNGEST_SIGNING_KEY` and
+  not `INNGEST_DEV` in production).
+- **Adding a route:** put it on a router that already carries a guard, or add one.
+  `tests/test_api_auth.py` walks the whole API and fails on any route without a guard, and
+  on any anonymous request that is not refused. Its route walk depends on FastAPI's private
+  `effective_route_contexts()`; a count assertion fails loudly if that changes.
+- Settings: `INTERNAL_API_KEY`, `CORS_ALLOW_ORIGINS` (comma-separated, default the local dev
+  origins), `SUPABASE_JWT_SECRET` (legacy only). A variable set in the real environment wins
+  over `.env` (`load_dotenv(override=False)`).
+- The browser app forwards the user's token (see root CLAUDE.md); the old chat page signs its
+  LangGraph requests with a client `onRequest` hook until the chat panel replaces it.
 
-- Query classification, context-sufficiency evaluation, and document-category
-  inference are all separate structured-output LLM calls (Pydantic models),
-  not a single monolithic prompt — read the node docstrings before changing
-  the routing logic, each node has specific confidence thresholds it enforces
-  (e.g. context is only treated as sufficient above 0.7 confidence).
-- `analytics_agent_node` picks its toolset at runtime based on `state["data_source"]`:
-  `"sql_toolkit"` (default, via `tools/sql_tools.py` + `core/database.py`'s direct
-  Postgres `SQLDatabase` connection) or `"supabase_mcp"` (via `services/mcp_client.py`,
-  which connects to Supabase's hosted MCP server through `langchain-mcp-adapters`).
-  MCP failures fall back to the SQL toolkit rather than erroring.
-- `push_visualization_node` uses `langgraph.graph.ui.push_ui_message` (generative UI)
-  to stream chart/table/metric components to the frontend — it re-analyzes the
-  agent's own text output with another LLM call to decide what to visualize, it
-  does not receive structured chart data from the analytics step directly.
-- All LLM singletons (`_get_local_model`, `_get_gemini`, `_get_classifier`, etc.)
-  are `@lru_cache`d module-level functions — graph construction itself
-  (`create_analytics_agent_graph`) is cheap and does no I/O; heavy clients are
-  created lazily on first request. Preserve this pattern for any new node.
+### Chat agent (`agents/chat_agent.py`)
+
+One `create_agent` loop (langchain 1.x): system prompt (`agents/chat_prompt.py`), the
+tools below, and middleware. The model decides which tools to call; there is no
+classifier, router or second "what chart?" LLM call.
+
+- **Identity.** Every tool takes `runtime: ToolRuntime` (hidden from the model) and reads
+  the user from `runtime.config["configurable"]["langgraph_auth_user"]`, which the server
+  sets from `auth.py` and overrides if a client sends it (`tools/identity.py`). Never add
+  a tool argument for the user or business, and never name an argument `config` or
+  `runtime` (reserved).
+- **Middleware, in order:** `BusinessContextMiddleware` (refuses a run with no signed-in
+  user before the model is called; answers a file attachment with a pointer to the
+  Invoices page, since extraction is not part of chat; loads the business profile into
+  state each turn and appends it and today's date to the system prompt), summarisation
+  (small model), model and tool call caps per turn, model fallback, model retry, tool
+  errors returned to the model as text (`tool_error_message`), and tool retry on a
+  dropped database connection.
+- **Models** are settings: `agent_model`, `agent_fallback_model`, `agent_small_model`
+  (provider-prefixed ids for `init_chat_model`; Gemini by default since only
+  `GOOGLE_API_KEY` is configured). The Gemini client refuses to construct without its key,
+  so `build_agent()` builds nothing at import; `agents/chat_graph.py` (what langgraph.json
+  points at) calls it. Tests import `build_agent` and pass a scripted fake model.
+- **No checkpointer in code**: the LangGraph server supplies one (TTL in langgraph.json).
+- **Limits, logs, evals** (details: `docs/operations.md`, `docs/evals.md`): a per-user run limit
+  (`auth.py`, per process), a per-turn token cap and a structured turn log
+  (`agents/limits_middleware.py`; no questions, answers or figures in logs), ids in thread and run
+  metadata are keyed hashes (`core/tracing.py`, set `TRACE_HASH_SALT`), model clients retry once.
+  The golden set (`python -m ai_agent.evals`) has 56 cases with expected figures taken from the
+  seed manifest, never typed; its oracle (a scripted perfect model) must score 100% and runs in CI
+  (`.github/workflows/backend-data.yml`); a real model is measured nightly. Measure before
+  changing a model default: the 3.5 Gemini models were 3 to 17 times slower than the 2.5 ones.
+- **Page context, actions, memory**: the browser's page context is a name only: the server
+  re-reads the record as the user (`agents/page_context.py`) and the label is never used. Action
+  tools (`tools/action_tools.py`) read, build a `Proposal` from the read, pause on an interrupt,
+  and only on `{"decision": "approve"}` call the existing endpoint through the app with the
+  user's token (`call_app`). Memory (`tools/memory_tools.py`) is saved only after approval, in the
+  store under `(user_id, "memories")`, which `auth.py` scopes per user. Nothing writes without a
+  click: keep it that way, and test it. Details: `docs/chat-agent.md`.
+- **Generative UI** (`ui/`): cards come from tool results through pure presenters
+  (`ui/presenters.py`), never from a model, pushed by `GenerativeUIMiddleware`; follow-up chips
+  come from one small-model call at the end of the turn (`FollowUpsMiddleware`); `ask_user`
+  pauses on an interrupt for a clarifying question. The props are Pydantic models
+  (`ui/catalogue.py`) mirrored as Zod in the frontend. After changing one, run
+  `poetry run python -m ai_agent.ui.contract` and update the Zod side:
+  `tests/test_ui_contract.py` and the frontend's `assistant-contract.spec.ts` fail otherwise.
+  Details: `docs/chat-agent.md`.
 - The "local" LLM (`core/config.py:get_local_llm`) is an OpenAI-compatible client
-  pointed at `local_llm_base_url` (default `http://localhost:1234/v1`, e.g. LM
-  Studio) — it is not literally OpenAI. `get_chat_model` uses LangChain's
-  `init_chat_model` with provider-prefixed model strings (e.g.
-  `"google_genai:gemini-2.5-flash-lite"`).
+  pointed at `local_llm_base_url` (e.g. LM Studio); still used by one integrations route,
+  not by the chat agent.
 
 ### Two separate DB access paths — don't conflate them
 
 - `core/supabase_client.py::get_supabase_client()` — Supabase Python client
-  (PostgREST), used by nearly all business logic (normalization, journal_service,
-  account_mapping, services/*). Table calls are synchronous and wrapped in
-  `asyncio.to_thread(...)` throughout — follow this pattern for new Supabase calls.
-- `core/database.py::get_db()` — a direct `langchain_community.utilities.SQLDatabase`
-  (psycopg2) connection used only by the analytics agent's SQL toolkit for
-  free-form read queries against the warehouse.
+  (PostgREST) with the **service key**, used by nearly all business logic (normalization,
+  journal_service, account_mapping, services/*). It bypasses row-level security, so a route
+  that uses it must already have checked who the caller is (`api/deps.py`). Table calls are
+  synchronous and wrapped in `asyncio.to_thread(...)` throughout — follow this pattern.
+  It is an `@lru_cache` singleton that returns `None` when unconfigured; handle that.
+- `core/scoped_sql.py` — the analytics agent's read-only SQL over `DATABASE_URL` (psycopg2),
+  below.
 
-Both are `@lru_cache` singletons and return `None`/log a warning rather than
-raising when unconfigured — callers must handle the `None` case.
+### Agent database access (`core/scoped_sql.py`)
+
+The model writes SQL, so access cannot rely on it behaving. Two layers:
+
+1. `check_query` parses with Postgres's own parser (pglast) and accepts one plain SELECT over
+   an allow-list of business tables and views (`ALLOWED_RELATIONS`; not `external_sources`,
+   raw events, sync state, backups) calling only allow-listed functions
+   (`ALLOWED_FUNCTIONS`). The function list is what matters: `set_config` could rewrite the
+   identity RLS reads, `pg_read_file`/`dblink` reach out of the database. Add a function
+   to the list only when a real question needs it. CTE names are scoped properly, so
+   `WITH external_sources AS (SELECT * FROM external_sources)` is refused.
+2. `run_query` opens a READ ONLY transaction, `SET LOCAL ROLE authenticated`, sets the
+   user's id as the JWT claim, applies a statement timeout, and fetches at most 200 rows
+   through a server-side cursor. The same RLS policies as the app's pages therefore decide
+   which rows exist; the model is never trusted to filter by business.
+
+`run_trusted(user_id, sql, params)` is the same transaction without the parser, for the
+fixed, parameterised SQL in `tools/data_tools.py` (psycopg2 placeholders do not parse).
+Never pass it text the model wrote.
+
+`DATABASE_URL` must be a role that can `SET ROLE authenticated` (the `postgres` role on
+Supabase). Add a table to `ALLOWED_RELATIONS` only with an RLS policy on it, and cover it in
+`tests/test_scoped_sql.py` and `e2e/rls.spec.ts`.
 
 ### ETL / normalization pipeline
 
@@ -144,7 +221,10 @@ is Inngest-orchestrated, under `integrations/inngest/`:
   logic belongs in the Inngest functions, not here.
 - Per-provider normalizers (`normalization/<provider>_normalizer.py`) all implement
   the same `normalize(entity_type, external_id, payload, raw_event_id) -> NormalizationResult`
-  contract and are registered in `NORMALIZER_REGISTRY` (`normalization/service.py`).
+  contract and are registered in `PROVIDER_NORMALIZERS`
+  (`normalization/inngest_functions.py`, the processing path; all five providers).
+  `NORMALIZER_REGISTRY` in `normalization/service.py` is the synchronous fallback and
+  lists only Squarespace, Revolut and PayPal.
   Canonical output tables include `customers`, `orders`, `products`,
   `inventory_items`, `payments`, `bank_accounts`, `financial_transactions`,
   `calendar_events`.
@@ -158,17 +238,19 @@ no credentials-only path to a specific person's own calendar; it needs real
 3-legged OAuth2, which is new infrastructure, not an extension of the
 existing pattern:
 
-- `api/routes/oauth.py` — `/oauth/zoho_calendar/start` (redirects to Zoho's
-  consent screen) and `/oauth/zoho_calendar/callback` (exchanges the code,
+- `api/routes/oauth.py` — `/oauth/zoho_calendar/authorize-url` (signed-in user; returns
+  Zoho's consent URL) and `/oauth/zoho_calendar/callback` (exchanges the code,
   creates the "ThreadWise Deadlines" calendar, persists the `external_sources`
   row). Any future OAuth provider's routes belong here too, not a new file.
 - `integrations/zoho_calendar/oauth.py` — the OAuth2 mechanics: authorize-URL
   building, code↔token exchange, and a signed `state` param
   (`base64(entity_id|nonce|exp)` + `.` + `hmac_sha256(zoho_client_secret, payload)`,
-  10-minute TTL). The signing matters because the integrations router has no
-  request auth and `entity_id` is otherwise attacker-controlled during the
-  callback — an unsigned `state` would let anyone attach their own Zoho
-  calendar to someone else's `entity_id`.
+  10-minute TTL). The signing matters because the callback is reached by Zoho
+  redirecting the browser, so it carries no bearer token — an unsigned `state` would
+  let anyone attach their own Zoho calendar to someone else's `entity_id`. The `state` is only
+  minted by `GET /oauth/zoho_calendar/authorize-url`, which requires a signed-in user and
+  uses the business from their token (the app's `/api/integrations/zoho/connect` route calls
+  it and redirects, since a plain link cannot send a token).
 - **`zoho_client_id`/`zoho_client_secret` are app-wide config (`core/config.py`/
   `.env`), not a per-connection secret** — the first exception to the pattern
   `docs/secure-api-key-workflow.md` documents, where every other provider's
@@ -176,12 +258,12 @@ existing pattern:
   per `external_sources` row. Here, ThreadWise itself is the registered OAuth
   client (one Zoho API Console app), and many different entities each
   authorize it independently — the client_id/secret identify the
-  *application* to Zoho, not any one user's calendar, the same relationship
+  _application_ to Zoho, not any one user's calendar, the same relationship
   as any "Sign in with Google" button on a multi-tenant SaaS. Each entity's
   own secret — the refresh token Zoho issues after their own consent — still
   goes through the exact same per-source Vault storage as every other
   provider's `api_key` field, just as a `{"refresh_token": ..., "api_domain":
-  ...}` JSON blob instead of a `client_id`/`client_secret` pair.
+...}` JSON blob instead of a `client_id`/`client_secret` pair.
 - Zoho-specific quirks handled explicitly rather than assumed, each the kind
   of thing that fails silently if you don't know to check for it: the token
   endpoint returns HTTP 200 with an `{"error": ...}` body on failure (so
@@ -212,6 +294,7 @@ existing pattern:
 ### Accounting engine (`services/journal_service.py`, `services/account_mapping.py`)
 
 Double-entry journals are generated from normalized records:
+
 - **Accrual journal**: from a captured payment — debits clearing (net of gateway
   fees) + bank charges, credits revenue/shipping/tax from the linked order.
 - **Settlement journal**: from an inbound gateway payout (Stripe/PayPal → Revolut)
@@ -219,6 +302,12 @@ Double-entry journals are generated from normalized records:
 - **Expense journal**: from an outbound financial transaction — debits the resolved
   expense account, credits cash.
 - Purchase/Sale/Payment journals are created from invoices.
+- Also: funding (inbound personal transfer), sales receipt (direct PayPal sale), refund
+  and refund reversal, FX conversion, inventory cost of goods sold, and stock disposal.
+  All 13 types, with their `JournalService` methods, are in `docs/accounting.md`.
+- Journals follow the same rules throughout: debits equal credits, one journal per source
+  record (idempotent), and `reverse_journal` is a soft void (`status = 'reversed'`), not an
+  opposite entry.
 
 `account_mapping.py` is the single source of truth for resolving logical account
 purposes to real `chart_of_accounts.account_number` values — **all** journal code
@@ -229,22 +318,30 @@ accounts (`is_header = True`) are never valid posting targets. Legacy normalizer
 review rather than mis-posted. Debits must equal credits within `BALANCE_TOLERANCE`
 (`Decimal("0.01")`); accrual journals support `reverse_journal()`.
 
-### Sub-agents & tools
+### Tools
 
-`tools/sub_agents.py` and `agents/middleware.py` hold auxiliary agents (e.g. a
-query-qualification sub-agent exposed as a `@tool`) that the main graph or
-`create_agent`-based analytics agent can call — a different composition pattern
-from the StateGraph nodes in `graph_agent.py`. `agents/agent.py` predates
-`graph_agent.py`; check which is actually wired into `langgraph.json` /
-`main.py` before assuming either is dead code.
+- `tools/data_tools.py` — typed tools, each returning a dict that names its period,
+  currency and a `link` to the page (using that page's own URL filters):
+  `get_business_profile` (also today's date and data coverage), `profit_and_loss`,
+  `sales_summary`, `top_products`, `top_customers`, `outstanding_invoices`,
+  `cash_position`, `search_transactions`. Their SQL uses **the same definitions as the
+  pages** (the module docstring lists them and the frontend file each comes from); change
+  one and you must change the other, or the chat and the page will disagree.
+  `tests/test_chat_agent.py` checks every tool against the e2e seed manifest.
+- `tools/sql_tools.py` — the fallback: `list_tables`, `describe_tables`, `run_sql`
+  (checked, `run_query`). A refusal comes back to the model as `{"error": ...}`.
+- `tools/document_tools.py` — `search_documents`, the caller's vector namespace only.
+
+The old hand-built graph (`agents/graph_agent.py`, `agents/prompts.py`) and earlier dead
+modules were removed.
 
 ## Environment
 
 Config is centralized in `core/config.py` (`pydantic_settings.BaseSettings`,
 loaded from `.env`, unknown keys ignored). Notable settings: `database_url`
-(direct Postgres), `supabase_url`/`supabase_key` (PostgREST), `supabase_access_token`
-(PAT for MCP auth), `local_llm_base_url`, `inngest_event_key`/`inngest_signing_key`,
-`pinecone_api_key` (vector store for embeddings/RAG), `zoho_client_id`/
+(direct Postgres), `supabase_url`/`supabase_key` (PostgREST), `local_llm_base_url`, `inngest_event_key`/`inngest_signing_key`,
+`pinecone_api_key` (vector store for embeddings/RAG), `internal_api_key` and
+`cors_allow_origins` (see "Authentication and authorization"), `zoho_client_id`/
 `zoho_client_secret`/`zoho_redirect_uri`/`zoho_accounts_domain` (see "OAuth
 providers" above — app-wide, not per-connection), `frontend_url` (where the
 Zoho OAuth callback redirects the browser back to after connecting — this

@@ -107,13 +107,16 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# Add CORS middleware
+# CORS: only the app's own origins (CORS_ALLOW_ORIGINS, comma-separated). Auth is a bearer
+# token in a header, not a cookie, so credentials are not shared cross-origin.
+from .core.config import settings  # noqa: E402
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Configure appropriately for production
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=[o.strip() for o in settings.cors_allow_origins.split(",") if o.strip()],
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "X-Request-Id"],
 )
 
 # Setup Inngest endpoint

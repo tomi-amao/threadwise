@@ -53,6 +53,7 @@ export default [
   route('api/customers', 'routes/api.customers.tsx'),
   route('api/products', 'routes/api.products.tsx'),
   route('api/inventory', 'routes/api.inventory.tsx'),
+  route('api/integrations/zoho/connect', 'routes/api.integrations.zoho.connect.tsx'),
   route('api/reports/account-drilldown', 'routes/api.reports.account-drilldown.tsx'),
   route('api/reports/cash-flow-pack', 'routes/api.reports.cash-flow-pack.tsx'),
   route('api/tax/ct600-pack', 'routes/api.tax.ct600-pack.tsx'),

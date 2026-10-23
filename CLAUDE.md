@@ -27,13 +27,10 @@ path typos in `.gitignore`/`.pre-commit-config.yaml`, an empty stray
 `apps/ai_agent/__init__.py` that broke all of pytest, `bandit`/`flake8` not being
 real dependencies, a production-build-breaking route naming issue). What's left:
 
-- Frontend `typecheck` has 4 errors, all in the chat code (`ChatArea`, `ThreadSidebar`,
-  `ChatProvider`), which is being reworked separately. Everything else type-checks clean, so a new
-  error is yours.
-- ESLint is clean outside the chat code (`components/thread/*`, `ChatProvider`). The Husky
-  `lint-staged` hook runs `eslint --fix` and aborts a commit on any remaining error in a staged
-  file, so committing a chat file still needs `git commit --no-verify` until that code is
-  reworked; nothing else should.
+- Frontend `typecheck` is clean, so a new error is yours. ESLint reports one error, in
+  `app/types/invoice.ts`, which nobody has touched: two Prettier versions are installed (the app's
+  CLI resolves 3.6, `eslint-plugin-prettier` resolves 3.9 from the root) and they format a union
+  type differently. Staging that file makes the `lint-staged` hook (`eslint --fix`) reformat it.
 - `apps/chat-ui/.env.local` is committed to git with live Supabase/LangSmith/Google
   API keys despite `.gitignore` listing `**/.env.local` — the ignore rule was added
   after the file was already tracked. Don't add new secrets to it, and flag this to
@@ -113,15 +110,22 @@ no automated test coverage yet.
 The frontend does **not** talk to the FastAPI backend for everything — it has three
 distinct data paths, and it matters which one a given feature uses:
 
-1. **Chat/agent streaming** — `ChatProvider.tsx` uses `@langchain/langgraph-sdk`'s
-   `useStream` hook to talk directly to the **LangGraph dev server** (`langgraph dev`,
-   default `http://localhost:2024`), not the FastAPI app on :8000. This is how
-   generative UI (charts/tables pushed mid-stream) and the conversational agent work.
+1. **Chat/agent streaming** — `providers/AssistantProvider.tsx` uses `@langchain/langgraph-sdk`'s
+   `useStream` hook to talk directly to the **LangGraph server** (`langgraph dev`,
+   `VITE_LANGGRAPH_API_URL`, default `http://localhost:2024`), not the FastAPI app on :8000,
+   signing every request with the user's token. This is how the assistant panel, its cards
+   (generative UI pushed mid-stream) and clarifying questions (interrupts) work.
 2. **Domain APIs proxied to the AI agent** — modules like `app/lib/api/accounting.ts`
    call the FastAPI backend's REST routes (`/accounting`, `/invoices`, etc., mounted
    in `apps/ai_agent/.../api/routes/__init__.py`) via `AI_AGENT_URL`/`VITE_AI_AGENT_URL`
    (also defaults to `:2024` in some files — check the actual env var before assuming
-   which port a given call hits).
+   which port a given call hits). **The agent authenticates every request with the signed-in
+   user's Supabase token and takes the business from it**, so always send the token: browser
+   code calls `agentFetch` (`app/lib/api/agent-auth.ts`), server routes pass
+   `await requestAccessToken(request)` (`agent-auth.server.ts`) to `callAgent`. A plain
+   `fetch` to the agent gets 401. Links and redirects cannot carry a header, so they go
+   through an app route that asks the agent as the user (see `api.integrations.zoho.connect`).
+   Details and the machine-only routes: `apps/ai_agent/CLAUDE.md`.
 3. **Direct-to-Supabase reads** — `.server.ts` loaders (`dashboard.server.ts`,
    `inventory.server.ts`, `orders.server.ts`, `invoices.server.ts`, etc.) query Supabase
    directly, bypassing the AI agent, **as the signed-in user**:
@@ -165,11 +169,23 @@ distinct data paths, and it matters which one a given feature uses:
 - `providers/AuthProvider.tsx` wraps the whole app (in `root.tsx`) and owns
   Supabase auth state, profile, and entity (the business/org record) — most
   authenticated pages read from `useAuth()` rather than querying Supabase themselves.
-- `providers/ChatProvider.tsx` is the single source of truth for chat state; it
-  intentionally uses LangGraph SDK types directly rather than an app-specific
-  message shape, to avoid a conversion layer.
-- `components/dashboard/`, `components/visualizations/`, etc. are organized by
-  feature/domain, mirroring the route list above.
+- **The assistant** is a right-hand panel on every authenticated page, not a page:
+  `providers/AssistantProvider.tsx` is mounted once in `AppLayout` (so a conversation
+  survives navigation) and is the single source of truth for chat state, using LangGraph SDK
+  types directly (no conversion layer). The panel and conversation UI are in
+  `components/assistant/` (`AssistantPanel`, `Conversation`, `ThreadList`, the generative UI
+  `cards.tsx`/`chips.tsx` and their Zod `catalogue.ts`, mirrored from the backend and checked by
+  `e2e/assistant-contract.spec.ts`). It docks beside the page from 1700px, overlays below that,
+  and is a sheet on a phone; its open state and width are a cookie (`lib/assistant-panel.ts`)
+  read by the `routes/app.tsx` loader. `/chat` shows the same conversation full width.
+  Pages tell it which record is open (`useAssistantRecord`); the agent can propose changes
+  (invoice status, a transaction's account) and remember preferences, but only after the user
+  approves a proposal card: nothing writes without a click. The panel is behind a setting
+  (`ASSISTANT_ENABLED`, `app/lib/assistant-flag.ts`): on in development, **off in production** until
+  set. Operating notes (limits, logs, tracing, retention): `apps/ai_agent/docs/operations.md`.
+  Details: `docs/chat-redesign-plan.md` (sections 3, 4 and 12).
+- `components/dashboard/`, `components/reports/`, etc. are organized by feature/domain,
+  mirroring the route list above.
 
 ### Design system
 
@@ -188,7 +204,12 @@ page spec also runs axe and an overflow check. Files named `*-edit.spec.ts` chan
 last, in the `mutations` project, restoring what they change (helpers in `e2e/helpers/db.ts`);
 don't change the seeded user's password (it signs every session out; use a throwaway user), and
 don't remove seeded rows. The stand-in agent (`e2e/stand-in-agent.ts`) answers the server-side
-agent calls; calls the browser makes to the agent are mocked in the spec with `page.route`.
+agent calls; calls the browser makes to the agent are mocked in the spec with `page.route`. The
+assistant's LangGraph calls go to `VITE_LANGGRAPH_API_URL=http://127.0.0.1:8098` in tests (nothing
+listens there, so an unmocked call fails rather than reaching a real agent) and are answered by
+`e2e/helpers/fake-langgraph.ts` (threads, history, streamed runs, interrupts; plans per question).
+Both refuse a request without a user token, as the real agent does (the browser mocks must also
+allow the `authorization` header in their CORS reply: `*` does not cover it).
 `e2e/README.md` has the layout.
 
 ### Backend structure (`apps/ai_agent/`)

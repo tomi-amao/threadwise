@@ -3,12 +3,16 @@
  *
  * Three questions to put to the AI agent about one product: its pricing, demand, and some
  * marketing copy. Each sends a prompt built from the product's own numbers to the LangGraph
- * server (the same one the chat uses) and shows the reply in place. Nothing is stored.
+ * server (the same one the chat uses) as the signed-in user, and shows the reply in place.
+ * The server refuses a request without the user's token, so these go through `agentFetch`.
+ * Nothing is stored here.
  */
 
 import { useState } from 'react';
 import { ChartLineUp, CircleNotch, Megaphone, Sparkle, TrendUp } from 'phosphor-react';
 import { Eyebrow } from '~/components/ui/eyebrow';
+import { agentFetch } from '~/lib/api/agent-auth';
+import { useOptionalAssistant } from '~/providers/AssistantProvider';
 import type { ProductDetail } from '~/lib/api/products.server';
 import { cn } from '~/lib/utils';
 import { money } from './model';
@@ -62,7 +66,7 @@ const assistantId = () =>
 
 async function ask(prompt: string): Promise<string> {
   const base = apiUrl();
-  const thread = await fetch(`${base}/threads`, {
+  const thread = await agentFetch(`${base}/threads`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({}),
@@ -70,7 +74,7 @@ async function ask(prompt: string): Promise<string> {
   if (!thread.ok) throw new Error('The assistant is not reachable. Is the agent running?');
   const { thread_id } = (await thread.json()) as { thread_id: string };
 
-  const run = await fetch(`${base}/threads/${thread_id}/runs/wait`, {
+  const run = await agentFetch(`${base}/threads/${thread_id}/runs/wait`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -86,7 +90,11 @@ async function ask(prompt: string): Promise<string> {
   const messages = data.messages ?? data.values?.messages ?? [];
   const last = [...messages].reverse().find(m => m.type === 'ai' || m.role === 'assistant');
   const content = last?.content ?? last?.text;
-  return typeof content === 'string' && content.trim() ? content : 'No response was generated.';
+  // Some models answer in blocks ([{ type: 'text', text }]) rather than a plain string.
+  const text = Array.isArray(content)
+    ? content.map(b => (typeof b === 'string' ? b : ((b as { text?: string }).text ?? ''))).join('')
+    : content;
+  return typeof text === 'string' && text.trim() ? text : 'No response was generated.';
 }
 
 type State =
@@ -97,6 +105,8 @@ type State =
 
 export function ProductInsights({ product, sales }: { product: ProductDetail; sales: Sales }) {
   const [state, setState] = useState<Record<string, State>>({});
+  // These ask the agent, so they go when the assistant is switched off (lib/assistant-flag.ts).
+  const assistantOn = useOptionalAssistant() != null;
 
   const run = async (insight: Insight) => {
     const current = state[insight.id];
@@ -120,6 +130,8 @@ export function ProductInsights({ product, sales }: { product: ProductDetail; sa
       }));
     }
   };
+
+  if (!assistantOn) return null;
 
   return (
     <section aria-label="Insights" className="space-y-3 border-t pt-5">

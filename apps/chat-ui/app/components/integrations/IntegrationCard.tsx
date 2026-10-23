@@ -13,7 +13,7 @@ import { Input } from '~/components/ui/input';
 import { PasswordInput } from '~/components/ui/password-input';
 import { SplitMenu } from '~/components/ui/split-menu';
 import { ConfirmRemove } from '~/components/collections/use-collection-action';
-import { getZohoCalendarOAuthStartUrl, type IntegrationSummary } from '~/lib/api/integrations';
+import { ZOHO_CALENDAR_CONNECT_PATH, type IntegrationSummary } from '~/lib/api/integrations';
 import { cn } from '~/lib/utils';
 import {
   ENDPOINT_ICON,
@@ -224,7 +224,7 @@ export function IntegrationCard({
             action={
               oauth ? (
                 <a
-                  href={getZohoCalendarOAuthStartUrl(integration.entity_id || '')}
+                  href={ZOHO_CALENDAR_CONNECT_PATH}
                   className="text-[14px] text-accent-text underline underline-offset-4 hover:text-foreground"
                 >
                   Reconnect with Zoho
