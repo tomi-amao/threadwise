@@ -194,13 +194,14 @@ async def zoho_calendar_sync_all(ctx: inngest.Context) -> Dict[str, Any]:
         }
 
     except Exception as e:
+        error_text = str(e)
         ctx.logger.error(f"Error in Zoho Calendar sync: {str(e)}")
 
         if source_id:
             await ctx.step.run(
                 "update-sync-status",
                 lambda: sync_service.update_sync_status(
-                    source_id, "error", error=str(e)
+                    source_id, "error", error=error_text
                 ),
             )
             try:
@@ -259,6 +260,7 @@ async def zoho_calendar_sync_endpoint(ctx: inngest.Context) -> Dict[str, Any]:
     except inngest.NonRetriableError:
         raise
     except Exception as e:
+        error_text = str(e)
         ctx.logger.error(f"Error syncing Zoho Calendar {endpoint}: {str(e)}")
 
         try:
@@ -284,7 +286,7 @@ async def zoho_calendar_sync_endpoint(ctx: inngest.Context) -> Dict[str, Any]:
                 await ctx.step.run(
                     "set-sync-watermark-error",
                     lambda: sync_service.set_sync_watermark(
-                        source_id, endpoint, status="error", error=str(e)
+                        source_id, endpoint, status="error", error=error_text
                     ),
                 )
         except Exception as pub_err:

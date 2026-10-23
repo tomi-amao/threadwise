@@ -14,7 +14,7 @@ Provides two reconciliation activities:
 
 import asyncio
 import logging
-from datetime import datetime, timezone
+from datetime import datetime
 from decimal import Decimal
 from typing import Any, Dict, List, Optional, Tuple
 from uuid import UUID
@@ -75,20 +75,25 @@ class ReconciliationService:
           4. Sets ``excluded_reason`` on the suppressed PayPal transactions
           5. Auto-matches and updates invoice statuses from PayPal metadata
         """
+
         def _query():
-            return self.client.table("financial_transactions") \
-                .select("id, source, external_transaction_id, amount, currency_code, "
-                        "direction, occurred_at, created_at, counterparty_name, description, "
-                        "metadata, excluded_reason, transaction_type") \
-                .eq("entity_id", str(entity_id)) \
-                .order("occurred_at") \
+            return (
+                self.client.table("financial_transactions")
+                .select(
+                    "id, source, external_transaction_id, amount, currency_code, "
+                    "direction, occurred_at, created_at, counterparty_name, description, "
+                    "metadata, excluded_reason, transaction_type"
+                )
+                .eq("entity_id", str(entity_id))
+                .order("occurred_at")
                 .execute()
+            )
 
         result = await asyncio.to_thread(_query)
         all_txns = extract_rows(result)
 
         revolut_txns = [t for t in all_txns if t.get("source") == "revolut"]
-        paypal_txns  = [t for t in all_txns if t.get("source") == "paypal"]
+        paypal_txns = [t for t in all_txns if t.get("source") == "paypal"]
 
         if not revolut_txns or not paypal_txns:
             return {
@@ -101,7 +106,9 @@ class ReconciliationService:
             }
 
         # Step 1: Revolut OUT ↔ PayPal OUT — same underlying economic event
-        revolut_paypal_pairs = self._find_cross_provider_pairs(revolut_txns, paypal_txns)
+        revolut_paypal_pairs = self._find_cross_provider_pairs(
+            revolut_txns, paypal_txns
+        )
 
         # Step 2: For each paired PayPal OUT, find the offsetting PayPal IN
         paypal_internal_pairs = self._find_paypal_internal_offset_pairs(
@@ -124,7 +131,7 @@ class ReconciliationService:
                 await self._set_excluded_reason(
                     p_out_txn["id"],
                     "cross_provider_duplicate: mirrors Revolut transaction, "
-                    "Revolut is the authoritative cash movement"
+                    "Revolut is the authoritative cash movement",
                 )
                 excluded_count += 1
 
@@ -152,7 +159,7 @@ class ReconciliationService:
                 if not txn.get("excluded_reason"):
                     await self._set_excluded_reason(
                         txn["id"],
-                        f"cross_provider_internal: net-zero pair, {reason_suffix}"
+                        f"cross_provider_internal: net-zero pair, {reason_suffix}",
                     )
                     excluded_count += 1
 
@@ -226,7 +233,10 @@ class ReconciliationService:
                 if p_date:
                     r_dates = [d for d in [r_date, r_created_date] if d is not None]
                     if r_dates:
-                        if min(abs((rd - p_date).days) for rd in r_dates) > CROSS_PROVIDER_DATE_DAYS:
+                        if (
+                            min(abs((rd - p_date).days) for rd in r_dates)
+                            > CROSS_PROVIDER_DATE_DAYS
+                        ):
                             continue
 
                 # Strategy 1: direct amount + currency match
@@ -268,19 +278,22 @@ class ReconciliationService:
         used_in_ids: set = set()
 
         paypal_outs = [t for t in paypal_txns if t["id"] in paired_out_ids]
-        paypal_ins  = [t for t in paypal_txns if t.get("direction") == "in"]
+        paypal_ins = [t for t in paypal_txns if t.get("direction") == "in"]
 
         for p_out in paypal_outs:
-            out_amount   = Decimal(str(p_out.get("amount", 0)))
+            out_amount = Decimal(str(p_out.get("amount", 0)))
             out_currency = p_out.get("currency_code", "")
-            out_date     = self._parse_date(p_out.get("occurred_at"))
+            out_date = self._parse_date(p_out.get("occurred_at"))
 
             for p_in in paypal_ins:
                 if p_in["id"] in used_in_ids or p_in["id"] == p_out["id"]:
                     continue
                 if p_in.get("currency_code", "") != out_currency:
                     continue
-                if abs(Decimal(str(p_in.get("amount", 0))) - out_amount) > AMOUNT_TOLERANCE:
+                if (
+                    abs(Decimal(str(p_in.get("amount", 0))) - out_amount)
+                    > AMOUNT_TOLERANCE
+                ):
                     continue
 
                 in_date = self._parse_date(p_in.get("occurred_at"))
@@ -307,8 +320,15 @@ class ReconciliationService:
             "paypal_transaction_id": paypal_txn.get("external_transaction_id"),
         }
 
-        for key in ("invoice_id", "invoice_numbers", "payer_email",
-                     "payer_name", "payer_country", "cart_items", "shipping"):
+        for key in (
+            "invoice_id",
+            "invoice_numbers",
+            "payer_email",
+            "payer_name",
+            "payer_country",
+            "cart_items",
+            "shipping",
+        ):
             if p_meta.get(key):
                 enrichment[key] = p_meta[key]
 
@@ -323,11 +343,14 @@ class ReconciliationService:
         enrichment: Dict[str, Any],
     ) -> None:
         """Merge enrichment data into a transaction's metadata JSONB column."""
+
         def _fetch_metadata():
-            return self.client.table("financial_transactions") \
-                .select("metadata") \
-                .eq("id", transaction_id) \
+            return (
+                self.client.table("financial_transactions")
+                .select("metadata")
+                .eq("id", transaction_id)
                 .execute()
+            )
 
         result = await asyncio.to_thread(_fetch_metadata)
         if not result.data:
@@ -340,10 +363,12 @@ class ReconciliationService:
             return
 
         def _update(tid=transaction_id, meta=merged):
-            return self.client.table("financial_transactions") \
-                .update({"metadata": meta}) \
-                .eq("id", tid) \
+            return (
+                self.client.table("financial_transactions")
+                .update({"metadata": meta})
+                .eq("id", tid)
                 .execute()
+            )
 
         await asyncio.to_thread(_update)
 
@@ -353,14 +378,19 @@ class ReconciliationService:
         reason: str,
     ) -> None:
         """Set excluded_reason on a financial transaction and mark status as excluded."""
+
         def _update(tid=transaction_id, r=reason):
-            return self.client.table("financial_transactions") \
-                .update({
-                    "excluded_reason": r,
-                    "status": "excluded",
-                }) \
-                .eq("id", tid) \
+            return (
+                self.client.table("financial_transactions")
+                .update(
+                    {
+                        "excluded_reason": r,
+                        "status": "excluded",
+                    }
+                )
+                .eq("id", tid)
                 .execute()
+            )
 
         await asyncio.to_thread(_update)
         logger.info("Excluded transaction %s: %s", transaction_id[:8], reason[:60])
@@ -455,7 +485,10 @@ class ReconciliationService:
                 if inv_date and txn_date:
                     date_ok = abs((txn_date - inv_date).days) <= 30
 
-                if abs(txn_amount - inv_gross) <= inv_gross * Decimal("0.02") and date_ok:
+                if (
+                    abs(txn_amount - inv_gross) <= inv_gross * Decimal("0.02")
+                    and date_ok
+                ):
                     matched_txn = txn
                     break
 
@@ -463,20 +496,26 @@ class ReconciliationService:
                 continue
 
             txn_amount = Decimal(str(abs(matched_txn.get("amount", 0))))
-            new_status = "PAID" if txn_amount >= inv_gross * Decimal("0.95") else "PARTIALLY_PAID"
+            new_status = (
+                "PAID"
+                if txn_amount >= inv_gross * Decimal("0.95")
+                else "PARTIALLY_PAID"
+            )
             previous_status = invoice.get("status")
 
             await self._update_invoice_status(inv_id, new_status)
 
             matched_count += 1
-            updated_invoices.append({
-                "invoice_id": inv_id,
-                "invoice_number": inv_number,
-                "invoice_type": inv_type,
-                "previous_status": previous_status,
-                "new_status": new_status,
-                "matched_transaction_id": matched_txn["id"],
-            })
+            updated_invoices.append(
+                {
+                    "invoice_id": inv_id,
+                    "invoice_number": inv_number,
+                    "invoice_type": inv_type,
+                    "previous_status": previous_status,
+                    "new_status": new_status,
+                    "matched_transaction_id": matched_txn["id"],
+                }
+            )
 
         return {
             "entity_id": str(entity_id),
@@ -487,13 +526,18 @@ class ReconciliationService:
 
     async def _fetch_open_invoices(self, entity_id: UUID) -> List[Dict[str, Any]]:
         """Fetch invoices that are OPEN or PARTIALLY_PAID."""
+
         def _query():
-            return self.client.table("invoices") \
-                .select("id, invoice_number, gross_amount, net_amount, currency, "
-                        "invoice_date, status") \
-                .eq("entity_id", str(entity_id)) \
-                .in_("status", ["OPEN", "PARTIALLY_PAID"]) \
+            return (
+                self.client.table("invoices")
+                .select(
+                    "id, invoice_number, gross_amount, net_amount, currency, "
+                    "invoice_date, status"
+                )
+                .eq("entity_id", str(entity_id))
+                .in_("status", ["OPEN", "PARTIALLY_PAID"])
                 .execute()
+            )
 
         result = await asyncio.to_thread(_query)
         return extract_rows(result)
@@ -507,26 +551,34 @@ class ReconciliationService:
         - SALE invoices are settled by inbound transactions (customer pays us)
         - PURCHASE invoices are settled by outbound transactions (we pay supplier)
         """
+
         def _query():
-            return self.client.table("financial_transactions") \
-                .select("id, amount, currency_code, description, metadata, "
-                        "occurred_at, source, direction") \
-                .eq("entity_id", str(entity_id)) \
-                .is_("excluded_reason", "null") \
-                .order("occurred_at", desc=True) \
-                .limit(1000) \
+            return (
+                self.client.table("financial_transactions")
+                .select(
+                    "id, amount, currency_code, description, metadata, "
+                    "occurred_at, source, direction"
+                )
+                .eq("entity_id", str(entity_id))
+                .is_("excluded_reason", "null")
+                .order("occurred_at", desc=True)
+                .limit(1000)
                 .execute()
+            )
 
         result = await asyncio.to_thread(_query)
         return extract_rows(result)
 
     async def _update_invoice_status(self, invoice_id: str, new_status: str) -> None:
         """Update an invoice's status."""
+
         def _update():
-            return self.client.table("invoices") \
-                .update({"status": new_status}) \
-                .eq("id", invoice_id) \
+            return (
+                self.client.table("invoices")
+                .update({"status": new_status})
+                .eq("id", invoice_id)
                 .execute()
+            )
 
         await asyncio.to_thread(_update)
 
@@ -551,12 +603,16 @@ class ReconciliationService:
             return {"count": 0, "updated_invoices": []}
 
         def _query_invoices():
-            return self.client.table("invoices") \
-                .select("id, invoice_number, gross_amount, net_amount, currency, status") \
-                .eq("entity_id", str(entity_id)) \
-                .in_("invoice_number", candidates) \
-                .in_("status", ["OPEN", "PARTIALLY_PAID"]) \
+            return (
+                self.client.table("invoices")
+                .select(
+                    "id, invoice_number, gross_amount, net_amount, currency, status"
+                )
+                .eq("entity_id", str(entity_id))
+                .in_("invoice_number", candidates)
+                .in_("status", ["OPEN", "PARTIALLY_PAID"])
                 .execute()
+            )
 
         result = await asyncio.to_thread(_query_invoices)
         invoices = result.data or []
@@ -576,17 +632,21 @@ class ReconciliationService:
             if invoice_currency != currency:
                 continue
 
-            new_status = "PAID" if transaction_amount >= invoice_gross else "PARTIALLY_PAID"
+            new_status = (
+                "PAID" if transaction_amount >= invoice_gross else "PARTIALLY_PAID"
+            )
 
             await self._update_invoice_status(invoice_id, new_status)
 
             updated_count += 1
-            updated_invoices.append({
-                "invoice_id": invoice_id,
-                "invoice_number": invoice.get("invoice_number"),
-                "previous_status": previous_status,
-                "new_status": new_status,
-            })
+            updated_invoices.append(
+                {
+                    "invoice_id": invoice_id,
+                    "invoice_number": invoice.get("invoice_number"),
+                    "previous_status": previous_status,
+                    "new_status": new_status,
+                }
+            )
 
         return {"count": updated_count, "updated_invoices": updated_invoices}
 

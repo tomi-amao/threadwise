@@ -3,48 +3,55 @@
 Provides background processing and workflow automation using Inngest.
 """
 
-from .config import get_client, validate_config, client
-from .functions import FUNCTIONS, process_chat_message, process_document_embedding, cleanup_old_threads
+# Import normalization functions and triggers
+from ...normalization.inngest_functions import (
+    NORMALIZATION_FUNCTIONS,
+    normalize_after_paypal_sync,
+    normalize_after_revolut_sync,
+    normalize_after_shopify_sync,
+    normalize_after_sync,
+    normalize_after_zoho_calendar_sync,
+    normalize_batch,
+    normalize_raw_event,
+    normalize_source,
+    reprocess_failed_events,
+    reprocess_failed_manual,
+    reprocess_stuck_processing_events,
+    trigger_batch_normalization,
+    trigger_normalization,
+    trigger_reprocess_failed,
+    trigger_source_normalization,
+)
+from .config import client, get_client, validate_config
 from .events import (
     send_chat_message_event,
-    send_document_embedding_event,
     send_custom_event,
-    send_squarespace_sync_event,
-    send_revolut_sync_event,
+    send_document_embedding_event,
     send_paypal_sync_event,
+    send_revolut_sync_event,
     send_shopify_sync_event,
+    send_squarespace_sync_event,
 )
+from .functions import (
+    FUNCTIONS,
+    cleanup_old_threads,
+    process_chat_message,
+    process_document_embedding,
+)
+from .journal_generation_functions import (
+    JOURNAL_GENERATION_FUNCTIONS,
+    generate_all_journals_job,
+)
+from .paypal_sync_functions import PAYPAL_SYNC_FUNCTIONS
+from .revolut_sync_functions import REVOLUT_SYNC_FUNCTIONS
+from .shopify_sync_functions import SHOPIFY_SYNC_FUNCTIONS
 from .sync_functions import (
+    SYNC_FUNCTIONS,
     squarespace_sync_all,
     squarespace_sync_endpoint,
     squarespace_sync_single_endpoint,
-    SYNC_FUNCTIONS,
 )
-from .revolut_sync_functions import REVOLUT_SYNC_FUNCTIONS
-from .paypal_sync_functions import PAYPAL_SYNC_FUNCTIONS
-from .shopify_sync_functions import SHOPIFY_SYNC_FUNCTIONS
 from .zoho_calendar_sync_functions import ZOHO_CALENDAR_SYNC_FUNCTIONS
-from .journal_generation_functions import generate_all_journals_job, JOURNAL_GENERATION_FUNCTIONS
-
-# Import normalization functions and triggers
-from ...normalization.inngest_functions import (
-    normalize_raw_event,
-    normalize_batch,
-    normalize_source,
-    normalize_after_sync,
-    normalize_after_revolut_sync,
-    normalize_after_paypal_sync,
-    normalize_after_shopify_sync,
-    normalize_after_zoho_calendar_sync,
-    reprocess_failed_events,
-    reprocess_stuck_processing_events,
-    reprocess_failed_manual,
-    trigger_normalization,
-    trigger_batch_normalization,
-    trigger_source_normalization,
-    trigger_reprocess_failed,
-    NORMALIZATION_FUNCTIONS,
-)
 
 # Aliases for route compatibility
 get_inngest_client = get_client

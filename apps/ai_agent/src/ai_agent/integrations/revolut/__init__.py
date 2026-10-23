@@ -120,9 +120,9 @@ class RevolutAdapter:
         import hashlib
         import json
 
-        return hashlib.sha256(
-            json.dumps(item, sort_keys=True).encode()
-        ).hexdigest()[:32]
+        return hashlib.sha256(json.dumps(item, sort_keys=True).encode()).hexdigest()[
+            :32
+        ]
 
     def _extract_occurred_at(
         self,
@@ -152,9 +152,7 @@ class RevolutAdapter:
         for field in timestamp_fields:
             if field in item and item[field]:
                 try:
-                    return datetime.fromisoformat(
-                        item[field].replace("Z", "+00:00")
-                    )
+                    return datetime.fromisoformat(item[field].replace("Z", "+00:00"))
                 except (ValueError, TypeError):
                     continue
 
@@ -224,7 +222,9 @@ class RevolutAdapter:
                 # Use the appropriate timestamp field for cursor
                 if endpoint == "expenses":
                     # Expenses are ordered by expense_date
-                    next_cursor = last_item.get("expense_date") or last_item.get("created_at")
+                    next_cursor = last_item.get("expense_date") or last_item.get(
+                        "created_at"
+                    )
                 else:
                     # Transactions are ordered by created_at
                     next_cursor = last_item.get("created_at")

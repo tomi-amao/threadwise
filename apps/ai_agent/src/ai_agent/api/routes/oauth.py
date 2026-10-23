@@ -16,7 +16,6 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import RedirectResponse
 
 from ...core.config import settings
-from ..deps import CurrentUser, current_user
 from ...integrations.zoho_calendar import ZohoCalendarAdapter
 from ...integrations.zoho_calendar.oauth import (
     ZohoOAuthError,
@@ -25,6 +24,7 @@ from ...integrations.zoho_calendar.oauth import (
     verify_state,
 )
 from ...services.external_sync_service import sync_service
+from ..deps import CurrentUser, current_user
 
 logger = logging.getLogger(__name__)
 

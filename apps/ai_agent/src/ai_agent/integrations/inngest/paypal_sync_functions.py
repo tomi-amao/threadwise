@@ -4,7 +4,6 @@ Orchestrates bulk loading from PayPal Transaction Search API
 with paginated extraction and raw event storage.
 """
 
-import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
@@ -13,11 +12,11 @@ import httpx
 import inngest
 from inngest.experimental import realtime
 
-from .config import get_client
-from .channels import get_sync_channel, SyncProgressData, SyncStatusData
-from ...services.external_sync_service import sync_service
 from ...integrations.common import resolve_sync_since
-from ...integrations.paypal import PayPalAdapter, ENDPOINTS
+from ...integrations.paypal import ENDPOINTS, PayPalAdapter
+from ...services.external_sync_service import sync_service
+from .channels import SyncProgressData, SyncStatusData, get_sync_channel
+from .config import get_client
 
 logger = logging.getLogger(__name__)
 
@@ -93,9 +92,7 @@ async def paypal_sync_all(ctx: inngest.Context) -> Dict[str, Any]:
                     status="syncing",
                     endpoints_completed=completed_count,
                     endpoints_total=len(ENDPOINTS),
-                    total_items=sum(
-                        r.get("items_stored", 0) for r in results.values()
-                    ),
+                    total_items=sum(r.get("items_stored", 0) for r in results.values()),
                     error=None,
                     timestamp=datetime.now().isoformat(),
                 ),
@@ -145,13 +142,14 @@ async def paypal_sync_all(ctx: inngest.Context) -> Dict[str, Any]:
         }
 
     except Exception as e:
+        error_text = str(e)
         ctx.logger.error(f"Error in PayPal sync: {str(e)}")
 
         if source_id:
             await ctx.step.run(
                 "update-sync-status",
                 lambda: sync_service.update_sync_status(
-                    source_id, "error", error=str(e)
+                    source_id, "error", error=error_text
                 ),
             )
 
@@ -171,9 +169,7 @@ async def paypal_sync_all(ctx: inngest.Context) -> Dict[str, Any]:
                     ),
                 )
             except Exception as pub_err:
-                ctx.logger.error(
-                    f"Failed to publish error status: {str(pub_err)}"
-                )
+                ctx.logger.error(f"Failed to publish error status: {str(pub_err)}")
 
         raise
 
@@ -315,9 +311,7 @@ async def paypal_sync_endpoint(ctx: inngest.Context) -> Dict[str, Any]:
         if batch:
             stored = await ctx.step.run(
                 "store-raw-events-batch",
-                lambda: sync_service.store_raw_events_batch(
-                    source_id, "paypal", batch
-                ),
+                lambda: sync_service.store_raw_events_batch(source_id, "paypal", batch),
             )
             items_stored += stored
 
@@ -357,6 +351,7 @@ async def paypal_sync_endpoint(ctx: inngest.Context) -> Dict[str, Any]:
         }
 
     except Exception as e:
+        error_text = str(e)
         ctx.logger.error(f"Error syncing PayPal {endpoint}: {str(e)}")
 
         try:
@@ -381,13 +376,11 @@ async def paypal_sync_endpoint(ctx: inngest.Context) -> Dict[str, Any]:
                 await ctx.step.run(
                     "set-sync-watermark-error",
                     lambda: sync_service.set_sync_watermark(
-                        source_id, endpoint, status="error", error=str(e)
+                        source_id, endpoint, status="error", error=error_text
                     ),
                 )
         except Exception as pub_err:
-            ctx.logger.error(
-                f"Failed to publish error status: {str(pub_err)}"
-            )
+            ctx.logger.error(f"Failed to publish error status: {str(pub_err)}")
 
         # 401/403 are permanent - the same credentials will fail every
         # retry, so don't burn ~100s of exponential backoff (retries=3)

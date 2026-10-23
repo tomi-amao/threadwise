@@ -1,6 +1,6 @@
 """Data Normalization & Persistence System.
 
-Transforms raw third-party commerce payloads into canonical, 
+Transforms raw third-party commerce payloads into canonical,
 provider-agnostic domain models for accounting, inventory, and analytics workflows.
 
 Core Principles:
@@ -11,56 +11,48 @@ Core Principles:
 - Immutability: Raw payloads are never modified
 """
 
-from .models import (
-    # Base
+from .models import (  # Base; Commercial Domain; Inventory Domain; Financial Domain
+    CanonicalBankAccount,
     CanonicalBase,
-    ProcessingResult,
-    ProcessingStatus,
-    # Commercial Domain
     CanonicalCustomer,
-    CanonicalOrder,
+    CanonicalFinancialTransaction,
+    CanonicalInventoryAdjustment,
+    CanonicalInventoryItem,
+    CanonicalInventoryMovement,
     CanonicalLineItem,
+    CanonicalOrder,
     CanonicalPayment,
     CanonicalPaymentFee,
-    # Inventory Domain
     CanonicalProduct,
     CanonicalProductVariant,
-    CanonicalInventoryItem,
-    CanonicalInventoryAdjustment,
-    CanonicalInventoryMovement,
-    InventoryMovementType,
-    # Financial Domain
-    CanonicalBankAccount,
-    CanonicalFinancialTransaction,
     FinancialTransactionType,
+    InventoryMovementType,
+    ProcessingResult,
+    ProcessingStatus,
     TransactionDirection,
-    TxnSource,
     TxnDirection,
+    TxnSource,
     TxnStatus,
     TxnType,
 )
-
 from .normalizer import (
     BaseNormalizer,
     FinancialNormalizer,
     NormalizationError,
     NormalizationResult,
 )
-
-from .squarespace_normalizer import SquarespaceNormalizer
-from .revolut_normalizer import RevolutNormalizer
 from .paypal_normalizer import PayPalNormalizer
-
 from .persistence import (
-    PersistenceService,
     PersistenceError,
+    PersistenceService,
     persistence_service,
 )
-
+from .revolut_normalizer import RevolutNormalizer
 from .service import (
     NormalizationService,
     normalization_service,
 )
+from .squarespace_normalizer import SquarespaceNormalizer
 
 __all__ = [
     # Models

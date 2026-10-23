@@ -15,16 +15,16 @@ import logging
 from typing import Any, Dict, List, Literal, Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 
-from ..deps import entity_guard, owned_invoice, owned_journal, require_internal
 from ...normalization.utils import extract_rows
-from ...services.reconciliation_service import reconciliation_service
-from ...services.journal_service import journal_service, JournalError
-from ...services.invoice_rules import InvoiceRuleError, VALID_STATUSES
+from ...services.invoice_rules import VALID_STATUSES, InvoiceRuleError
 from ...services.invoice_service import invoice_service
+from ...services.journal_service import JournalError, journal_service
 from ...services.paypal_cleaning_service import paypal_cleaning_service
+from ...services.reconciliation_service import reconciliation_service
+from ..deps import entity_guard, owned_invoice, owned_journal, require_internal
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +45,8 @@ class SeedChartRequest(BaseModel):
 class AccrueRequest(BaseModel):
     entity_id: str
     payment_ids: Optional[List[str]] = Field(
-        None, description="Specific payment IDs. If omitted, finds all un-accrued captured payments."
+        None,
+        description="Specific payment IDs. If omitted, finds all un-accrued captured payments.",
     )
 
 
@@ -71,7 +72,9 @@ class DetectDuplicatesRequest(BaseModel):
 
 class PurchaseInvoiceRequest(BaseModel):
     entity_id: str
-    invoice_id: str = Field(..., description="PURCHASE invoice UUID to create COGS journal for")
+    invoice_id: str = Field(
+        ..., description="PURCHASE invoice UUID to create COGS journal for"
+    )
     create_payment: bool = Field(
         False,
         description="If true and invoice status is 'PAID', also create a payment journal",
@@ -80,7 +83,9 @@ class PurchaseInvoiceRequest(BaseModel):
 
 class SaleInvoiceRequest(BaseModel):
     entity_id: str
-    invoice_id: str = Field(..., description="SALE invoice UUID to create AR journal for")
+    invoice_id: str = Field(
+        ..., description="SALE invoice UUID to create AR journal for"
+    )
 
 
 class InvoicePaymentRequest(BaseModel):
@@ -155,7 +160,9 @@ class RecordDisposalRequest(BaseModel):
     entity_id: str = Field(..., description="Entity the inventory item belongs to")
     inventory_item_id: str = Field(..., description="Inventory item being disposed of")
     disposal_type: str = Field(..., description="'GIFT' or 'WRITE_OFF'")
-    quantity: float = Field(..., gt=0, description="Units to dispose of, always positive")
+    quantity: float = Field(
+        ..., gt=0, description="Units to dispose of, always positive"
+    )
 
 
 @router.post("/inventory/disposal")
@@ -263,17 +270,19 @@ async def _fetch_clearing_top_entries(client, limit: int = 100) -> List[Dict[str
             continue
         debit = float(item.get("debit") or 0)
         credit = float(item.get("credit") or 0)
-        entries.append({
-            "journal_id": j.get("id"),
-            "journal_type": j.get("journal_type"),
-            "source_type": j.get("source_type"),
-            "source_id": j.get("source_id"),
-            "journal_date": j.get("journal_date"),
-            "description": item.get("description"),
-            "debit": debit,
-            "credit": credit,
-            "net": debit - credit,
-        })
+        entries.append(
+            {
+                "journal_id": j.get("id"),
+                "journal_type": j.get("journal_type"),
+                "source_type": j.get("source_type"),
+                "source_id": j.get("source_id"),
+                "journal_date": j.get("journal_date"),
+                "description": item.get("description"),
+                "debit": debit,
+                "credit": credit,
+                "net": debit - credit,
+            }
+        )
 
     # Cut down to the top N *before* enriching — an active clearing account
     # can easily have 1000+ contributing entries (one per accrual, ever), and
@@ -286,7 +295,8 @@ async def _fetch_clearing_top_entries(client, limit: int = 100) -> List[Dict[str
     # Enrich with an order reference: order_refund rows point at an order
     # directly; payment rows (accrual) need one hop through payments.order_id.
     payment_ids = {
-        e["source_id"] for e in entries
+        e["source_id"]
+        for e in entries
         if e["source_type"] == "payment" and e["source_id"]
     }
     payment_to_order: Dict[str, str] = {}
@@ -304,7 +314,8 @@ async def _fetch_clearing_top_entries(client, limit: int = 100) -> List[Dict[str
         }
 
     order_ids = set(payment_to_order.values()) | {
-        e["source_id"] for e in entries
+        e["source_id"]
+        for e in entries
         if e["source_type"] == "order_refund" and e["source_id"]
     }
     order_numbers: Dict[str, str] = {}
@@ -377,9 +388,9 @@ async def get_accounting_health_checks(include_detail: bool = False):
 
         result: Dict[str, Any] = {
             "status": (
-                "fail" if any(r.get("severity") == "fail" for r in rows)
-                else "warn" if any(r.get("severity") == "warn" for r in rows)
-                else "ok"
+                "fail"
+                if any(r.get("severity") == "fail" for r in rows)
+                else "warn" if any(r.get("severity") == "warn" for r in rows) else "ok"
             ),
             "checks": rows,
             "clearing_by_type": extract_rows(clearing_by_type),
@@ -388,7 +399,10 @@ async def get_accounting_health_checks(include_detail: bool = False):
         if include_detail:
             uncosted = await asyncio.to_thread(
                 lambda: client.table("inventory_uncosted_sales")
-                .select("*").order("order_date", desc=True).limit(200).execute()
+                .select("*")
+                .order("order_date", desc=True)
+                .limit(200)
+                .execute()
             )
             negative = await asyncio.to_thread(
                 lambda: client.table("inventory_negative_stock").select("*").execute()
@@ -472,10 +486,12 @@ async def detect_duplicates(request: DetectDuplicatesRequest):
                         )
                         journals_created += 1
                     except (JournalError, Exception) as e:
-                        journal_errors.append({
-                            "invoice_id": inv["invoice_id"],
-                            "error": str(e),
-                        })
+                        journal_errors.append(
+                            {
+                                "invoice_id": inv["invoice_id"],
+                                "error": str(e),
+                            }
+                        )
             result["journals_created"] = journals_created
             if journal_errors:
                 result["journal_errors"] = journal_errors
@@ -503,8 +519,12 @@ async def accrue_payments(request: AccrueRequest):
     - CREDIT Tax Payable (2030)              = tax_total
     """
     try:
-        payment_ids = [UUID(pid) for pid in request.payment_ids] if request.payment_ids else None
-        result = await journal_service.auto_journal_payments(UUID(request.entity_id), payment_ids)
+        payment_ids = (
+            [UUID(pid) for pid in request.payment_ids] if request.payment_ids else None
+        )
+        result = await journal_service.auto_journal_payments(
+            UUID(request.entity_id), payment_ids
+        )
         return result
     except JournalError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -712,8 +732,9 @@ async def generate_all_journals(request: GenerateAllJournalsRequest):
     /realtime/subscription-token with channel_type="journals"); subscribe to
     that to show live progress instead of polling.
     """
-    from ...integrations.inngest import get_client
     import inngest as inngest_sdk
+
+    from ...integrations.inngest import get_client
 
     try:
         inngest_client = get_client()
@@ -851,7 +872,11 @@ async def list_invoices(
     try:
         inv_type = invoice_type  # type: ignore[assignment]
         invoices = await invoice_service.list_invoices(
-            UUID(entity_id), inv_type, status_filter, max(1, min(limit, 500)), max(0, offset)
+            UUID(entity_id),
+            inv_type,
+            status_filter,
+            max(1, min(limit, 500)),
+            max(0, offset),
         )
         return {"entity_id": entity_id, "invoices": invoices, "count": len(invoices)}
     except Exception as e:
@@ -1008,7 +1033,9 @@ class StockDecision(BaseModel):
         ),
     )
     product_id: Optional[str] = Field(None, description="Required for 'link'")
-    name: Optional[str] = Field(None, description="Product name for 'new' (defaults to the line)")
+    name: Optional[str] = Field(
+        None, description="Product name for 'new' (defaults to the line)"
+    )
     sku: Optional[str] = None
     asset_account_id: Optional[str] = None
     cogs_account_id: Optional[str] = None
@@ -1099,7 +1126,9 @@ async def upsert_contact(request: UpsertContactRequest):
 class UpdateTransactionRequest(BaseModel):
     description: Optional[str] = None
     counterparty_name: Optional[str] = None
-    account_code: Optional[str] = Field(None, description="Chart of accounts number e.g. '6020'")
+    account_code: Optional[str] = Field(
+        None, description="Chart of accounts number e.g. '6020'"
+    )
     expense_category: Optional[str] = None
     excluded_reason: Optional[str] = Field(
         None,
@@ -1109,9 +1138,6 @@ class UpdateTransactionRequest(BaseModel):
         True,
         description="If true and account_code changed, reverse existing journal and recreate",
     )
-
-
-import asyncio as _asyncio
 
 
 @router.get("/transactions")
@@ -1178,7 +1204,7 @@ async def list_transactions(
         )
 
     try:
-        result = await _asyncio.to_thread(_query)
+        result = await asyncio.to_thread(_query)
         rows = result.data or []
         total_count = result.count or 0
         return {
@@ -1229,18 +1255,19 @@ async def get_transaction(transaction_id: str, entity_id: str):
         )
 
     try:
-        txn_result = await _asyncio.to_thread(_fetch_txn)
+        txn_result = await asyncio.to_thread(_fetch_txn)
         txn_rows = txn_result.data or []
         if not txn_rows:
             raise HTTPException(status_code=404, detail="Transaction not found")
         txn = txn_rows[0]
 
-        journal_result = await _asyncio.to_thread(_fetch_journal)
+        journal_result = await asyncio.to_thread(_fetch_journal)
         journal_rows = journal_result.data or []
         journal = journal_rows[0] if journal_rows else None
 
         line_items: List[Dict[str, Any]] = []
         if journal:
+
             def _fetch_line_items():
                 return (
                     client.table("journal_line_items")
@@ -1253,7 +1280,7 @@ async def get_transaction(transaction_id: str, entity_id: str):
                     .execute()
                 )
 
-            li_result = await _asyncio.to_thread(_fetch_line_items)
+            li_result = await asyncio.to_thread(_fetch_line_items)
             raw_items = li_result.data or []
             # Flatten nested account join
             for item in raw_items:
@@ -1274,7 +1301,9 @@ async def get_transaction(transaction_id: str, entity_id: str):
 
 
 @router.patch("/transactions/{transaction_id}")
-async def update_transaction(transaction_id: str, request: UpdateTransactionRequest, entity_id: str):
+async def update_transaction(
+    transaction_id: str, request: UpdateTransactionRequest, entity_id: str
+):
     """Update a financial transaction and optionally re-journal.
 
     Editable fields: description, counterparty_name, metadata.account_code,
@@ -1286,8 +1315,9 @@ async def update_transaction(transaction_id: str, request: UpdateTransactionRequ
     - If excluded_reason is cleared (''/null): offer to recreate journal
       (returns re_journal_needed=true in response for the UI to handle).
     """
-    from ...core.supabase_client import get_supabase_client
     import datetime
+
+    from ...core.supabase_client import get_supabase_client
 
     client = get_supabase_client()
 
@@ -1301,7 +1331,7 @@ async def update_transaction(transaction_id: str, request: UpdateTransactionRequ
         )
 
     try:
-        txn_result = await _asyncio.to_thread(_fetch_txn)
+        txn_result = await asyncio.to_thread(_fetch_txn)
         txn_rows = txn_result.data or []
         if not txn_rows:
             raise HTTPException(status_code=404, detail="Transaction not found")
@@ -1317,7 +1347,9 @@ async def update_transaction(transaction_id: str, request: UpdateTransactionRequ
             updates["counterparty_name"] = request.counterparty_name
         if request.excluded_reason is not None:
             # Empty string means un-exclude
-            updates["excluded_reason"] = request.excluded_reason if request.excluded_reason else None
+            updates["excluded_reason"] = (
+                request.excluded_reason if request.excluded_reason else None
+            )
 
         # Merge metadata changes
         old_meta = txn.get("metadata") or {}
@@ -1343,7 +1375,7 @@ async def update_transaction(transaction_id: str, request: UpdateTransactionRequ
                 .execute()
             )
 
-        await _asyncio.to_thread(_update_txn)
+        await asyncio.to_thread(_update_txn)
 
         # Determine re-journaling action
         journal_action = "none"
@@ -1364,7 +1396,7 @@ async def update_transaction(transaction_id: str, request: UpdateTransactionRequ
                 .execute()
             )
 
-        journal_result = await _asyncio.to_thread(_find_journal)
+        journal_result = await asyncio.to_thread(_find_journal)
         existing_journal = (journal_result.data or [None])[0]
 
         being_excluded = (
@@ -1387,7 +1419,9 @@ async def update_transaction(transaction_id: str, request: UpdateTransactionRequ
                     )
                     journal_action = "reversed"
                 except (JournalError, Exception) as e:
-                    logger.warning("Could not reverse journal %s: %s", existing_journal["id"], e)
+                    logger.warning(
+                        "Could not reverse journal %s: %s", existing_journal["id"], e
+                    )
             elif account_code_changed:
                 # Reverse and recreate with new account
                 try:
@@ -1412,13 +1446,15 @@ async def update_transaction(transaction_id: str, request: UpdateTransactionRequ
                         logger.warning("Could not recreate journal: %s", je)
                         journal_action = "reversed_only"
                 except (JournalError, Exception) as e:
-                    logger.warning("Could not reverse journal %s: %s", existing_journal["id"], e)
+                    logger.warning(
+                        "Could not reverse journal %s: %s", existing_journal["id"], e
+                    )
 
         elif being_unexcluded and not existing_journal:
             re_journal_needed = True
 
         # Fetch updated transaction
-        updated_result = await _asyncio.to_thread(_fetch_txn)
+        updated_result = await asyncio.to_thread(_fetch_txn)
         updated_txn = (updated_result.data or [txn])[0]
 
         return {
@@ -1432,4 +1468,3 @@ async def update_transaction(transaction_id: str, request: UpdateTransactionRequ
     except Exception as e:
         logger.error(f"Error updating transaction {transaction_id}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
-

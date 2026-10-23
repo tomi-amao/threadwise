@@ -159,6 +159,9 @@ jobs:
     name: Code Coverage Report
     runs-on: ubuntu-latest
     if: github.event_name == 'pull_request'
+    permissions:
+      contents: write
+      pull-requests: write
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -194,9 +197,9 @@ jobs:
 
       - name: Generate coverage comment
         uses: py-cov-action/python-coverage-comment-action@v3
-        if: always()
         with:
           GITHUB_TOKEN: ${{ github.token }}
+          COVERAGE_PATH: apps/ai_agent
           MINIMUM_GREEN: 80
           MINIMUM_ORANGE: 60
 

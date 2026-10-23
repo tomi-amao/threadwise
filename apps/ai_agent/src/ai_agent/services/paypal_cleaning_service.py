@@ -76,8 +76,12 @@ def _parse_dt(value: Any) -> Optional[datetime]:
     if not value:
         return None
     s = str(value)
-    for fmt in ("%Y-%m-%dT%H:%M:%S%z", "%Y-%m-%d %H:%M:%S%z",
-                "%Y-%m-%dT%H:%M:%S.%f%z", "%Y-%m-%d %H:%M:%S.%f%z"):
+    for fmt in (
+        "%Y-%m-%dT%H:%M:%S%z",
+        "%Y-%m-%d %H:%M:%S%z",
+        "%Y-%m-%dT%H:%M:%S.%f%z",
+        "%Y-%m-%d %H:%M:%S.%f%z",
+    ):
         try:
             return datetime.strptime(s, fmt)
         except ValueError:
@@ -189,9 +193,9 @@ class PayPalCleaningService:
         and are always ``direction = in``.
         """
         t1105 = [
-            t for t in paypal_txns
-            if _event_code(t) == "T1105"
-            and _passthrough_type(t) == "personal_funding"
+            t
+            for t in paypal_txns
+            if _event_code(t) == "T1105" and _passthrough_type(t) == "personal_funding"
         ]
         ids: Set[str] = set()
         for txn in t1105:
@@ -216,11 +220,13 @@ class PayPalCleaningService:
     ) -> Set[str]:
         """Pattern G — Exclude T2101 held-funds OUT; keep the paired T2102 IN."""
         t2101_outs = [
-            t for t in paypal_txns
+            t
+            for t in paypal_txns
             if _event_code(t) == "T2101" and t.get("direction") == "out"
         ]
         t2102_ins = [
-            t for t in paypal_txns
+            t
+            for t in paypal_txns
             if _event_code(t) == "T2102" and t.get("direction") == "in"
         ]
 
@@ -255,8 +261,12 @@ class PayPalCleaningService:
     # Fee tolerance for T0600 personal withdrawal detection.
     # PayPal deducts its fees before releasing funds; the withdrawal is
     # therefore slightly less than the gross income received.
-    _T0600_FEE_TOLERANCE_PCT: Decimal = Decimal("0.15")  # 15% covers PayPal fees + multi-day batches
-    _T0600_INCOME_WINDOW_DAYS: int = 5  # days before T0600 to search for matching income
+    _T0600_FEE_TOLERANCE_PCT: Decimal = Decimal(
+        "0.15"
+    )  # 15% covers PayPal fees + multi-day batches
+    _T0600_INCOME_WINDOW_DAYS: int = (
+        5  # days before T0600 to search for matching income
+    )
 
     async def _handle_t1107_t0600_pairs(
         self,
@@ -293,12 +303,13 @@ class PayPalCleaningService:
                 # Match by invoice_id + amount, or by created_at + amount
                 inv_match = ref_inv and w_inv and ref_inv == w_inv
                 date_match = (
-                    ref_date and w_date
+                    ref_date
+                    and w_date
                     and abs((ref_date - w_date).total_seconds()) < 60
                 )
                 amount_match = abs(ref_amount - w_amount) <= AMOUNT_TOLERANCE
-                currency_match = (
-                    refund.get("currency_code") == withdrawal.get("currency_code")
+                currency_match = refund.get("currency_code") == withdrawal.get(
+                    "currency_code"
                 )
 
                 if amount_match and currency_match and (inv_match or date_match):
@@ -346,7 +357,8 @@ class PayPalCleaningService:
           flag both sides as candidates.
         """
         t0600_outs = [
-            t for t in paypal_txns
+            t
+            for t in paypal_txns
             if _event_code(t) == "T0600" and t.get("direction") == "out"
         ]
         income_ins = [t for t in paypal_txns if t.get("direction") == "in"]
@@ -365,17 +377,18 @@ class PayPalCleaningService:
             window_end = w_date + timedelta(days=1)
 
             window_income = [
-                i for i in income_ins
+                i
+                for i in income_ins
                 if (
-                    _parse_dt(
-                        i.get("occurred_at") or i.get("created_at")
-                    ) or datetime.min.replace(tzinfo=timezone.utc)
-                ) >= window_start
+                    _parse_dt(i.get("occurred_at") or i.get("created_at"))
+                    or datetime.min.replace(tzinfo=timezone.utc)
+                )
+                >= window_start
                 and (
-                    _parse_dt(
-                        i.get("occurred_at") or i.get("created_at")
-                    ) or datetime.max.replace(tzinfo=timezone.utc)
-                ) <= window_end
+                    _parse_dt(i.get("occurred_at") or i.get("created_at"))
+                    or datetime.max.replace(tzinfo=timezone.utc)
+                )
+                <= window_end
             ]
 
             if not window_income:
@@ -504,9 +517,7 @@ class PayPalCleaningService:
 
             # Check Revolut match for standalone expense
             if txn.get("direction") == "out":
-                rev_match = self._find_revolut_match_same_currency(
-                    txn, revolut_txns
-                )
+                rev_match = self._find_revolut_match_same_currency(txn, revolut_txns)
                 if rev_match:
                     # Pattern C — covered by Revolut
                     return await self._apply_revolut_match(
@@ -527,7 +538,8 @@ class PayPalCleaningService:
         # Find the authoritative expense (direction=out, not T0200/T0700/T1105)
         noise_codes = {"T0200", "T0700", "T1105"}
         expenses = [
-            t for t in group
+            t
+            for t in group
             if t.get("direction") == "out" and _event_code(t) not in noise_codes
         ]
         t0200s = [t for t in group if _event_code(t) == "T0200"]
@@ -542,9 +554,7 @@ class PayPalCleaningService:
         # ── Check for Revolut match first ────────────────────────────────
         if auth_expense and has_t0200:
             # Pattern D — Revolut matched with FX conversion
-            rev_match = self._find_revolut_match_fx(
-                auth_expense, t0200s, revolut_txns
-            )
+            rev_match = self._find_revolut_match_fx(auth_expense, t0200s, revolut_txns)
             if rev_match:
                 return await self._apply_revolut_match(
                     group, rev_match, summary, "pattern_d_revolut_fx_matched"
@@ -586,7 +596,10 @@ class PayPalCleaningService:
                     description=f"[Excluded] T0200 orphan conversion — {txn.get('description', '')}",
                 )
                 summary["excluded_t0200_orphan"] += 1
-            elif _event_code(txn) == "T0700" and _passthrough_type(txn) == "personal_funding":
+            elif (
+                _event_code(txn) == "T0700"
+                and _passthrough_type(txn) == "personal_funding"
+            ):
                 if not txn.get("excluded_reason"):
                     await self._set_excluded(
                         txn["id"],
@@ -657,9 +670,7 @@ class PayPalCleaningService:
             processed.add(txn["id"])
 
         # Calculate fx_rate and base_amount from T0200 pair
-        fx_rate, base_amount = self._calc_fx_from_conversions(
-            auth_expense, t0200s
-        )
+        fx_rate, base_amount = self._calc_fx_from_conversions(auth_expense, t0200s)
         if fx_rate and base_amount:
             await self._update_fx(auth_expense["id"], fx_rate, base_amount)
 
@@ -675,9 +686,7 @@ class PayPalCleaningService:
                 processed.add(txn["id"])
 
         # Update the authoritative expense description for personal funds
-        has_personal = any(
-            _passthrough_type(t) == "personal_funding" for t in t0700s
-        )
+        has_personal = any(_passthrough_type(t) == "personal_funding" for t in t0700s)
         if has_personal:
             desc = auth_expense.get("description", "")
             if "personal funds" not in desc.lower():
@@ -735,7 +744,9 @@ class PayPalCleaningService:
         # Update the authoritative expense description
         desc = auth_expense.get("description", "")
         if "personal funds" not in desc.lower():
-            new_desc = f"{desc} [Paid using personal funds — no matching Revolut transaction]"
+            new_desc = (
+                f"{desc} [Paid using personal funds — no matching Revolut transaction]"
+            )
             await self._update_description(auth_expense["id"], new_desc)
 
         processed.add(auth_expense["id"])
@@ -763,7 +774,6 @@ class PayPalCleaningService:
         p_amount = _dec(paypal_txn.get("amount"))
         p_currency = (paypal_txn.get("currency_code") or "").strip()
         p_date = _parse_dt(paypal_txn.get("created_at"))
-        p_counterparty = (paypal_txn.get("counterparty_name") or "").lower().strip()
 
         for r_txn in revolut_txns:
             r_currency = (r_txn.get("currency_code") or "").strip()
@@ -811,7 +821,9 @@ class PayPalCleaningService:
         # Collect conversion amounts from T0200 transactions
         conversion_amounts: List[Tuple[Decimal, str]] = []
         for t in t0200s:
-            conversion_amounts.append((_dec(t.get("amount")), (t.get("currency_code") or "").strip()))
+            conversion_amounts.append(
+                (_dec(t.get("amount")), (t.get("currency_code") or "").strip())
+            )
 
         for r_txn in revolut_txns:
             if r_txn.get("direction") != "out":
@@ -837,14 +849,16 @@ class PayPalCleaningService:
             # Counterparty match (fuzzy — one must contain the other)
             if p_counterparty and r_counterparty:
                 if not (
-                    p_counterparty in r_counterparty
-                    or r_counterparty in p_counterparty
+                    p_counterparty in r_counterparty or r_counterparty in p_counterparty
                 ):
                     continue
 
             # Strategy 1: Revolut amount matches a T0200 conversion amount
             for conv_amount, conv_currency in conversion_amounts:
-                if r_currency == conv_currency and abs(r_amount - conv_amount) <= AMOUNT_TOLERANCE:
+                if (
+                    r_currency == conv_currency
+                    and abs(r_amount - conv_amount) <= AMOUNT_TOLERANCE
+                ):
                     return r_txn
 
             # Strategy 2: Revolut bill_amount matches the auth expense amount
@@ -852,7 +866,10 @@ class PayPalCleaningService:
                 r_bill_dec = _dec(r_bill_amount)
                 auth_amount = _dec(auth_expense.get("amount"))
                 auth_currency = (auth_expense.get("currency_code") or "").strip()
-                if r_bill_currency == auth_currency and abs(r_bill_dec - auth_amount) <= AMOUNT_TOLERANCE:
+                if (
+                    r_bill_currency == auth_currency
+                    and abs(r_bill_dec - auth_amount) <= AMOUNT_TOLERANCE
+                ):
                     return r_txn
 
         return None
@@ -933,9 +950,15 @@ class PayPalCleaningService:
                 enrichment["payer_name"] = meta["payer_name"]
             if meta.get("cart_items") and "cart_items" not in enrichment:
                 enrichment["cart_items"] = meta["cart_items"]
-            if meta.get("paypal_invoice_id") and "paypal_internal_invoice_id" not in enrichment:
+            if (
+                meta.get("paypal_invoice_id")
+                and "paypal_internal_invoice_id" not in enrichment
+            ):
                 enrichment["paypal_internal_invoice_id"] = meta["paypal_invoice_id"]
-            if txn.get("external_transaction_id") and "paypal_transaction_id" not in enrichment:
+            if (
+                txn.get("external_transaction_id")
+                and "paypal_transaction_id" not in enrichment
+            ):
                 enrichment["paypal_transaction_id"] = txn["external_transaction_id"]
 
         return enrichment
@@ -949,19 +972,22 @@ class PayPalCleaningService:
         entity_id: UUID,
     ) -> List[Dict[str, Any]]:
         """Fetch all PayPal transactions for the entity (not yet excluded)."""
+
         def _query():
-            return self.client.table("financial_transactions") \
+            return (
+                self.client.table("financial_transactions")
                 .select(
                     "id, source, external_transaction_id, amount, currency_code, "
                     "base_currency_code, base_amount, fx_rate, "
                     "direction, occurred_at, created_at, counterparty_name, "
                     "description, metadata, excluded_reason, transaction_type"
-                ) \
-                .eq("entity_id", str(entity_id)) \
-                .eq("source", "paypal") \
-                .is_("excluded_reason", "null") \
-                .order("created_at") \
+                )
+                .eq("entity_id", str(entity_id))
+                .eq("source", "paypal")
+                .is_("excluded_reason", "null")
+                .order("created_at")
                 .execute()
+            )
 
         result = await asyncio.to_thread(_query)
         return extract_rows(result)
@@ -971,19 +997,22 @@ class PayPalCleaningService:
         entity_id: UUID,
     ) -> List[Dict[str, Any]]:
         """Fetch all non-excluded Revolut transactions for matching."""
+
         def _query():
-            return self.client.table("financial_transactions") \
+            return (
+                self.client.table("financial_transactions")
                 .select(
                     "id, source, external_transaction_id, amount, currency_code, "
                     "base_currency_code, base_amount, fx_rate, "
                     "direction, occurred_at, created_at, counterparty_name, "
                     "description, metadata, excluded_reason, transaction_type"
-                ) \
-                .eq("entity_id", str(entity_id)) \
-                .eq("source", "revolut") \
-                .is_("excluded_reason", "null") \
-                .order("created_at") \
+                )
+                .eq("entity_id", str(entity_id))
+                .eq("source", "revolut")
+                .is_("excluded_reason", "null")
+                .order("created_at")
                 .execute()
+            )
 
         result = await asyncio.to_thread(_query)
         return extract_rows(result)
@@ -1003,10 +1032,12 @@ class PayPalCleaningService:
             update_data["description"] = description
 
         def _update(tid=transaction_id, data=update_data):
-            return self.client.table("financial_transactions") \
-                .update(data) \
-                .eq("id", tid) \
+            return (
+                self.client.table("financial_transactions")
+                .update(data)
+                .eq("id", tid)
                 .execute()
+            )
 
         await asyncio.to_thread(_update)
         logger.info("Excluded %s: %s", transaction_id[:8], reason[:60])
@@ -1018,19 +1049,26 @@ class PayPalCleaningService:
         base_amount: Decimal,
     ) -> None:
         """Update fx_rate and base_amount on a transaction."""
+
         def _update(tid=transaction_id, rate=str(fx_rate), amt=str(base_amount)):
-            return self.client.table("financial_transactions") \
-                .update({
-                    "fx_rate": rate,
-                    "base_amount": amt,
-                }) \
-                .eq("id", tid) \
+            return (
+                self.client.table("financial_transactions")
+                .update(
+                    {
+                        "fx_rate": rate,
+                        "base_amount": amt,
+                    }
+                )
+                .eq("id", tid)
                 .execute()
+            )
 
         await asyncio.to_thread(_update)
         logger.info(
             "Updated FX on %s: rate=%s base_amount=%s",
-            transaction_id[:8], fx_rate, base_amount,
+            transaction_id[:8],
+            fx_rate,
+            base_amount,
         )
 
     async def _update_description(
@@ -1039,11 +1077,14 @@ class PayPalCleaningService:
         description: str,
     ) -> None:
         """Update the description of a transaction."""
+
         def _update(tid=transaction_id, desc=description):
-            return self.client.table("financial_transactions") \
-                .update({"description": desc}) \
-                .eq("id", tid) \
+            return (
+                self.client.table("financial_transactions")
+                .update({"description": desc})
+                .eq("id", tid)
                 .execute()
+            )
 
         await asyncio.to_thread(_update)
 
@@ -1053,11 +1094,14 @@ class PayPalCleaningService:
         enrichment: Dict[str, Any],
     ) -> None:
         """Merge enrichment data into a transaction's metadata JSONB column."""
+
         def _fetch():
-            return self.client.table("financial_transactions") \
-                .select("metadata") \
-                .eq("id", transaction_id) \
+            return (
+                self.client.table("financial_transactions")
+                .select("metadata")
+                .eq("id", transaction_id)
                 .execute()
+            )
 
         result = await asyncio.to_thread(_fetch)
         rows = extract_rows(result)
@@ -1070,10 +1114,12 @@ class PayPalCleaningService:
             return
 
         def _update(tid=transaction_id, meta=merged):
-            return self.client.table("financial_transactions") \
-                .update({"metadata": meta}) \
-                .eq("id", tid) \
+            return (
+                self.client.table("financial_transactions")
+                .update({"metadata": meta})
+                .eq("id", tid)
                 .execute()
+            )
 
         await asyncio.to_thread(_update)
         logger.info("Enriched Revolut %s with PayPal metadata", transaction_id[:8])
@@ -1097,9 +1143,13 @@ class PayPalCleaningService:
         summary: Dict[str, int],
     ) -> Dict[str, Any]:
         total_excluded = sum(
-            v for k, v in summary.items()
-            if "excluded" in k or "pattern_h" in k or "pattern_g" in k
-            or "pattern_c" in k or "pattern_d" in k
+            v
+            for k, v in summary.items()
+            if "excluded" in k
+            or "pattern_h" in k
+            or "pattern_g" in k
+            or "pattern_c" in k
+            or "pattern_d" in k
         )
         total_enriched = summary.get("pattern_c_revolut_matched", 0) + summary.get(
             "pattern_d_revolut_fx_matched", 0
