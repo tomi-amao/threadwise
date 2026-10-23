@@ -1,4 +1,4 @@
-import { test as setup, expect } from '@playwright/test';
+import { test as setup, expect, type Page } from '@playwright/test';
 import { AUTH_FILE, requireEnv } from './env';
 
 setup('sign in as the seeded test user', async ({ page }) => {
@@ -12,7 +12,21 @@ setup('sign in as the seeded test user', async ({ page }) => {
   // Warm the routes the suite visits. In development the first request to a route compiles it, and
   // when many workers hit a cold route at once the slowest ones time out. Not a product concern.
   for (const route of ['/dashboard', '/transactions', '/ui-kit']) {
-    await page.goto(route);
-    await page.waitForLoadState('networkidle');
+    await warm(page, route);
   }
 });
+
+// The dev server can reload the page while it optimises dependencies on a cold route, which
+// aborts the navigation in flight (net::ERR_ABORTED). That is the server settling, not a failure,
+// so try again; a route that is really broken still fails after the last attempt.
+async function warm(page: Page, route: string, attempts = 3) {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      await page.goto(route);
+      await page.waitForLoadState('networkidle');
+      return;
+    } catch (error) {
+      if (attempt === attempts) throw error;
+    }
+  }
+}

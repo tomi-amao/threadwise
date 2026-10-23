@@ -147,11 +147,11 @@ jobs:
 
       - name: Validate docker-compose configuration
         run: |
-          docker-compose -f docker-compose.yml config
+          docker compose -f docker-compose.yml config
 
       - name: Validate docker-compose.dev configuration
         run: |
-          docker-compose -f docker-compose.yml -f docker-compose.dev.yml config
+          docker compose -f docker-compose.yml -f docker-compose.dev.yml config
 
   security-scan:
     name: Security Scan Docker Images
