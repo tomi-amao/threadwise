@@ -23,8 +23,6 @@ const panel = (page: Page, title: string) =>
     .getByRole('main')
     .locator('div.rounded-2xl')
     .filter({ has: page.getByRole('heading', { level: 2, name: title }) });
-const row = (page: Page, label: string) =>
-  page.getByRole('row', { name: new RegExp(`^${label}(\\s|$)`) });
 
 test.describe('tax', () => {
   test('the tiles show the last completed period and the projection for this year', async ({

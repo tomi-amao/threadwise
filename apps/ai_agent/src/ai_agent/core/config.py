@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 from langchain.agents import AgentState
 from langchain.chat_models import init_chat_model
 from langchain_openai import ChatOpenAI
-from pydantic import BaseModel
+from pydantic import BaseModel, SecretStr
 from pydantic_settings import BaseSettings
 
 # override=False: a variable already set in the real environment wins over .env
@@ -135,7 +135,7 @@ def get_local_llm(model_name: str = "local-model") -> ChatOpenAI:
         base_url=settings.local_llm_base_url,
         # Use host.docker.internal if running in Docker:
         # base_url="http://host.docker.internal:1234/v1",
-        api_key="not-needed",
+        api_key=SecretStr("not-needed"),
         temperature=0.7,
         streaming=True,
     )

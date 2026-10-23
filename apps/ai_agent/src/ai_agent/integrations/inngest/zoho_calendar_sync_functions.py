@@ -36,7 +36,7 @@ from ...services.collection_launch_service import push_collection_launches
 from ...services.external_sync_service import sync_service
 from ...services.tax_deadline_service import push_tax_deadlines
 from .channels import SyncProgressData, SyncStatusData, get_sync_channel
-from .config import get_client
+from .config import get_client, utc_now_iso
 
 logger = logging.getLogger(__name__)
 
@@ -86,11 +86,11 @@ async def _get_adapter_and_deadlines_uid(
 )
 async def zoho_calendar_sync_all(ctx: inngest.Context) -> Dict[str, Any]:
     """Orchestrate a full Zoho Calendar sync across every endpoint."""
-    source_id: Optional[str] = None
+    source_id: str = ""
 
     try:
-        event_data = ctx.event.data
-        source_id = event_data.get("source_id")
+        event_data: Dict[str, Any] = dict(ctx.event.data)
+        source_id = event_data.get("source_id") or ""
         force_full = bool(event_data.get("force_full", False))
 
         if not source_id:
@@ -237,11 +237,11 @@ async def zoho_calendar_sync_endpoint(ctx: inngest.Context) -> Dict[str, Any]:
     provider's endpoints aren't all pulls the way every other provider's are.
     """
     endpoint: str = "unknown"
-    source_id: Optional[str] = None
+    source_id: str = ""
 
     try:
-        event_data = ctx.event.data
-        source_id = event_data.get("source_id")
+        event_data: Dict[str, Any] = dict(ctx.event.data)
+        source_id = event_data.get("source_id") or ""
         endpoint = event_data.get("endpoint", "unknown")
 
         if not source_id or endpoint == "unknown":
@@ -319,7 +319,7 @@ async def _sync_calendar_events(ctx: inngest.Context, source_id: str) -> Dict[st
     run_started_at = datetime.fromisoformat(
         await ctx.step.run(
             "get-run-start-time",
-            lambda: datetime.now(timezone.utc).isoformat(),
+            utc_now_iso,
         )
     )
 

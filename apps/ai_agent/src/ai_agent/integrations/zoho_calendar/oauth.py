@@ -24,7 +24,7 @@ import json
 import logging
 import secrets
 import time
-from typing import Any, Dict
+from typing import Any, Dict, cast
 from urllib.parse import urlencode
 
 import httpx
@@ -106,7 +106,7 @@ def verify_state(state: str) -> str:
     if not entity_id:
         raise ZohoOAuthError("State payload missing entity_id")
 
-    return entity_id
+    return cast(str, entity_id)
 
 
 def build_authorize_url(entity_id: str) -> str:
@@ -153,7 +153,7 @@ async def _post_token(data: Dict[str, str]) -> Dict[str, Any]:
     if "error" in payload:
         raise ZohoOAuthError(f"Zoho token request failed: {payload['error']}")
 
-    return payload
+    return cast(Dict[str, Any], payload)
 
 
 async def exchange_code_for_tokens(code: str) -> Dict[str, Any]:

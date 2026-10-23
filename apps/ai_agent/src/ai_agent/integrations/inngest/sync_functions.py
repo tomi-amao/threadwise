@@ -5,7 +5,7 @@ with slow pagination and raw event storage.
 """
 
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
 import inngest
@@ -15,7 +15,7 @@ from ...integrations.common import resolve_sync_since
 from ...integrations.squarespace import ENDPOINTS, SquarespaceAdapter
 from ...services.external_sync_service import sync_service
 from .channels import SyncProgressData, SyncStatusData, get_sync_channel
-from .config import get_client
+from .config import get_client, utc_now_iso
 
 logger = logging.getLogger(__name__)
 
@@ -40,11 +40,11 @@ async def squarespace_sync_all(ctx: inngest.Context) -> Dict[str, Any]:
     This function triggers individual endpoint syncs sequentially
     to respect rate limits.
     """
-    source_id: Optional[str] = None
+    source_id: str = ""
 
     try:
-        event_data = ctx.event.data
-        source_id = event_data.get("source_id")
+        event_data: Dict[str, Any] = dict(ctx.event.data)
+        source_id = event_data.get("source_id") or ""
         force_full = bool(event_data.get("force_full", False))
 
         if not source_id:
@@ -193,12 +193,7 @@ async def squarespace_sync_all(ctx: inngest.Context) -> Dict[str, Any]:
         raise
 
 
-@inngest_client.create_function(
-    fn_id="squarespace_sync_endpoint",
-    trigger=inngest.TriggerEvent(event="squarespace/sync.endpoint"),
-    retries=3,
-)
-async def squarespace_sync_endpoint(ctx: inngest.Context) -> Dict[str, Any]:
+async def _sync_squarespace_endpoint(ctx: inngest.Context) -> Dict[str, Any]:
     """Sync a single Squarespace endpoint with pagination.
 
     Paginates slowly and stores raw events without transformation.
@@ -206,8 +201,8 @@ async def squarespace_sync_endpoint(ctx: inngest.Context) -> Dict[str, Any]:
     endpoint: str = "unknown"
 
     try:
-        event_data = ctx.event.data
-        source_id = event_data.get("source_id")
+        event_data: Dict[str, Any] = dict(ctx.event.data)
+        source_id: str = event_data.get("source_id") or ""
         endpoint = event_data.get("endpoint", "unknown")
         resume_cursor = event_data.get("cursor")
         force_full = bool(event_data.get("force_full", False))
@@ -226,7 +221,7 @@ async def squarespace_sync_endpoint(ctx: inngest.Context) -> Dict[str, Any]:
         run_started_at = datetime.fromisoformat(
             await ctx.step.run(
                 "get-run-start-time",
-                lambda: datetime.now(timezone.utc).isoformat(),
+                utc_now_iso,
             )
         )
 
@@ -376,8 +371,8 @@ async def squarespace_sync_endpoint(ctx: inngest.Context) -> Dict[str, Any]:
 
         # Publish error status
         try:
-            event_data = ctx.event.data
-            source_id = event_data.get("source_id")
+            event_data = dict(ctx.event.data)
+            source_id = event_data.get("source_id") or ""
             if source_id:
                 channel = get_sync_channel(source_id)
                 await realtime.publish(
@@ -407,14 +402,24 @@ async def squarespace_sync_endpoint(ctx: inngest.Context) -> Dict[str, Any]:
 
 
 @inngest_client.create_function(
+    fn_id="squarespace_sync_endpoint",
+    trigger=inngest.TriggerEvent(event="squarespace/sync.endpoint"),
+    retries=3,
+)
+async def squarespace_sync_endpoint(ctx: inngest.Context) -> Dict[str, Any]:
+    """Sync a single Squarespace endpoint with pagination."""
+    return await _sync_squarespace_endpoint(ctx)
+
+
+@inngest_client.create_function(
     fn_id="squarespace_sync_single_endpoint",
     trigger=inngest.TriggerEvent(event="squarespace/sync.single_endpoint"),
     retries=3,
 )
 async def squarespace_sync_single_endpoint(ctx: inngest.Context) -> Dict[str, Any]:
     """Sync a single endpoint (manual trigger for specific endpoints)."""
-    # Reuse the endpoint sync logic
-    return await squarespace_sync_endpoint(ctx)
+    # Reuse the endpoint sync logic (the decorated function is not callable)
+    return await _sync_squarespace_endpoint(ctx)
 
 
 # List of all sync functions for export

@@ -13,7 +13,7 @@ try:
     from langgraph_sdk import get_client
 except ImportError:
     logger.warning("langgraph_sdk not available")
-    get_client = None
+    get_client = None  # type: ignore[assignment]
 
 
 class LangGraphService:
@@ -26,7 +26,7 @@ class LangGraphService:
 
     async def initialize(self):
         """Initialize the LangGraph client."""
-        if not get_client:
+        if get_client is None:
             logger.warning("LangGraph SDK not available")
             return False
 

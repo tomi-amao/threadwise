@@ -18,10 +18,11 @@ inngest_client = get_client()
     fn_id="process_chat_message",
     trigger=inngest.TriggerEvent(event="chat/message.received"),
 )
-async def process_chat_message(ctx: inngest.Context, step) -> Dict[str, Any]:
+async def process_chat_message(ctx: inngest.Context) -> Dict[str, Any]:
     """Process chat messages asynchronously for analytics or background tasks."""
+    step = ctx.step
     try:
-        event_data = ctx.event.data
+        event_data: Dict[str, Any] = dict(ctx.event.data)
         message_content = event_data.get("content", "")
         thread_id = event_data.get("thread_id")
         user_id = event_data.get("user_id")
@@ -60,14 +61,15 @@ async def process_chat_message(ctx: inngest.Context, step) -> Dict[str, Any]:
     fn_id="process_document_embedding",
     trigger=inngest.TriggerEvent(event="documents/embedding.completed"),
 )
-async def process_document_embedding(ctx: inngest.Context, step) -> Dict[str, Any]:
+async def process_document_embedding(ctx: inngest.Context) -> Dict[str, Any]:
     """Process completed document embeddings for indexing and categorization."""
+    step = ctx.step
     try:
-        event_data = ctx.event.data
-        document_id = event_data.get("document_id")
-        filename = event_data.get("filename")
-        entity_id = event_data.get("entity_id")
-        chunks_count = event_data.get("chunks", 0)
+        event_data: Dict[str, Any] = dict(ctx.event.data)
+        document_id: str = event_data.get("document_id") or ""
+        filename: str = event_data.get("filename") or ""
+        entity_id: Optional[str] = event_data.get("entity_id")
+        chunks_count: int = event_data.get("chunks", 0)
 
         ctx.logger.info(f"Processing embedding completion for document {document_id}")
 
@@ -110,8 +112,9 @@ async def process_document_embedding(ctx: inngest.Context, step) -> Dict[str, An
     fn_id="cleanup_old_threads",
     trigger=inngest.TriggerCron(cron="0 2 * * *"),  # Daily at 2 AM
 )
-async def cleanup_old_threads(ctx: inngest.Context, step) -> Dict[str, Any]:
+async def cleanup_old_threads(ctx: inngest.Context) -> Dict[str, Any]:
     """Clean up old chat threads and temporary data."""
+    step = ctx.step
     try:
         ctx.logger.info("Starting daily cleanup of old threads")
 

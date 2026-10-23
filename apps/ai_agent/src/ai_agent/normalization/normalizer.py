@@ -14,12 +14,15 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, TypeVar, Union
 from uuid import UUID
 
-from .models import CanonicalBase, ProcessingStatus
+from .models import CanonicalBase, ExpenseEnrichment, ProcessingStatus
 
 logger = logging.getLogger(__name__)
 
 # Type variable for canonical models
 T = TypeVar("T", bound=CanonicalBase)
+
+# What a normalizer can produce: canonical model(s), or enrichment for an existing row
+CanonicalResult = Union[CanonicalBase, List[CanonicalBase], ExpenseEnrichment]
 
 
 class NormalizationError(Exception):
@@ -48,7 +51,7 @@ class NormalizationResult:
     """
 
     # The normalized canonical object(s)
-    canonical: Optional[Union[CanonicalBase, List[CanonicalBase]]] = None
+    canonical: Optional[CanonicalResult] = None
 
     # Status
     success: bool = False
@@ -80,7 +83,7 @@ class NormalizationResult:
     @classmethod
     def success_result(
         cls,
-        canonical: Union[CanonicalBase, List[CanonicalBase]],
+        canonical: CanonicalResult,
         entity_type: str,
         external_id: str,
         raw_event_id: UUID,
@@ -144,7 +147,7 @@ class NormalizationResult:
     @classmethod
     def needs_review_result(
         cls,
-        canonical: Optional[Union[CanonicalBase, List[CanonicalBase]]],
+        canonical: Optional[CanonicalResult],
         entity_type: str,
         external_id: str,
         raw_event_id: UUID,
@@ -235,7 +238,10 @@ class BaseNormalizer(ABC):
                     error_message=f"No normalizer method for entity type: {entity_type}",
                 )
 
-            return normalizer_method(external_id, payload, raw_event_id)
+            result: NormalizationResult = normalizer_method(
+                external_id, payload, raw_event_id
+            )
+            return result
 
         except NormalizationError as e:
             logger.error(

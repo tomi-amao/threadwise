@@ -76,7 +76,8 @@ def _now_iso() -> str:
 def _processed_count(result: Dict[str, Any]) -> int | None:
     for key in _PROCESSED_COUNT_KEYS:
         if key in result:
-            return result[key]
+            count: int = result[key]
+            return count
     return None
 
 
@@ -87,7 +88,7 @@ def _processed_count(result: Dict[str, Any]) -> int | None:
 )
 async def generate_all_journals_job(ctx: inngest.Context) -> Dict[str, Any]:
     """Background journal-generation pipeline with realtime step progress."""
-    event_data = ctx.event.data
+    event_data: Dict[str, Any] = dict(ctx.event.data)
     entity_id_str = event_data.get("entity_id")
     scope = event_data.get("scope")  # None/"all" runs every step
 
@@ -149,7 +150,7 @@ async def generate_all_journals_job(ctx: inngest.Context) -> Dict[str, Any]:
 
         try:
             method = getattr(journal_service, method_name)
-            result = await ctx.step.run(step_key, lambda m=method: m(entity_id))
+            result = await ctx.step.run(step_key, method, entity_id)
         except Exception as e:
             ctx.logger.error(f"Journal step {step_key} failed: {e}")
             steps_result.append(

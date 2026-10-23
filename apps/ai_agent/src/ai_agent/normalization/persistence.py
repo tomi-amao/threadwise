@@ -594,11 +594,11 @@ class PersistenceService:
             if variant.sku:
                 try:
                     result = await asyncio.to_thread(
-                        lambda sku=variant.sku: self.client.table("products")
+                        lambda: self.client.table("products")
                         .select("id")
                         .eq("entity_id", entity_id)
                         .eq("provider", "invoice")
-                        .contains("variants", [{"sku": sku}])
+                        .contains("variants", [{"sku": variant.sku}])
                         .limit(1)
                         .execute()
                     )
@@ -742,7 +742,7 @@ class PersistenceService:
                 if variant.unit_cost and variant.unit_cost > 0
                 else None
             )
-            base_updates = {
+            base_updates: Dict[str, Any] = {
                 "product_id": str(product_db_id),
                 "sku": variant.sku,
                 "is_unlimited": variant.is_unlimited,
@@ -793,8 +793,8 @@ class PersistenceService:
 
                 if not existing.data:
                     await asyncio.to_thread(
-                        lambda d=stub: self.client.table("inventory_items")
-                        .insert(d)
+                        lambda: self.client.table("inventory_items")
+                        .insert(stub)
                         .execute()
                     )
                     continue
@@ -810,11 +810,9 @@ class PersistenceService:
                         base_updates["unit_cost"] = float(incoming_cost)
 
                 await asyncio.to_thread(
-                    lambda d=base_updates, row_id=row["id"]: self.client.table(
-                        "inventory_items"
-                    )
-                    .update(d)
-                    .eq("id", row_id)
+                    lambda: self.client.table("inventory_items")
+                    .update(base_updates)
+                    .eq("id", row["id"])
                     .execute()
                 )
             except Exception as e:
@@ -872,12 +870,10 @@ class PersistenceService:
                         updates["unit_cost"] = float(incoming_cost)
 
                 await asyncio.to_thread(
-                    lambda iid=str(inventory_item_uuid), d=updates: (
-                        self.client.table("inventory_items")
-                        .update(d)
-                        .eq("id", iid)
-                        .execute()
-                    )
+                    lambda: self.client.table("inventory_items")
+                    .update(updates)
+                    .eq("id", str(inventory_item_uuid))
+                    .execute()
                 )
                 return inventory_item_uuid
 
@@ -1165,9 +1161,9 @@ class PersistenceService:
 
             # Idempotency: check if a SALE movement already exists for this line item
             existing = await asyncio.to_thread(
-                lambda lid=str(line_item_id): self.client.table("inventory_movements")
+                lambda: self.client.table("inventory_movements")
                 .select("id")
-                .eq("reference_id", lid)
+                .eq("reference_id", str(line_item_id))
                 .eq("transaction_type", "SALE")
                 .limit(1)
                 .execute()
@@ -1183,9 +1179,9 @@ class PersistenceService:
 
             # Fetch unit_cost from inventory_item for COGS
             inv_item = await asyncio.to_thread(
-                lambda iid=str(inventory_item_id): self.client.table("inventory_items")
+                lambda: self.client.table("inventory_items")
                 .select("unit_cost")
-                .eq("id", iid)
+                .eq("id", str(inventory_item_id))
                 .limit(1)
                 .execute()
             )
@@ -1213,9 +1209,7 @@ class PersistenceService:
                 data["movement_date_source"] = "order"
 
             result = await asyncio.to_thread(
-                lambda d=data: self.client.table("inventory_movements")
-                .insert(d)
-                .execute()
+                lambda: self.client.table("inventory_movements").insert(data).execute()
             )
             if result.data:
                 movement_ids.append(_extract_id(result))
@@ -1287,8 +1281,10 @@ class PersistenceService:
                 "created_at": datetime.now(timezone.utc).isoformat(),
             }
             upsert_result = await asyncio.to_thread(
-                lambda d=upsert_data: self.client.table("inventory_items")
-                .upsert(d, on_conflict="entity_id,provider,variant_external_id")
+                lambda: self.client.table("inventory_items")
+                .upsert(
+                    upsert_data, on_conflict="entity_id,provider,variant_external_id"
+                )
                 .execute()
             )
             if not upsert_result.data:

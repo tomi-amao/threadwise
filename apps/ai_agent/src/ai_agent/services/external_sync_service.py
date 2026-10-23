@@ -7,7 +7,7 @@ import asyncio
 import json
 import logging
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, cast
 
 from ..core.supabase_client import get_supabase_client
 
@@ -40,7 +40,7 @@ class ExternalSyncService:
         currency: str,
         legal_name: Optional[str] = None,
         country: Optional[str] = None,
-    ) -> Dict[str, Any]:
+    ) -> Optional[Dict[str, Any]]:
         """Create a new entity.
 
         Args:
@@ -95,7 +95,7 @@ class ExternalSyncService:
         external_account_id: str,
         credentials: Dict[str, Any],
         display_name: Optional[str] = None,
-    ) -> Dict[str, Any]:
+    ) -> Optional[Dict[str, Any]]:
         """Create a new external source connection.
 
         Args:
@@ -161,7 +161,7 @@ class ExternalSyncService:
             .eq("id", source["id"])
             .execute()
         )
-        return result.data[0] if result.data else source
+        return cast(Dict[str, Any], result.data[0] if result.data else source)
 
     async def get_api_key(self, source_id: str) -> Optional[str]:
         """Retrieve decrypted API key for a source.
@@ -280,7 +280,7 @@ class ExternalSyncService:
         status: str,
         cursor: Optional[str] = None,
         error: Optional[str] = None,
-    ) -> Dict[str, Any]:
+    ) -> Optional[Dict[str, Any]]:
         """Update sync status for an external source.
 
         Args:
@@ -289,7 +289,7 @@ class ExternalSyncService:
             cursor: Optional pagination cursor
             error: Optional error message
         """
-        data = {
+        data: Dict[str, Any] = {
             "sync_status": status,
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }
@@ -427,7 +427,7 @@ class ExternalSyncService:
         external_id: str,
         payload: Dict[str, Any],
         occurred_at: Optional[datetime] = None,
-    ) -> Dict[str, Any]:
+    ) -> Optional[Dict[str, Any]]:
         """Store a single raw event.
 
         Uses upsert to handle re-syncs gracefully.
@@ -564,13 +564,11 @@ class ExternalSyncService:
         existing: Dict[Tuple[str, str], Dict[str, Any]] = {}
         for entity_type, external_ids in by_entity_type.items():
             result = await asyncio.to_thread(
-                lambda et=entity_type, ids=external_ids: self.client.table(
-                    "external_raw_events"
-                )
+                lambda: self.client.table("external_raw_events")
                 .select("external_id, payload, processing_status")
                 .eq("provider", provider)
-                .eq("entity_type", et)
-                .in_("external_id", ids)
+                .eq("entity_type", entity_type)
+                .in_("external_id", external_ids)
                 .execute()
             )
             for row in result.data or []:
@@ -628,7 +626,7 @@ class ExternalSyncService:
     async def delete_external_source(
         self,
         source_id: str,
-    ) -> Dict[str, Any]:
+    ) -> Optional[Dict[str, Any]]:
         """Delete an external source and all associated data.
 
         Cascade:

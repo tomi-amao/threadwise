@@ -65,7 +65,7 @@ the calendar host is computed independently until this is verified.
 import json
 import logging
 from datetime import datetime, timedelta, timezone
-from typing import Any, AsyncIterator, Dict, List, Optional
+from typing import Any, AsyncIterator, Dict, List, Optional, cast
 
 import httpx
 
@@ -236,7 +236,7 @@ class ZohoCalendarAdapter:
                 f"{self._base_url}/calendars", headers=self._auth_headers()
             )
             _raise_with_body(resp)
-            return resp.json().get("calendars", [])
+            return cast(List[Dict[str, Any]], resp.json().get("calendars", []))
 
     async def get_or_create_deadlines_calendar(self) -> str:
         """Return the UID of the "ThreadWise Deadlines" calendar, creating
@@ -248,7 +248,7 @@ class ZohoCalendarAdapter:
         calendars = await self.list_calendars()
         for cal in calendars:
             if cal.get("name") == DEADLINES_CALENDAR_NAME:
-                return cal["uid"]
+                return cast(str, cal["uid"])
 
         await self._ensure_token()
         async with httpx.AsyncClient(timeout=self.timeout) as client:
@@ -274,7 +274,7 @@ class ZohoCalendarAdapter:
                 },
             )
             _raise_with_body(create_resp)
-            return create_resp.json()["calendars"][0]["uid"]
+            return cast(str, create_resp.json()["calendars"][0]["uid"])
 
     # -------------------------------------------------------------------------
     # Events (pull)
@@ -396,7 +396,7 @@ class ZohoCalendarAdapter:
                 },
             )
             _raise_with_body(resp)
-            return resp.json()["events"][0]["uid"]
+            return cast(str, resp.json()["events"][0]["uid"])
 
     async def update_event(
         self,
@@ -426,7 +426,7 @@ class ZohoCalendarAdapter:
                 },
             )
             _raise_with_body(resp)
-            return resp.json()["events"][0]["uid"]
+            return cast(str, resp.json()["events"][0]["uid"])
 
     async def test_connection(self) -> bool:
         """Validate credentials by refreshing a token and listing calendars."""

@@ -1244,7 +1244,9 @@ async def ai_suggest_categories(request: AISuggestCategoryRequest, user: Current
                 )
 
                 # Invoke LLM with structured output
-                result: CategorizationResult = await structured_llm.ainvoke(
+                # ainvoke is typed as returning a dict or model; with structured
+                # output configured it returns a CategorizationResult.
+                result: CategorizationResult = await structured_llm.ainvoke(  # type: ignore[assignment]
                     [
                         {"role": "system", "content": system_prompt},
                         {"role": "user", "content": user_prompt},
@@ -1474,12 +1476,10 @@ async def get_integrations_summary(user: CurrentUser, entity_id: Optional[str] =
                     source_provider = source["provider"]
                     # Count 'other' type transactions that need categorization
                     result = await asyncio.to_thread(
-                        lambda eid=entity_id_for_source, sp=source_provider: sync_service.client.table(
-                            "financial_transactions"
-                        )
+                        lambda: sync_service.client.table("financial_transactions")
                         .select("id", count="exact")
-                        .eq("entity_id", eid)
-                        .eq("source", sp)
+                        .eq("entity_id", entity_id_for_source)
+                        .eq("source", source_provider)
                         .eq("transaction_type", "other")
                         .execute()
                     )

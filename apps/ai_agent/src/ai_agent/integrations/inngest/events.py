@@ -4,6 +4,8 @@ import logging
 from datetime import datetime
 from typing import Any, Dict, Optional
 
+import inngest
+
 from .config import get_client
 
 logger = logging.getLogger(__name__)
@@ -40,7 +42,7 @@ async def send_chat_message_event(
             "metadata": metadata or {},
         }
 
-        await client.send({"name": "chat/message.received", "data": event_data})
+        await client.send(inngest.Event(name="chat/message.received", data=event_data))
 
         logger.info(f"Sent chat message event for thread {thread_id}")
         return True
@@ -87,7 +89,9 @@ async def send_document_embedding_event(
             "timestamp": datetime.now().isoformat(),
         }
 
-        await client.send({"name": "documents/embedding.completed", "data": event_data})
+        await client.send(
+            inngest.Event(name="documents/embedding.completed", data=event_data)
+        )
 
         logger.info(f"Sent document embedding event for {document_id}")
         return True
@@ -113,17 +117,15 @@ async def send_custom_event(
     try:
         client = get_client()
 
-        event_payload = {
-            "name": event_name,
-            "data": {
+        # inngest.Event has no "user" field; the user id travels in the data.
+        event_payload = inngest.Event(
+            name=event_name,
+            data={
                 **data,
                 "timestamp": datetime.now().isoformat(),
                 "user_id": user_id,
             },
-        }
-
-        if user_id:
-            event_payload["user"] = {"id": user_id}
+        )
 
         await client.send(event_payload)
 
@@ -168,7 +170,7 @@ async def send_squarespace_sync_event(
                 "timestamp": datetime.now().isoformat(),
             }
 
-        await client.send({"name": event_name, "data": event_data})
+        await client.send(inngest.Event(name=event_name, data=event_data))
 
         logger.info(f"Sent Squarespace sync event for source {source_id}")
         return True
@@ -209,7 +211,7 @@ async def send_revolut_sync_event(
                 "timestamp": datetime.now().isoformat(),
             }
 
-        await client.send({"name": event_name, "data": event_data})
+        await client.send(inngest.Event(name=event_name, data=event_data))
 
         logger.info(f"Sent Revolut sync event for source {source_id}")
         return True
@@ -250,7 +252,7 @@ async def send_paypal_sync_event(
                 "timestamp": datetime.now().isoformat(),
             }
 
-        await client.send({"name": event_name, "data": event_data})
+        await client.send(inngest.Event(name=event_name, data=event_data))
 
         logger.info(f"Sent PayPal sync event for source {source_id}")
         return True
@@ -293,7 +295,7 @@ async def send_shopify_sync_event(
                 "timestamp": datetime.now().isoformat(),
             }
 
-        await client.send({"name": event_name, "data": event_data})
+        await client.send(inngest.Event(name=event_name, data=event_data))
 
         logger.info(f"Sent Shopify sync event for source {source_id}")
         return True

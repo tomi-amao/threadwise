@@ -7,7 +7,7 @@ and transforms them into canonical models.
 import logging
 import re
 from decimal import Decimal
-from typing import Any, Dict, List, Optional, cast
+from typing import Any, Dict, List, Optional, Union, cast
 from uuid import UUID
 
 from .models import (
@@ -621,6 +621,7 @@ class SquarespaceNormalizer(BaseNormalizer):
             canonical_payments.append(canonical_payment)
 
         # Return single payment or list of payments
+        canonical: Union[CanonicalBase, List[CanonicalBase]]
         if len(canonical_payments) == 1:
             canonical = canonical_payments[0]
         else:

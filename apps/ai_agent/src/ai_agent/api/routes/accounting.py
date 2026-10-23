@@ -12,7 +12,7 @@ Provides endpoints for:
 
 import asyncio
 import logging
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional, cast
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
@@ -379,7 +379,10 @@ async def get_accounting_health_checks(include_detail: bool = False):
 
         severity_rank = {"fail": 0, "warn": 1, "ok": 2}
         rows.sort(
-            key=lambda r: (severity_rank.get(r.get("severity"), 3), r.get("check_name"))
+            key=lambda r: (
+                severity_rank.get(r.get("severity") or "", 3),
+                r.get("check_name"),
+            )
         )
 
         clearing_by_type = await asyncio.to_thread(
@@ -668,7 +671,7 @@ async def create_purchase_invoice_journal(request: PurchaseInvoiceRequest):
         purchase = await journal_service.create_purchase_journal(
             UUID(request.entity_id), UUID(request.invoice_id)
         )
-        result = {"purchase_journal": purchase, "payment_journal": None}
+        result: Dict[str, Any] = {"purchase_journal": purchase, "payment_journal": None}
 
         if request.create_payment:
             try:
@@ -870,7 +873,7 @@ async def list_invoices(
 ):
     """List invoices with embedded contact info (newest first, at most 500 per call)."""
     try:
-        inv_type = invoice_type  # type: ignore[assignment]
+        inv_type = cast(Optional[Literal["SALE", "PURCHASE"]], invoice_type)
         invoices = await invoice_service.list_invoices(
             UUID(entity_id),
             inv_type,

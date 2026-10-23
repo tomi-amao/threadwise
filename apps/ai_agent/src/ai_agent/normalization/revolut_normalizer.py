@@ -16,11 +16,12 @@ Key behaviours:
 
 import logging
 from decimal import Decimal
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, cast
 from uuid import UUID
 
 from .models import (
     CanonicalBankAccount,
+    CanonicalBase,
     CanonicalFinancialTransaction,
     ExpenseEnrichment,
     TxnDirection,
@@ -610,7 +611,7 @@ class RevolutNormalizer(FinancialNormalizer):
             )
 
         return NormalizationResult.success_result(
-            canonical=canonicals,
+            canonical=cast(List[CanonicalBase], canonicals),
             entity_type="financial_transaction",
             external_id=external_id,
             raw_event_id=raw_event_id,
@@ -744,7 +745,6 @@ class RevolutNormalizer(FinancialNormalizer):
                 expense_category=expense_category,
                 account_code=account_code,
                 raw_event_id=raw_event_id,
-                warnings=warnings,
             )
 
             return NormalizationResult.success_result(
@@ -769,7 +769,7 @@ class RevolutNormalizer(FinancialNormalizer):
         revolut_category: Optional[str],
         merchant_name: str,
         mcc_code: Optional[str],
-    ) -> tuple[str, str]:
+    ) -> Tuple[Optional[str], Optional[str]]:
         """Map Revolut expense category to account code.
 
         Priority:

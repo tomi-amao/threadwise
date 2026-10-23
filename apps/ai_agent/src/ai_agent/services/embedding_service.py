@@ -23,12 +23,12 @@ import httpx
 try:
     from pypdf import PdfReader
 except ImportError:
-    PdfReader = None
+    PdfReader = None  # type: ignore[assignment,misc]
 
 try:
     from docx import Document as DocxDocument
 except ImportError:
-    DocxDocument = None
+    DocxDocument = None  # type: ignore[assignment,misc]
 
 # langchain_huggingface, langchain_community.document_loaders and
 # langchain_text_splitters are imported lazily where they're used: each of them
@@ -39,8 +39,8 @@ except ImportError:
 try:
     from pinecone import Pinecone, ServerlessSpec
 except ImportError:
-    Pinecone = None
-    ServerlessSpec = None
+    Pinecone = None  # type: ignore[assignment,misc]
+    ServerlessSpec = None  # type: ignore[assignment,misc]
 
 from dotenv import load_dotenv
 

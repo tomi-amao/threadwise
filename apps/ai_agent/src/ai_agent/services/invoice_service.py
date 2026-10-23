@@ -12,7 +12,7 @@ import asyncio
 import base64
 import logging
 import re
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional, Tuple, cast
 from uuid import UUID
 
 from langchain.chat_models import init_chat_model
@@ -51,16 +51,20 @@ class ExtractedContact(BaseModel):
     company_name: Optional[str] = Field(
         None, description="Trading / company name if different from name"
     )
-    email: Optional[str] = Field(None, description="Contact email address")
-    phone: Optional[str] = Field(None, description="Contact phone number")
-    address_line_1: Optional[str] = Field(None, description="First line of address")
-    address_line_2: Optional[str] = Field(None, description="Second line of address")
-    city: Optional[str] = Field(None, description="City or town")
-    region: Optional[str] = Field(None, description="State, county, or region")
-    postal_code: Optional[str] = Field(None, description="Postal / ZIP code")
-    country: Optional[str] = Field(None, description="Country name or ISO code")
+    email: Optional[str] = Field(default=None, description="Contact email address")
+    phone: Optional[str] = Field(default=None, description="Contact phone number")
+    address_line_1: Optional[str] = Field(
+        default=None, description="First line of address"
+    )
+    address_line_2: Optional[str] = Field(
+        default=None, description="Second line of address"
+    )
+    city: Optional[str] = Field(default=None, description="City or town")
+    region: Optional[str] = Field(default=None, description="State, county, or region")
+    postal_code: Optional[str] = Field(default=None, description="Postal / ZIP code")
+    country: Optional[str] = Field(default=None, description="Country name or ISO code")
     tax_number: Optional[str] = Field(
-        None, description="VAT / GST / tax registration number"
+        default=None, description="VAT / GST / tax registration number"
     )
 
 
@@ -237,6 +241,7 @@ class InvoiceService:
         if chart_of_accounts:
             # When the user tells us the invoice type, only show relevant accounts
             # so the AI cannot accidentally pick revenue accounts for a PURCHASE.
+            allowed_types: Tuple[str, ...]
             if invoice_type_hint == "PURCHASE":
                 allowed_types = ("expense", "cogs", "cost_of_goods_sold")
             elif invoice_type_hint == "SALE":
@@ -419,7 +424,9 @@ class InvoiceService:
                 .eq("id", contact_id)
                 .execute()
             )
-            return updated.data[0] if updated.data else existing.data[0]
+            return cast(
+                Dict[str, Any], updated.data[0] if updated.data else existing.data[0]
+            )
 
         # Insert new contact
         inserted = await asyncio.to_thread(
@@ -427,7 +434,7 @@ class InvoiceService:
         )
         if not inserted.data:
             raise ValueError("Failed to create contact")
-        return inserted.data[0]
+        return cast(Dict[str, Any], inserted.data[0])
 
     # =========================================================================
     # INVOICE CREATION
@@ -501,7 +508,7 @@ class InvoiceService:
 
         if not result.data:
             raise ValueError("Failed to create invoice")
-        return result.data[0]
+        return cast(Dict[str, Any], result.data[0])
 
     # =========================================================================
     # LINE ITEMS CREATION
@@ -1258,9 +1265,9 @@ class InvoiceService:
 
         for li_id, gl_id in (line_item_gl_updates or {}).items():
             await asyncio.to_thread(
-                lambda lid=li_id, gid=gl_id: self.client.table("invoice_line_items")
-                .update({"gl_account_id": gid})
-                .eq("id", lid)
+                lambda: self.client.table("invoice_line_items")
+                .update({"gl_account_id": gl_id})
+                .eq("id", li_id)
                 .eq("invoice_id", str(invoice_id))
                 .execute()
             )
@@ -1449,9 +1456,9 @@ class InvoiceService:
             try:
                 # Find the PURCHASE movement for this invoice line
                 mv_result = await asyncio.to_thread(
-                    lambda lid=line_item_id: self.client.table("inventory_movements")
+                    lambda: self.client.table("inventory_movements")
                     .select("inventory_item_id")
-                    .eq("reference_id", lid)
+                    .eq("reference_id", line_item_id)
                     .eq("reference_table", "invoice_line_items")
                     .eq("transaction_type", "PURCHASE")
                     .limit(1)
@@ -1475,11 +1482,9 @@ class InvoiceService:
                     patch["cogs_account_id"] = row_overrides["cogs_account_id"]
 
                 await asyncio.to_thread(
-                    lambda iid=inventory_item_id, p=patch: self.client.table(
-                        "inventory_items"
-                    )
-                    .update(p)
-                    .eq("id", iid)
+                    lambda: self.client.table("inventory_items")
+                    .update(patch)
+                    .eq("id", inventory_item_id)
                     .eq("entity_id", str(entity_id))
                     .execute()
                 )
@@ -1558,9 +1563,9 @@ class InvoiceService:
             try:
                 # Fetch all inventory_items for this product
                 inv_result = await asyncio.to_thread(
-                    lambda pid=product_id: self.client.table("inventory_items")
+                    lambda: self.client.table("inventory_items")
                     .select("id, variant_external_id, sku")
-                    .eq("product_id", pid)
+                    .eq("product_id", product_id)
                     .eq("entity_id", str(entity_id))
                     .execute()
                 )
@@ -1569,9 +1574,9 @@ class InvoiceService:
                 # No inventory_items yet — bootstrap from the product's variants
                 if not inventory_items:
                     prod_result = await asyncio.to_thread(
-                        lambda pid=product_id: self.client.table("products")
+                        lambda: self.client.table("products")
                         .select("id, name, provider, variants")
-                        .eq("id", pid)
+                        .eq("id", product_id)
                         .eq("entity_id", str(entity_id))
                         .limit(1)
                         .execute()
@@ -1617,9 +1622,10 @@ class InvoiceService:
                         for v in raw_variants
                     ]
                     upsert_result = await asyncio.to_thread(
-                        lambda rows=to_insert: self.client.table("inventory_items")
+                        lambda: self.client.table("inventory_items")
                         .upsert(
-                            rows, on_conflict="entity_id,provider,variant_external_id"
+                            to_insert,
+                            on_conflict="entity_id,provider,variant_external_id",
                         )
                         .execute()
                     )
@@ -1644,11 +1650,9 @@ class InvoiceService:
                 if cogs_account_id:
                     update_patch["cogs_account_id"] = cogs_account_id
                 await asyncio.to_thread(
-                    lambda ids=inv_ids, patch=update_patch: self.client.table(
-                        "inventory_items"
-                    )
-                    .update(patch)
-                    .in_("id", ids)
+                    lambda: self.client.table("inventory_items")
+                    .update(update_patch)
+                    .in_("id", inv_ids)
                     .eq("entity_id", str(entity_id))
                     .execute()
                 )
@@ -1662,12 +1666,10 @@ class InvoiceService:
                 for inv_item in inventory_items:
                     try:
                         existing_mv = await asyncio.to_thread(
-                            lambda iid=inv_item["id"]: self.client.table(
-                                "inventory_movements"
-                            )
+                            lambda: self.client.table("inventory_movements")
                             .select("id")
                             .eq("reference_id", line_item_id)
-                            .eq("inventory_item_id", iid)
+                            .eq("inventory_item_id", inv_item["id"])
                             .eq("transaction_type", "PURCHASE")
                             .limit(1)
                             .execute()
@@ -1685,8 +1687,8 @@ class InvoiceService:
                             "notes": f"Cost backfilled from invoice {invoice_id}",
                         }
                         await asyncio.to_thread(
-                            lambda m=movement: self.client.table("inventory_movements")
-                            .insert(m)
+                            lambda: self.client.table("inventory_movements")
+                            .insert(movement)
                             .execute()
                         )
                     except Exception as exc:
@@ -1765,9 +1767,9 @@ class InvoiceService:
                 continue
             try:
                 mv_result = await asyncio.to_thread(
-                    lambda lid=item["id"]: self.client.table("inventory_movements")
+                    lambda: self.client.table("inventory_movements")
                     .select("inventory_item_id")
-                    .eq("reference_id", lid)
+                    .eq("reference_id", item["id"])
                     .eq("transaction_type", "PURCHASE")
                     .limit(1)
                     .execute()
@@ -1781,11 +1783,9 @@ class InvoiceService:
                 if cogs_account_id:
                     patch["cogs_account_id"] = cogs_account_id
                 await asyncio.to_thread(
-                    lambda iid=inv_item_id, p=patch: self.client.table(
-                        "inventory_items"
-                    )
-                    .update(p)
-                    .eq("id", iid)
+                    lambda: self.client.table("inventory_items")
+                    .update(patch)
+                    .eq("id", inv_item_id)
                     .eq("entity_id", str(entity_id))
                     .execute()
                 )

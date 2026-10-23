@@ -75,7 +75,8 @@ class SquarespaceAdapter:
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             response = await client.get(url, headers=self._headers, params=params or {})
             response.raise_for_status()
-            return response.json()
+            data: Dict[str, Any] = response.json()
+            return data
 
     def _get_entity_type(self, endpoint: str) -> str:
         """Map endpoint to entity type.
@@ -192,7 +193,7 @@ class SquarespaceAdapter:
         if not url:
             raise ValueError(f"Unknown endpoint: {endpoint}")
 
-        params = {"pageSize": self.page_size}
+        params: Dict[str, Any] = {"pageSize": self.page_size}
         if cursor:
             params["cursor"] = cursor
         elif since is not None and endpoint == "orders":

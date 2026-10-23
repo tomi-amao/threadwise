@@ -20,7 +20,7 @@ import logging
 import re
 from datetime import datetime, timezone
 from decimal import Decimal
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, cast
 from uuid import UUID
 
 from langchain.chat_models import init_chat_model
@@ -371,8 +371,12 @@ class JournalService:
             )
 
         # Validate balance
-        total_debit = sum(Decimal(str(li["debit"])) for li in line_items)
-        total_credit = sum(Decimal(str(li["credit"])) for li in line_items)
+        total_debit = sum(
+            (Decimal(str(li["debit"])) for li in line_items), Decimal("0")
+        )
+        total_credit = sum(
+            (Decimal(str(li["credit"])) for li in line_items), Decimal("0")
+        )
         if abs(total_debit - total_credit) > BALANCE_TOLERANCE:
             raise JournalError(
                 f"Accrual journal does not balance: debit={total_debit} credit={total_credit}"
@@ -1230,8 +1234,12 @@ class JournalService:
         )
 
         # Validate balance
-        total_debit = sum(Decimal(str(li["debit"])) for li in line_items)
-        total_credit = sum(Decimal(str(li["credit"])) for li in line_items)
+        total_debit = sum(
+            (Decimal(str(li["debit"])) for li in line_items), Decimal("0")
+        )
+        total_credit = sum(
+            (Decimal(str(li["credit"])) for li in line_items), Decimal("0")
+        )
         if abs(total_debit - total_credit) > BALANCE_TOLERANCE:
             # Adjust last debit entry to absorb rounding differences
             diff = float(total_credit - total_debit)
@@ -1785,14 +1793,14 @@ class JournalService:
             return_qty = float(abs(Decimal(str(mv["quantity"] or 0))))
             movements_table = self.client.table("inventory_movements")
             await asyncio.to_thread(
-                lambda m=mv, q=return_qty: movements_table.insert(
+                lambda: movements_table.insert(
                     {
-                        "inventory_item_id": m["inventory_item_id"],
+                        "inventory_item_id": mv["inventory_item_id"],
                         "transaction_type": "RETURN",
-                        "reference_id": m["reference_id"],
+                        "reference_id": mv["reference_id"],
                         "reference_table": "order_line_items",
-                        "quantity": q,
-                        "unit_cost": float(m.get("unit_cost") or 0),
+                        "quantity": return_qty,
+                        "unit_cost": float(mv.get("unit_cost") or 0),
                         "movement_date": created_at,
                         "movement_date_source": "order",
                         "notes": f"Stock returned — full refund of order {order_ref}",
@@ -1899,8 +1907,12 @@ class JournalService:
             )
 
         # Validate balance
-        total_debit = sum(Decimal(str(li["debit"])) for li in line_items)
-        total_credit = sum(Decimal(str(li["credit"])) for li in line_items)
+        total_debit = sum(
+            (Decimal(str(li["debit"])) for li in line_items), Decimal("0")
+        )
+        total_credit = sum(
+            (Decimal(str(li["credit"])) for li in line_items), Decimal("0")
+        )
         if abs(total_debit - total_credit) > BALANCE_TOLERANCE:
             raise JournalError(
                 f"Sale journal does not balance: debit={total_debit} credit={total_credit}"
@@ -2307,7 +2319,7 @@ class JournalService:
         if transaction_ids is None:
             transaction_ids = await self._find_unjournaled_expenses(entity_id)
 
-        results = {"created": 0, "skipped": 0, "errors": []}
+        results: Dict[str, Any] = {"created": 0, "skipped": 0, "errors": []}
 
         for i, txn_id in enumerate(transaction_ids):
             # Refresh the Supabase connection every BATCH_SIZE items
@@ -2708,7 +2720,10 @@ class JournalService:
             account_id,
         )
 
-        return await self._fetch_journal(journal_id)
+        journal = await self._fetch_journal(journal_id)
+        if journal is None:
+            raise JournalError(f"Journal {journal_id} not found after posting")
+        return journal
 
     # =========================================================================
     # JOURNAL QUERIES
@@ -2899,8 +2914,13 @@ class JournalService:
         structured_model = model.with_structured_output(DraftAccountSuggestions)
 
         try:
-            result = await asyncio.to_thread(
-                lambda: structured_model.invoke([{"role": "user", "content": prompt}])
+            result = cast(
+                DraftAccountSuggestions,
+                await asyncio.to_thread(
+                    lambda: structured_model.invoke(
+                        [{"role": "user", "content": prompt}]
+                    )
+                ),
             )
         except Exception as e:
             logger.warning("Draft account suggestion failed: %s", e)
@@ -2936,7 +2956,7 @@ class JournalService:
         if payment_ids is None:
             payment_ids = await self._find_unjournaled_payments(entity_id)
 
-        results = {"created": 0, "skipped": 0, "errors": []}
+        results: Dict[str, Any] = {"created": 0, "skipped": 0, "errors": []}
 
         for i, pid in enumerate(payment_ids):
             if i > 0 and i % self.BATCH_SIZE == 0:
@@ -2992,7 +3012,7 @@ class JournalService:
         if transaction_ids is None:
             transaction_ids = await self._find_unjournaled_settlements(entity_id)
 
-        results = {"created": 0, "skipped": 0, "errors": []}
+        results: Dict[str, Any] = {"created": 0, "skipped": 0, "errors": []}
 
         for i, tid in enumerate(transaction_ids):
             if i > 0 and i % self.BATCH_SIZE == 0:
@@ -3076,7 +3096,12 @@ class JournalService:
 
         all_items = 0
         for category, txns in classified.items():
-            cat_results = {"total": len(txns), "created": 0, "skipped": 0, "errors": []}
+            cat_results: Dict[str, Any] = {
+                "total": len(txns),
+                "created": 0,
+                "skipped": 0,
+                "errors": [],
+            }
             method = type_method_map.get(category)
             if not method:
                 continue
@@ -3570,10 +3595,10 @@ class JournalService:
                     new_desc = f"{in_event} — Passthrough funding"
 
                 await asyncio.to_thread(
-                    lambda tid=in_txn["id"], m=in_meta, d=new_desc: (
+                    lambda: (
                         self.client.table("financial_transactions")
-                        .update({"metadata": m, "description": d})
-                        .eq("id", tid)
+                        .update({"metadata": in_meta, "description": new_desc})
+                        .eq("id", in_txn["id"])
                         .execute()
                     )
                 )

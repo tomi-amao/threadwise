@@ -120,7 +120,8 @@ class ShopifyAdapter:
                 },
             )
             response.raise_for_status()
-            return response.json()
+            token_response: dict = response.json()
+            return token_response
 
     async def _ensure_token(self) -> None:
         """Refresh the access token if missing or about to expire."""

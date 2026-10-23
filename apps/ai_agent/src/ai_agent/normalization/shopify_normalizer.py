@@ -156,8 +156,11 @@ class ShopifyNormalizer(BaseNormalizer):
         )
         # Shipping total from shipping_lines sum
         shipping_amount = sum(
-            Decimal(str(line.get("price", "0")))
-            for line in payload.get("shipping_lines", [])
+            (
+                Decimal(str(line.get("price", "0")))
+                for line in payload.get("shipping_lines", [])
+            ),
+            Decimal("0"),
         )
         shipping_total = Money(amount=shipping_amount, currency=currency)
 

@@ -66,7 +66,8 @@ class NormalizationService:
                 f"No normalizer for provider: {provider}. "
                 f"Supported: {list(NORMALIZER_REGISTRY.keys())}"
             )
-        return normalizer_class(entity_id)
+        # The registry holds only concrete subclasses; mypy sees the abstract base.
+        return normalizer_class(entity_id)  # type: ignore[abstract]
 
     # =========================================================================
     # DIRECT PROCESSING FALLBACK
@@ -105,8 +106,10 @@ class NormalizationService:
                 payload=raw_event["payload"],
                 raw_event_id=raw_event_id,
             )
-            success, canonical_id, error = await persistence_service.persist(result)
-            return (success, canonical_id, error)
+            success, canonical_id, persist_error = await persistence_service.persist(
+                result
+            )
+            return (success, canonical_id, persist_error)
         except Exception as e:
             error = f"Error processing raw event: {str(e)}"
             logger.exception(error)

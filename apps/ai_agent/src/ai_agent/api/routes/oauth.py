@@ -132,6 +132,10 @@ async def zoho_calendar_oauth_callback(
         logger.error("Failed to create external_sources row for Zoho Calendar: %s", e)
         return _redirect_to_integrations("error", reason="source_creation_failed")
 
+    if source is None:
+        logger.error("Zoho Calendar external_sources row was not created")
+        return _redirect_to_integrations("error", reason="source_creation_failed")
+
     await sync_service.update_api_key_status(source["id"], "valid")
 
     return _redirect_to_integrations("connected")

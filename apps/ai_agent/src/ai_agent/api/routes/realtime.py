@@ -6,7 +6,7 @@ realtime updates for both sync and normalization operations.
 
 import logging
 from enum import Enum
-from typing import List
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
@@ -47,7 +47,7 @@ class ChannelType(str, Enum):
     JOURNALS = "journals"
 
 
-CHANNEL_CONFIG = {
+CHANNEL_CONFIG: Dict[ChannelType, Dict[str, Any]] = {
     ChannelType.SYNC: {
         "get_channel": get_sync_channel,
         "topics": SYNC_TOPICS,
@@ -82,7 +82,7 @@ class SubscriptionTokenRequest(BaseModel):
         default=ChannelType.SYNC,
         description="Type of channel: 'sync', 'normalization', or 'journals'",
     )
-    topics: List[str] = Field(
+    topics: Optional[List[str]] = Field(
         default=None,
         description="Topics to subscribe to. Defaults to all topics for the channel type.",
     )

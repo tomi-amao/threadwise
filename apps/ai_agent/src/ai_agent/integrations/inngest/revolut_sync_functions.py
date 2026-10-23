@@ -5,7 +5,7 @@ with paginated extraction and raw event storage.
 """
 
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
 import httpx
@@ -16,7 +16,7 @@ from ...integrations.common import resolve_sync_since
 from ...integrations.revolut import ENDPOINTS, RevolutAdapter
 from ...services.external_sync_service import sync_service
 from .channels import SyncProgressData, SyncStatusData, get_sync_channel
-from .config import get_client
+from .config import get_client, utc_now_iso
 
 logger = logging.getLogger(__name__)
 
@@ -33,11 +33,11 @@ PAGE_DELAY_SECONDS = 1.0
 )
 async def revolut_sync_all(ctx: inngest.Context) -> Dict[str, Any]:
     """Orchestrate a full Revolut sync for all endpoints."""
-    source_id: Optional[str] = None
+    source_id: str = ""
 
     try:
-        event_data = ctx.event.data
-        source_id = event_data.get("source_id")
+        event_data: Dict[str, Any] = dict(ctx.event.data)
+        source_id = event_data.get("source_id") or ""
         force_full = bool(event_data.get("force_full", False))
 
         if not source_id:
@@ -191,8 +191,8 @@ async def revolut_sync_endpoint(ctx: inngest.Context) -> Dict[str, Any]:
     endpoint: str = "unknown"
 
     try:
-        event_data = ctx.event.data
-        source_id = event_data.get("source_id")
+        event_data: Dict[str, Any] = dict(ctx.event.data)
+        source_id: str = event_data.get("source_id") or ""
         endpoint = event_data.get("endpoint", "unknown")
         resume_cursor = event_data.get("cursor")
         force_full = bool(event_data.get("force_full", False))
@@ -211,7 +211,7 @@ async def revolut_sync_endpoint(ctx: inngest.Context) -> Dict[str, Any]:
         run_started_at = datetime.fromisoformat(
             await ctx.step.run(
                 "get-run-start-time",
-                lambda: datetime.now(timezone.utc).isoformat(),
+                utc_now_iso,
             )
         )
 
@@ -354,8 +354,8 @@ async def revolut_sync_endpoint(ctx: inngest.Context) -> Dict[str, Any]:
         ctx.logger.error(f"Error syncing Revolut {endpoint}: {str(e)}")
 
         try:
-            event_data = ctx.event.data
-            source_id = event_data.get("source_id")
+            event_data = dict(ctx.event.data)
+            source_id = event_data.get("source_id") or ""
             if source_id:
                 channel = get_sync_channel(source_id)
                 await realtime.publish(

@@ -1,6 +1,7 @@
 """Inngest configuration and client setup for ThreadWise AI Agent."""
 
 import logging
+from datetime import datetime, timezone
 from typing import Any, Dict
 
 import inngest
@@ -74,3 +75,8 @@ def validate_config() -> Dict[str, Any]:
         )
 
     return config_status
+
+
+async def utc_now_iso() -> str:
+    """Current UTC time as ISO 8601, for use as a durable ``step.run`` handler."""
+    return datetime.now(timezone.utc).isoformat()

@@ -17,7 +17,8 @@ Supports:
 import asyncio
 import logging
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional
+from functools import partial
+from typing import Any, Dict, List, Optional, cast
 from uuid import UUID
 
 import inngest  # type: ignore
@@ -98,7 +99,8 @@ def get_normalizer(provider: str, entity_id: UUID):
     normalizer_class = PROVIDER_NORMALIZERS.get(provider)
     if not normalizer_class:
         raise ValueError(f"No normalizer found for provider: {provider}")
-    return normalizer_class(entity_id)
+    # Only concrete subclasses are registered; mypy sees the abstract base.
+    return normalizer_class(entity_id)  # type: ignore[abstract]
 
 
 # =============================================================================
@@ -190,7 +192,7 @@ async def _process_batch_parallel(
         "errors": [],
     }
     for i, result in enumerate(per_event_results):
-        if isinstance(result, Exception):
+        if isinstance(result, BaseException):
             aggregated["failed"] += 1
             aggregated["errors"].append(
                 {
@@ -235,7 +237,7 @@ async def normalize_raw_event(ctx: inngest.Context) -> Dict[str, Any]:
         - force: Boolean to force reprocessing even if already processed
     """
     try:
-        event_data = ctx.event.data
+        event_data: Dict[str, Any] = dict(ctx.event.data)
         raw_event_id = UUID(event_data.get("raw_event_id"))
         force = event_data.get("force", False)
 
@@ -335,7 +337,7 @@ async def normalize_batch(ctx: inngest.Context) -> Dict[str, Any]:
         - source_id_for_channel: Optional source_id for realtime channel
     """
     try:
-        event_data = ctx.event.data
+        event_data: Dict[str, Any] = dict(ctx.event.data)
         entity_type = event_data.get("entity_type")
         limit = event_data.get("limit", 100)
         source_id = event_data.get("source_id")
@@ -375,7 +377,8 @@ async def normalize_batch(ctx: inngest.Context) -> Dict[str, Any]:
         # reduces N Inngest round-trips down to 1.
         results = await ctx.step.run(
             "process-batch-parallel",
-            lambda evts=pending_events: _process_batch_parallel(evts),
+            _process_batch_parallel,
+            pending_events,
         )
 
         # Step 3: Publish progress/completion for this batch
@@ -446,7 +449,7 @@ async def normalize_source(ctx: inngest.Context) -> Dict[str, Any]:
     mode = "soft"
 
     try:
-        event_data = ctx.event.data
+        event_data: Dict[str, Any] = dict(ctx.event.data)
         source_id = event_data.get("source_id")
         mode = event_data.get("mode", "soft")
         batch_size = event_data.get("batch_size", 100)
@@ -537,10 +540,11 @@ async def normalize_source(ctx: inngest.Context) -> Dict[str, Any]:
             # Count pending events for all types in this tier in parallel
             count_results = await ctx.group.parallel(
                 tuple(
-                    lambda et=et: ctx.step.run(
+                    partial(
+                        ctx.step.run,
                         f"count-pending-{et}",
-                        lambda e=et: _count_pending_events(
-                            entity_type=e, source_id=source_id
+                        partial(
+                            _count_pending_events, entity_type=et, source_id=source_id
                         ),
                     )
                     for et in tier_entity_types
@@ -721,7 +725,7 @@ async def normalize_after_sync(ctx: inngest.Context) -> Dict[str, Any]:
     Automatically processes all new raw events from a sync using soft mode.
     """
     try:
-        event_data = ctx.event.data
+        event_data: Dict[str, Any] = dict(ctx.event.data)
         source_id = event_data.get("source_id")
         total_items = event_data.get("total_items", 0)
 
@@ -761,7 +765,7 @@ async def normalize_after_sync(ctx: inngest.Context) -> Dict[str, Any]:
 async def normalize_after_revolut_sync(ctx: inngest.Context) -> Dict[str, Any]:
     """Trigger normalization after a Revolut sync completes."""
     try:
-        event_data = ctx.event.data
+        event_data: Dict[str, Any] = dict(ctx.event.data)
         source_id = event_data.get("source_id")
         total_items = event_data.get("total_items", 0)
 
@@ -800,7 +804,7 @@ async def normalize_after_revolut_sync(ctx: inngest.Context) -> Dict[str, Any]:
 async def normalize_after_paypal_sync(ctx: inngest.Context) -> Dict[str, Any]:
     """Trigger normalization after a PayPal sync completes."""
     try:
-        event_data = ctx.event.data
+        event_data: Dict[str, Any] = dict(ctx.event.data)
         source_id = event_data.get("source_id")
         total_items = event_data.get("total_items", 0)
 
@@ -839,7 +843,7 @@ async def normalize_after_paypal_sync(ctx: inngest.Context) -> Dict[str, Any]:
 async def normalize_after_shopify_sync(ctx: inngest.Context) -> Dict[str, Any]:
     """Trigger normalization after a Shopify sync completes."""
     try:
-        event_data = ctx.event.data
+        event_data: Dict[str, Any] = dict(ctx.event.data)
         source_id = event_data.get("source_id")
         total_items = event_data.get("total_items", 0)
 
@@ -878,7 +882,7 @@ async def normalize_after_shopify_sync(ctx: inngest.Context) -> Dict[str, Any]:
 async def normalize_after_zoho_calendar_sync(ctx: inngest.Context) -> Dict[str, Any]:
     """Trigger normalization after a Zoho Calendar sync completes."""
     try:
-        event_data = ctx.event.data
+        event_data: Dict[str, Any] = dict(ctx.event.data)
         source_id = event_data.get("source_id")
         total_items = event_data.get("total_items", 0)
 
@@ -934,7 +938,8 @@ async def reprocess_failed_events(ctx: inngest.Context) -> Dict[str, Any]:
         # Retry all failed events in parallel
         retry_results = await ctx.group.parallel(
             tuple(
-                lambda ev=ev: ctx.step.invoke(
+                partial(
+                    ctx.step.invoke,
                     f"retry-{ev['id'][:8]}",
                     function=normalize_raw_event,
                     data={"raw_event_id": ev["id"], "force": True},
@@ -993,9 +998,11 @@ async def reprocess_stuck_processing_events(ctx: inngest.Context) -> Dict[str, A
         # Reset all stuck events to pending in parallel, then reprocess in parallel
         await ctx.group.parallel(
             tuple(
-                lambda ev=ev: ctx.step.run(
+                partial(
+                    ctx.step.run,
                     f"reset-{ev['id'][:8]}",
-                    lambda e=ev["id"]: _reset_event_to_pending(e),
+                    _reset_event_to_pending,
+                    ev["id"],
                 )
                 for ev in stuck_events
             )
@@ -1003,7 +1010,8 @@ async def reprocess_stuck_processing_events(ctx: inngest.Context) -> Dict[str, A
 
         reprocess_results = await ctx.group.parallel(
             tuple(
-                lambda ev=ev: ctx.step.invoke(
+                partial(
+                    ctx.step.invoke,
                     f"reprocess-{ev['id'][:8]}",
                     function=normalize_raw_event,
                     data={"raw_event_id": ev["id"], "force": True},
@@ -1043,7 +1051,7 @@ async def reprocess_failed_manual(ctx: inngest.Context) -> Dict[str, Any]:
         - limit: Max events to reprocess (default 100)
     """
     try:
-        event_data = ctx.event.data
+        event_data: Dict[str, Any] = dict(ctx.event.data)
         source_id = event_data.get("source_id")
         limit = event_data.get("limit", 100)
 
@@ -1066,7 +1074,8 @@ async def reprocess_failed_manual(ctx: inngest.Context) -> Dict[str, Any]:
         # Retry all failed events in parallel
         retry_results = await ctx.group.parallel(
             tuple(
-                lambda ev=ev: ctx.step.invoke(
+                partial(
+                    ctx.step.invoke,
                     f"retry-{ev['id'][:8]}",
                     function=normalize_raw_event,
                     data={"raw_event_id": ev["id"], "force": True},
@@ -1146,8 +1155,10 @@ async def _get_provider_from_source(source_id: str) -> str:
         .eq("id", source_id)
         .execute()
     )
-    if result.data:
-        return result.data[0].get("provider", "unknown")
+    rows = cast(List[Dict[str, Any]], result.data)
+    if rows:
+        provider: str = rows[0].get("provider", "unknown")
+        return provider
     return "unknown"
 
 
