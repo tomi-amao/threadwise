@@ -1,16 +1,18 @@
-FROM langchain/langgraph-api:3.11-wolfi
+FROM langchain/langgraph-api:3.13-wolfi
 
 
 
 # -- Adding local package . --
-ADD . /deps/ai-agent
+ADD . /deps/ai_agent
 # -- End of local package . --
 
 # -- Installing all local dependencies --
-RUN PYTHONDONTWRITEBYTECODE=1 uv pip install --system --no-cache-dir -c /api/constraints.txt -e /deps/*
+RUN for dep in /deps/*; do             echo "Installing $dep";             if [ -d "$dep" ]; then                 echo "Installing $dep";                 (cd "$dep" && PYTHONDONTWRITEBYTECODE=1 uv pip install --system --no-cache-dir -c /api/constraints.txt -e .);             fi;         done
 # -- End of local dependencies install --
-ENV LANGGRAPH_HTTP='{"app": "/deps/ai-agent/src/ai_agent/main.py:app", "cors": {"allow_origins": ["*"], "allow_methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"], "allow_headers": ["*"]}}'
-ENV LANGSERVE_GRAPHS='{"threadwise-financial-agent": "/deps/ai-agent/agent.py:agent"}'
+ENV LANGGRAPH_AUTH='{"path": "/deps/ai_agent/src/ai_agent/auth.py:auth"}'
+ENV LANGGRAPH_HTTP='{"app": "ai_agent.main:app"}'
+ENV LANGGRAPH_CHECKPOINTER='{"ttl": {"strategy": "delete", "default_ttl": 129600, "sweep_interval_minutes": 60}}'
+ENV LANGSERVE_GRAPHS='{"threadwise-financial-agent": "ai_agent.agents.chat_graph:agent"}'
 
 
 
@@ -24,5 +26,4 @@ RUN rm -rf /usr/local/lib/python*/site-packages/pip* /usr/local/lib/python*/site
 RUN rm -rf /usr/lib/python*/site-packages/pip* /usr/lib/python*/site-packages/setuptools* /usr/lib/python*/site-packages/wheel* && find /usr/bin -name "pip*" -delete || true
 RUN uv pip uninstall --system pip setuptools wheel && rm /usr/bin/uv /usr/bin/uvx
 
-WORKDIR /deps/ai-agent
-
+WORKDIR /deps/ai_agent
