@@ -1,7 +1,9 @@
-node_modules
+**/node_modules
 .git
 .gitignore
-.env*
+# Never let local secrets into an image, at any depth.
+**/.env*
+!**/.env.example
 .vscode
 .idea
 *.log
@@ -17,3 +19,11 @@ README.md
 Makefile
 scripts/
 !scripts/init-db.sql
+
+# Build output and test artefacts
+**/build
+**/.react-router
+apps/chat-ui/e2e
+apps/chat-ui/playwright-report
+apps/chat-ui/test-results
+supabase/
