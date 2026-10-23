@@ -1,0 +1,102 @@
+name: Tag Release
+
+# Creates a version tag, and starts the Release workflow for it, whenever releasable
+# commits land on main and CI has passed on them.
+#
+# What counts (Conventional Commits, see .github/scripts/next-version.sh):
+#   feat                   -> minor     fix, perf, revert -> patch
+#   type!: / BREAKING CHANGE: footer -> major
+# docs, chore, ci, test, refactor, style and build alone do not release.
+#
+# Why this is a separate workflow and not part of release.yml: a tag pushed with the
+# default GITHUB_TOKEN does not start other workflows, so after tagging this workflow
+# dispatches release.yml itself (workflow_dispatch is the one event that is allowed).
+
+on:
+  workflow_run:
+    workflows: ['CI Pipeline']
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Only print the version that would be released'
+        required: false
+        default: true
+        type: boolean
+
+permissions:
+  contents: write # push the tag
+  actions: write # dispatch release.yml
+
+# Runs are serialised so two merges in quick succession cannot race for the same version.
+concurrency:
+  group: tag-release
+  cancel-in-progress: false
+
+jobs:
+  tag:
+    name: Tag and release
+    runs-on: ubuntu-latest
+    # Only a push to main whose CI passed (never a pull request run), or a manual run.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push')
+    env:
+      TARGET_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+      DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout (full history and tags)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+          fetch-depth: 0
+
+      - name: Only release the tip of main
+        id: tip
+        run: |
+          # Every run looks at all commits since the last tag, so skipping an older commit
+          # loses nothing: the run for the newest green commit releases them together.
+          git fetch --quiet origin main
+          if [[ "$(git rev-parse origin/main)" != "$TARGET_SHA" ]]; then
+            echo "$TARGET_SHA is not the tip of main any more; a newer run will handle it."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Work out the next version
+        id: version
+        if: steps.tip.outputs.skip != 'true'
+        run: |
+          VERSION="$(.github/scripts/next-version.sh "$TARGET_SHA")"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          if [[ -z "$VERSION" ]]; then
+            echo "### No release" >> "$GITHUB_STEP_SUMMARY"
+            echo "No feat, fix, perf or breaking commits since the last tag." >> "$GITHUB_STEP_SUMMARY"
+          elif git rev-parse --verify --quiet "refs/tags/$VERSION" > /dev/null; then
+            echo "Tag $VERSION already exists; nothing to do."
+            echo "version=" >> "$GITHUB_OUTPUT"
+          else
+            echo "### Next release: $VERSION" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Create and push the tag
+        id: tag
+        if: steps.version.outputs.version != '' && env.DRY_RUN != 'true'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$VERSION" "$TARGET_SHA" -m "Release $VERSION"
+          git push origin "refs/tags/$VERSION"
+          echo "Tagged $TARGET_SHA as $VERSION" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Start the Release workflow
+        if: steps.tag.outcome == 'success'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          gh workflow run release.yml --ref "$VERSION" -f version="$VERSION"
+          echo "Started release.yml for $VERSION" >> "$GITHUB_STEP_SUMMARY"

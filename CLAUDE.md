@@ -108,6 +108,26 @@ changed. Pre-commit hooks (root `.pre-commit-config.yaml`, invoked via Husky) ru
 Black/isort/flake8/mypy/bandit on changed Python files and Prettier/ESLint on
 everything else at commit time.
 
+### Releases
+
+Releases are automatic and driven by Conventional Commit messages on `main`; nobody creates tags by
+hand. `.github/workflows/tag-release.yml` runs after "CI Pipeline" succeeds on a push to `main`,
+works out the next version with `.github/scripts/next-version.sh`, pushes an annotated `vX.Y.Z` tag
+and dispatches `.github/workflows/release.yml`, which builds the artifacts, pushes the Docker images
+to ghcr.io and creates the GitHub Release. (It must dispatch `release.yml` itself, because a tag
+pushed with `GITHUB_TOKEN` does not trigger other workflows.)
+
+- `feat` bumps minor; `fix`, `perf` and `revert` bump patch; `type!:` or a `BREAKING CHANGE:` footer
+  bumps major. `docs`, `chore`, `ci`, `test`, `refactor`, `style` and `build` alone do not release.
+- The script reads the individual commits since the last tag and ignores merge commits, so it works
+  with merge, squash and rebase merges. With a squash merge the PR title is the commit message, which
+  `PR Automation / Validate PR Title` already requires to be `type(scope): Subject`.
+- With no tag yet the base is `v0.0.0`, so the first release is `v0.1.0`. The version lives in the
+  tag only; `package.json` and `pyproject.toml` versions are not updated by it.
+- Only the tip of `main` is released, and only when its CI passed; a release then covers every
+  commit since the previous tag. Preview with `.github/scripts/next-version.sh [commit]` or run "Tag
+  Release" manually with `dry_run` on. To release by hand, run "Release" with a `vX.Y.Z` version.
+
 ### Backend tests
 
 `apps/ai_agent/tests/` has 11 test files (about 260 tests). Run without a `.env`, as CI does, so
