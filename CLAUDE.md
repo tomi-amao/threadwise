@@ -27,22 +27,26 @@ path typos in `.gitignore`/`.pre-commit-config.yaml`, an empty stray
 `apps/ai_agent/__init__.py` that broke all of pytest, `bandit`/`flake8` not being
 real dependencies, a production-build-breaking route naming issue). What's left:
 
-- Frontend `typecheck` is clean, so a new error is yours. ESLint reports one error, in
-  `app/types/invoice.ts`, which nobody has touched: two Prettier versions are installed (the app's
-  CLI resolves 3.6, `eslint-plugin-prettier` resolves 3.9 from the root) and they format a union
-  type differently. Staging that file makes the `lint-staged` hook (`eslint --fix`) reformat it.
-- `apps/chat-ui/.env.local` is committed to git with live Supabase/LangSmith/Google
-  API keys despite `.gitignore` listing `**/.env.local` — the ignore rule was added
-  after the file was already tracked. Don't add new secrets to it, and flag this to
-  the user rather than assuming it's fine to leave real credentials in a tracked file.
-- Docker (`docker-compose*.yml`, `apps/ai_agent/Dockerfile`) is marked
-  experimental/non-functional (see the warning comment at the top of
-  `docker-compose.yml`) — stale paths from before an app rename, and the backend
-  Dockerfile is unmodified `langgraph build` template output. Not part of the
-  day-to-day dev workflow; don't try to fix it as a side effect of an unrelated task.
+- Frontend `typecheck`, Prettier and ESLint are all clean, so a new error is yours. Prettier is
+  pinned at the root (`^3.9.7`) and that is the version CI and the `lint-staged` hook use. The app's
+  own `node_modules/.bin/prettier` can resolve an older 3.6.x after a partial install and format a
+  few things differently, so run Prettier from the repo root (`pnpm exec prettier ...`), not from
+  `apps/chat-ui`, and `pnpm install` if the two disagree.
+- `apps/chat-ui/.env.local` held live Supabase/LangSmith/Google keys and was tracked until
+  2026-09-16 (`0a34506`); it is gitignored now. Those keys are **still in git history** (three
+  commits), so treat them as exposed: flag this to the user and make sure they were rotated rather
+  than assuming removing the file was enough. Never add real secrets to a tracked file.
+- Docker is only partly working. `apps/chat-ui/Dockerfile` is real (built and run locally): a multi-stage pnpm
+  build run with `react-router-serve` as the non-root `node` user, built from the repo root (see
+  Commands). `apps/ai_agent/Dockerfile` is unmodified `langgraph build` template output, and
+  `docker-compose*.yml` is stale (the `react-router` service points at
+  `./apps/react-router/Dockerfile`, which does not exist; the `ai-agent` paths mix `ai-agent` and
+  `ai_agent`). Compose is not part of the day-to-day workflow; don't fix it as a side effect of an
+  unrelated task. CI builds both images in `.github/workflows/docker.yml`.
 - Frontend tests are Playwright end-to-end tests (see "Frontend tests" below); there is no
-  unit-test runner. Backend has one test file (`apps/ai_agent/tests/test_normalization.py`); most
-  services are untested.
+  unit-test runner. Backend has 11 test files under `apps/ai_agent/tests/` (see "Backend tests"
+  below); the services behind `journal_service`, `account_mapping` and the integrations are mostly
+  untested.
 
 ## Commands (run from repo root unless noted)
 
@@ -81,9 +85,14 @@ poetry run pytest                                    # full suite
 poetry run pytest tests/test_normalization.py -v     # single file
 poetry run pytest -k test_name                       # single test by name
 poetry run black --check src/ tests/ && poetry run isort --check-only src/ tests/
-poetry run flake8 src/ tests/ --max-line-length=90    # CI uses 90, not the repo default
-poetry run mypy src/
+poetry run flake8 src/ tests/ --max-line-length=90    # CI uses 90; .flake8 ignores E501 (Black owns line length)
+poetry run mypy src/                                   # clean: a new error is yours
 poetry run bandit -r src/ -ll
+
+# Docker: the chat-ui image (build context is the repo root, not apps/chat-ui)
+docker build -f apps/chat-ui/Dockerfile -t threadwise-chat-ui .
+docker run --rm -p 3000:3000 -e SUPABASE_URL=... -e SUPABASE_PUBLISHABLE_KEY=... -e AI_AGENT_URL=... threadwise-chat-ui
+# only VITE_LANGGRAPH_API_URL / VITE_LANGGRAPH_ASSISTANT_ID are build args; Supabase and agent config are runtime-only
 
 # Root-level, cross-cutting
 pnpm lint                     # eslint . --fix (whole repo)
@@ -99,9 +108,15 @@ changed. Pre-commit hooks (root `.pre-commit-config.yaml`, invoked via Husky) ru
 Black/isort/flake8/mypy/bandit on changed Python files and Prettier/ESLint on
 everything else at commit time.
 
-Only `apps/ai_agent/tests/test_normalization.py` exists — most backend services
-(journal_service, account_mapping, mcp_client, etc.) and the entire frontend have
-no automated test coverage yet.
+### Backend tests
+
+`apps/ai_agent/tests/` has 11 test files (about 260 tests). Run without a `.env`, as CI does, so
+`tests/conftest.py` sets `INNGEST_DEV=1` — without it the Inngest SDK refuses to build a client and
+every module that imports the app fails at collection. Don't rely on your local `.env` for that.
+`test_scoped_sql.py`, `test_chat_agent.py`, `test_actions.py` and the evals use the local Supabase
+stack and the e2e seed manifest (`pnpm db:fresh`) and skip those parts when they are absent; CI runs
+them in `.github/workflows/backend-data.yml`. `journal_service`, `account_mapping`, the integrations
+and the whole frontend (outside Playwright) have little or no direct coverage.
 
 ## Architecture
 
@@ -226,8 +241,9 @@ from any single file.
 
 ## Environment
 
-- `.env.example` (root) documents the shared variable names; `apps/chat-ui/.env.local`
-  holds the frontend's actual dev values (see the tracked-secrets caveat above).
+- `.env.example` (root) documents the shared variable names. The frontend's actual dev values live
+  in untracked, gitignored files in `apps/chat-ui/` (`.env`, `.env.local`; Vite loads both), and
+  `pnpm db:fresh` writes `.env.test` there for the e2e run. See the exposed-keys caveat above.
 - Backend config is centralized in `apps/ai_agent/src/ai_agent/core/config.py`
   (`pydantic_settings.BaseSettings`) — see its own CLAUDE.md for the notable settings.
 - `.mcp.json` (repo root, gitignored, not tracked) configures the `github`,
