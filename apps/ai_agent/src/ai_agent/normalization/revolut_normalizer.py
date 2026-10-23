@@ -16,12 +16,12 @@ Key behaviours:
 
 import logging
 from decimal import Decimal
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, cast
 from uuid import UUID
 
 from .models import (
-    CanonicalBase,
     CanonicalBankAccount,
+    CanonicalBase,
     CanonicalFinancialTransaction,
     ExpenseEnrichment,
     TxnDirection,
@@ -234,9 +234,7 @@ class RevolutNormalizer(FinancialNormalizer):
             )
 
         except Exception as e:
-            logger.exception(
-                f"Error normalizing Revolut bank account {external_id}"
-            )
+            logger.exception(f"Error normalizing Revolut bank account {external_id}")
             return NormalizationResult.failure_result(
                 entity_type="bank_account",
                 external_id=external_id,
@@ -292,9 +290,7 @@ class RevolutNormalizer(FinancialNormalizer):
             )
 
         except Exception as e:
-            logger.exception(
-                "Error normalizing Revolut transaction %s", external_id
-            )
+            logger.exception("Error normalizing Revolut transaction %s", external_id)
             return NormalizationResult.failure_result(
                 entity_type="financial_transaction",
                 external_id=external_id,
@@ -350,7 +346,8 @@ class RevolutNormalizer(FinancialNormalizer):
         bill_amount_raw = primary_leg.get("bill_amount")
         bill_currency_raw = (
             str(primary_leg.get("bill_currency", "")).upper()
-            if primary_leg.get("bill_currency") else None
+            if primary_leg.get("bill_currency")
+            else None
         )
 
         if (
@@ -362,10 +359,10 @@ class RevolutNormalizer(FinancialNormalizer):
             # Foreign-currency card payment auto-converted to GBP:
             # use bill currency (e.g. USD) as primary, GBP leg as base.
             foreign_amount = Decimal(str(abs(bill_amount_raw)))
-            base_amount = amount_value                          # GBP settlement
+            base_amount = amount_value  # GBP settlement
             fx_rate = foreign_amount / base_amount if base_amount else None
-            currency = bill_currency_raw                        # e.g. "USD"
-            amount_value = foreign_amount                       # e.g. 1649.55
+            currency = bill_currency_raw  # e.g. "USD"
+            amount_value = foreign_amount  # e.g. 1649.55
         elif currency == base_currency:
             fx_rate = None
             base_amount = amount_value
@@ -385,10 +382,9 @@ class RevolutNormalizer(FinancialNormalizer):
         account_code, expense_category = self._categorize_expense(payload, txn_type)
 
         # Timestamps
-        occurred_at = (
-            self._parse_datetime(payload.get("completed_at"))
-            or self._parse_datetime(payload.get("created_at"))
-        )
+        occurred_at = self._parse_datetime(
+            payload.get("completed_at")
+        ) or self._parse_datetime(payload.get("created_at"))
         if not occurred_at:
             return NormalizationResult.failure_result(
                 entity_type="financial_transaction",
@@ -414,7 +410,9 @@ class RevolutNormalizer(FinancialNormalizer):
         )
         reference = payload.get("reference")
         if reference:
-            description = f"{description} | Ref: {reference}" if description else reference
+            description = (
+                f"{description} | Ref: {reference}" if description else reference
+            )
 
         # Metadata
         metadata: Dict[str, Any] = {
@@ -506,10 +504,9 @@ class RevolutNormalizer(FinancialNormalizer):
         Each leg gets ``external_transaction_id = <id>--leg-<ccy_lower>``
         so the UNIQUE constraint is satisfied.
         """
-        occurred_at = (
-            self._parse_datetime(payload.get("completed_at"))
-            or self._parse_datetime(payload.get("created_at"))
-        )
+        occurred_at = self._parse_datetime(
+            payload.get("completed_at")
+        ) or self._parse_datetime(payload.get("created_at"))
         if not occurred_at:
             return NormalizationResult.failure_result(
                 entity_type="financial_transaction",
@@ -523,7 +520,9 @@ class RevolutNormalizer(FinancialNormalizer):
         canonicals: List[CanonicalFinancialTransaction] = []
 
         # Identify the GBP leg for fx_rate derivation
-        gbp_leg = next((l for l in legs if l.get("currency", "").upper() == "GBP"), None)
+        gbp_leg = next(
+            (leg for leg in legs if leg.get("currency", "").upper() == "GBP"), None
+        )
         gbp_abs = Decimal(str(abs(gbp_leg["amount"]))) if gbp_leg else None
 
         for leg in legs:
@@ -612,7 +611,7 @@ class RevolutNormalizer(FinancialNormalizer):
             )
 
         return NormalizationResult.success_result(
-            canonical=canonicals,
+            canonical=cast(List[CanonicalBase], canonicals),
             entity_type="financial_transaction",
             external_id=external_id,
             raw_event_id=raw_event_id,
@@ -691,9 +690,7 @@ class RevolutNormalizer(FinancialNormalizer):
             if splits and isinstance(splits, list):
                 dominant_split = max(
                     (s for s in splits if isinstance(s, dict)),
-                    key=lambda s: float(
-                        (s.get("amount") or {}).get("amount", 0)
-                    ),
+                    key=lambda s: float((s.get("amount") or {}).get("amount", 0)),
                     default=None,
                 )
                 if dominant_split:
@@ -703,7 +700,10 @@ class RevolutNormalizer(FinancialNormalizer):
 
             # Skip enrichment for generic/unhelpful categories
             _SKIP_CATEGORY_NAMES = {"general expenses", "general expense"}
-            if split_category_name and split_category_name.lower() in _SKIP_CATEGORY_NAMES:
+            if (
+                split_category_name
+                and split_category_name.lower() in _SKIP_CATEGORY_NAMES
+            ):
                 logger.info(
                     f"Skipping expense enrichment for {external_id} "
                     f"- splits category '{split_category_name}' is not useful"
@@ -745,7 +745,6 @@ class RevolutNormalizer(FinancialNormalizer):
                 expense_category=expense_category,
                 account_code=account_code,
                 raw_event_id=raw_event_id,
-                warnings=warnings,
             )
 
             return NormalizationResult.success_result(
@@ -757,9 +756,7 @@ class RevolutNormalizer(FinancialNormalizer):
             )
 
         except Exception as e:
-            logger.exception(
-                f"Error normalizing Revolut expense {external_id}"
-            )
+            logger.exception(f"Error normalizing Revolut expense {external_id}")
             return NormalizationResult.failure_result(
                 entity_type="expense_enrichment",
                 external_id=external_id,
@@ -772,7 +769,7 @@ class RevolutNormalizer(FinancialNormalizer):
         revolut_category: Optional[str],
         merchant_name: str,
         mcc_code: Optional[str],
-    ) -> tuple[str, str]:
+    ) -> Tuple[Optional[str], Optional[str]]:
         """Map Revolut expense category to account code.
 
         Priority:

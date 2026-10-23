@@ -25,7 +25,6 @@ from typing import Any, Dict, List, Optional, Tuple, cast
 from uuid import UUID
 
 from ..core.supabase_client import get_supabase_client
-from ..normalization.utils import extract_id as _extract_id, extract_rows
 
 logger = logging.getLogger(__name__)
 
@@ -42,86 +41,86 @@ _header_accounts: set[str] = set()  # account numbers known to be headers
 # chart of accounts in Supabase.
 
 # ── Assets ──────────────────────────────────────────────────────────────────
-CASH_AND_EQUIVALENTS = "1010"       # Cash & Cash Equivalents
-PETTY_CASH = "1011"                 # Petty Cash
-MERCHANT_CLEARING = "1012"          # Merchant Services Clearing
-PAYPAL_CLEARING = "1013"            # PayPal Clearing Account (legacy — settlements)
-PAYPAL_ACCOUNT = "1019"             # PayPal Account (active PayPal balance)
-REVOLUT_GBP = "1014"                # Revolut GBP Account
-REVOLUT_EUR = "1015"                # Revolut EUR Account
-REVOLUT_USD = "1016"                # Revolut USD Account
-REVOLUT_SETTLEMENT = "1017"         # Revolut Settlement
-ACCOUNTS_RECEIVABLE = "1020"        # Accounts Receivable
-VAT_RECEIVABLE = "1050"             # VAT Receivable (input VAT)
+CASH_AND_EQUIVALENTS = "1010"  # Cash & Cash Equivalents
+PETTY_CASH = "1011"  # Petty Cash
+MERCHANT_CLEARING = "1012"  # Merchant Services Clearing
+PAYPAL_CLEARING = "1013"  # PayPal Clearing Account (legacy — settlements)
+PAYPAL_ACCOUNT = "1019"  # PayPal Account (active PayPal balance)
+REVOLUT_GBP = "1014"  # Revolut GBP Account
+REVOLUT_EUR = "1015"  # Revolut EUR Account
+REVOLUT_USD = "1016"  # Revolut USD Account
+REVOLUT_SETTLEMENT = "1017"  # Revolut Settlement
+ACCOUNTS_RECEIVABLE = "1020"  # Accounts Receivable
+VAT_RECEIVABLE = "1050"  # VAT Receivable (input VAT)
 
 # ── Liabilities ─────────────────────────────────────────────────────────────
-ACCOUNTS_PAYABLE = "2010"           # Accounts Payable
-VAT_PAYABLE = "2030"                # VAT Payable
+ACCOUNTS_PAYABLE = "2010"  # Accounts Payable
+VAT_PAYABLE = "2030"  # VAT Payable
 
 # ── Revenue ─────────────────────────────────────────────────────────────────
-REVENUE_ECOMMERCE = "4020"          # Sales — E-Commerce (DTC)
-SHIPPING_REVENUE = "4025"           # Shipping Revenue
-REVENUE_WHOLESALE = "4030"          # Sales — Wholesale
-REVENUE_MARKETPLACE = "4040"        # Sales — Marketplace
-SALES_RETURNS = "4110"              # Sales Returns & Allowances
-DISCOUNTS = "4120"                  # Discounts & Promotional Allowances
+REVENUE_ECOMMERCE = "4020"  # Sales — E-Commerce (DTC)
+SHIPPING_REVENUE = "4025"  # Shipping Revenue
+REVENUE_WHOLESALE = "4030"  # Sales — Wholesale
+REVENUE_MARKETPLACE = "4040"  # Sales — Marketplace
+SALES_RETURNS = "4110"  # Sales Returns & Allowances
+DISCOUNTS = "4120"  # Discounts & Promotional Allowances
 
 # ── Inventory (balance sheet) ───────────────────────────────────────────────
 # Stock bought on a supplier invoice is capitalised here rather than expensed,
 # and only reaches the P&L via COGS_FINISHED_GOODS when the item actually sells.
-INVENTORY_FINISHED_GOODS = "1033"   # Inventory — Finished Goods
-INVENTORY_TRIMS = "1034"            # Inventory — Trims & Accessories
-INVENTORY_SAMPLES = "1035"          # Inventory — Samples
+INVENTORY_FINISHED_GOODS = "1033"  # Inventory — Finished Goods
+INVENTORY_TRIMS = "1034"  # Inventory — Trims & Accessories
+INVENTORY_SAMPLES = "1035"  # Inventory — Samples
 
 # ── COGS ────────────────────────────────────────────────────────────────────
-COGS_FINISHED_GOODS = "5005"        # COGS — Finished Goods Sold (perpetual, per sale)
-COGS_FABRIC = "5010"                # COGS — Fabric & Materials
-COGS_CMT = "5020"                   # COGS — CMT / Manufacturing
-COGS_TRIMS = "5030"                 # COGS — Trims & Accessories
-COGS_PACKAGING = "5040"             # COGS — Labels & Packaging
-COGS_FREIGHT_IN = "5050"            # COGS — Freight Inbound
-COGS_DUTIES = "5060"                # COGS — Import Duties & Customs
-COGS_WRITE_DOWNS = "5070"           # COGS — Inventory Write-Downs
-COGS_COUNT_ADJUSTMENT = "5075"      # COGS — Inventory Count Adjustment (reconciling)
-COGS_SAMPLES = "5080"               # COGS — Sample Costs
-COGS_PRODUCTION_SUPPLIES = "5090"   # COGS — Production Supplies (Amazon/eBay)
-COGS_DEFAULT = "5010"               # Default COGS account
+COGS_FINISHED_GOODS = "5005"  # COGS — Finished Goods Sold (perpetual, per sale)
+COGS_FABRIC = "5010"  # COGS — Fabric & Materials
+COGS_CMT = "5020"  # COGS — CMT / Manufacturing
+COGS_TRIMS = "5030"  # COGS — Trims & Accessories
+COGS_PACKAGING = "5040"  # COGS — Labels & Packaging
+COGS_FREIGHT_IN = "5050"  # COGS — Freight Inbound
+COGS_DUTIES = "5060"  # COGS — Import Duties & Customs
+COGS_WRITE_DOWNS = "5070"  # COGS — Inventory Write-Downs
+COGS_COUNT_ADJUSTMENT = "5075"  # COGS — Inventory Count Adjustment (reconciling)
+COGS_SAMPLES = "5080"  # COGS — Sample Costs
+COGS_PRODUCTION_SUPPLIES = "5090"  # COGS — Production Supplies (Amazon/eBay)
+COGS_DEFAULT = "5010"  # Default COGS account
 
 # ── Selling Expenses ────────────────────────────────────────────────────────
-MARKETING = "6010"                  # Marketing & Advertising
-SOCIAL_MEDIA = "6011"               # Social Media & Influencer
-PAID_ADS = "6012"                   # Paid Search & Display Advertising
-OUTBOUND_SHIPPING = "6020"          # Outbound Freight & Shipping
-MARKETPLACE_FEES = "6030"           # Marketplace Fees & Commission
-RETURNS_HANDLING = "6040"           # Returns Handling & Processing
-PHOTOGRAPHY = "6080"                # Photography & Content Production
-PR_PRESS = "6090"                   # PR & Press
+MARKETING = "6010"  # Marketing & Advertising
+SOCIAL_MEDIA = "6011"  # Social Media & Influencer
+PAID_ADS = "6012"  # Paid Search & Display Advertising
+OUTBOUND_SHIPPING = "6020"  # Outbound Freight & Shipping
+MARKETPLACE_FEES = "6030"  # Marketplace Fees & Commission
+RETURNS_HANDLING = "6040"  # Returns Handling & Processing
+PHOTOGRAPHY = "6080"  # Photography & Content Production
+PR_PRESS = "6090"  # PR & Press
 
 # ── General & Administrative ────────────────────────────────────────────────
-RENT = "7030"                       # Rent & Occupancy
-UTILITIES = "7040"                  # Utilities
-INSURANCE = "7050"                  # Insurance
-PROFESSIONAL_FEES = "7060"          # Professional Fees
-ACCOUNTING_AUDIT = "7061"           # Accounting & Audit
-LEGAL_FEES = "7062"                 # Legal Fees
-TECHNOLOGY_SAAS = "7070"            # Technology & SaaS Subscriptions
-OFFICE_SUPPLIES = "7090"            # Office & General Supplies
-TRAVEL_ENTERTAINMENT = "7100"       # Travel & Entertainment
+RENT = "7030"  # Rent & Occupancy
+UTILITIES = "7040"  # Utilities
+INSURANCE = "7050"  # Insurance
+PROFESSIONAL_FEES = "7060"  # Professional Fees
+ACCOUNTING_AUDIT = "7061"  # Accounting & Audit
+LEGAL_FEES = "7062"  # Legal Fees
+TECHNOLOGY_SAAS = "7070"  # Technology & SaaS Subscriptions
+OFFICE_SUPPLIES = "7090"  # Office & General Supplies
+TRAVEL_ENTERTAINMENT = "7100"  # Travel & Entertainment
 
 # ── Other Expenses ──────────────────────────────────────────────────────────
-INTEREST_EXPENSE = "8010"           # Interest Expense
-BANK_CHARGES = "8020"               # Bank Charges & Payment Fees
-FX_LOSS = "8030"                    # Foreign Exchange Loss
-MISCELLANEOUS_EXPENSE = "8090"      # Miscellaneous Expense (pending reclassification)
+INTEREST_EXPENSE = "8010"  # Interest Expense
+BANK_CHARGES = "8020"  # Bank Charges & Payment Fees
+FX_LOSS = "8030"  # Foreign Exchange Loss
+MISCELLANEOUS_EXPENSE = "8090"  # Miscellaneous Expense (pending reclassification)
 
 # ── Other Income ──────────────────────────────────────────────────────────────
-BRAND_COLLAB_INCOME = "4230"        # Brand Collaboration & Content Income
+BRAND_COLLAB_INCOME = "4230"  # Brand Collaboration & Content Income
 
 # ── Equity ──────────────────────────────────────────────────────────────────
-OWNER_CAPITAL = "3050"              # Owner's Capital Introduced
+OWNER_CAPITAL = "3050"  # Owner's Capital Introduced
 
 # ── Director & Related Party ─────────────────────────────────────────────────
-DIRECTORS_LOAN = "2230"             # Director's Loan Account (DLA) — personal funds / top-ups
+DIRECTORS_LOAN = "2230"  # Director's Loan Account (DLA) — personal funds / top-ups
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -131,18 +130,18 @@ DIRECTORS_LOAN = "2230"             # Director's Loan Account (DLA) — personal
 # metadata.account_code.  This table translates them to real account numbers.
 
 NORMALISER_CODE_MAP: Dict[str, str] = {
-    "2000": ACCOUNTS_PAYABLE,            # → 2010
-    "5000": COGS_DEFAULT,                # → 5010
-    "5100": COGS_FABRIC,                 # → 5010  (materials)
-    "6100": MARKETING,                   # → 6010
-    "6200": OUTBOUND_SHIPPING,           # → 6020
-    "6300": TECHNOLOGY_SAAS,             # → 7070
-    "6400": RENT,                        # → 7030  (rent default; utilities handled via category)
-    "6500": PROFESSIONAL_FEES,           # → 7060  (payroll/contractors – closest match)
-    "6600": PROFESSIONAL_FEES,           # → 7060
-    "6700": INSURANCE,                   # → 7050
-    "6800": OFFICE_SUPPLIES,             # → 7090  (default for multi-use code)
-    "6900": BANK_CHARGES,                # → 8020
+    "2000": ACCOUNTS_PAYABLE,  # → 2010
+    "5000": COGS_DEFAULT,  # → 5010
+    "5100": COGS_FABRIC,  # → 5010  (materials)
+    "6100": MARKETING,  # → 6010
+    "6200": OUTBOUND_SHIPPING,  # → 6020
+    "6300": TECHNOLOGY_SAAS,  # → 7070
+    "6400": RENT,  # → 7030  (rent default; utilities handled via category)
+    "6500": PROFESSIONAL_FEES,  # → 7060  (payroll/contractors – closest match)
+    "6600": PROFESSIONAL_FEES,  # → 7060
+    "6700": INSURANCE,  # → 7050
+    "6800": OFFICE_SUPPLIES,  # → 7090  (default for multi-use code)
+    "6900": BANK_CHARGES,  # → 8020
     # 6999 is intentionally ABSENT – never use miscellaneous as a fallback
 }
 
@@ -154,25 +153,25 @@ NORMALISER_CODE_MAP: Dict[str, str] = {
 # specific than the legacy code, so we prefer it.
 
 CATEGORY_ACCOUNT_MAP: Dict[str, Optional[str]] = {
-    "product_purchase": COGS_DEFAULT,           # 5010
-    "materials": COGS_FABRIC,                   # 5010
-    "marketing": MARKETING,                     # 6010
-    "advertising": PAID_ADS,                    # 6012
-    "outbound_shipping": OUTBOUND_SHIPPING,     # 6020
-    "software": TECHNOLOGY_SAAS,                # 7070
-    "rent": RENT,                               # 7030
-    "utilities": UTILITIES,                     # 7040
-    "payroll": "7014",                          # Salaries — Management & Directors
-    "contractors": PROFESSIONAL_FEES,           # 7060
-    "professional_services": PROFESSIONAL_FEES, # 7060
-    "legal": LEGAL_FEES,                        # 7062
-    "accounting": ACCOUNTING_AUDIT,             # 7061
-    "insurance": INSURANCE,                     # 7050
-    "office_supplies": OFFICE_SUPPLIES,         # 7090
-    "travel": TRAVEL_ENTERTAINMENT,             # 7100
-    "meals": TRAVEL_ENTERTAINMENT,              # 7100
-    "entertainment": TRAVEL_ENTERTAINMENT,      # 7100
-    "bank_charges": BANK_CHARGES,               # 8020
+    "product_purchase": COGS_DEFAULT,  # 5010
+    "materials": COGS_FABRIC,  # 5010
+    "marketing": MARKETING,  # 6010
+    "advertising": PAID_ADS,  # 6012
+    "outbound_shipping": OUTBOUND_SHIPPING,  # 6020
+    "software": TECHNOLOGY_SAAS,  # 7070
+    "rent": RENT,  # 7030
+    "utilities": UTILITIES,  # 7040
+    "payroll": "7014",  # Salaries — Management & Directors
+    "contractors": PROFESSIONAL_FEES,  # 7060
+    "professional_services": PROFESSIONAL_FEES,  # 7060
+    "legal": LEGAL_FEES,  # 7062
+    "accounting": ACCOUNTING_AUDIT,  # 7061
+    "insurance": INSURANCE,  # 7050
+    "office_supplies": OFFICE_SUPPLIES,  # 7090
+    "travel": TRAVEL_ENTERTAINMENT,  # 7100
+    "meals": TRAVEL_ENTERTAINMENT,  # 7100
+    "entertainment": TRAVEL_ENTERTAINMENT,  # 7100
+    "bank_charges": BANK_CHARGES,  # 8020
     # "accounts_payable" is deliberately NOT mapped here. It's a raw bank-feed
     # category tag meaning roughly "paid to a vendor/bill", not a signal that
     # *we* ever recorded a matching liability — this pipeline journals bank
@@ -183,7 +182,7 @@ CATEGORY_ACCOUNT_MAP: Dict[str, Optional[str]] = {
     # COGS account. Falling through to keyword/vendor matching (None, same as
     # "miscellaneous") is what the other transactions carrying this same tag
     # already correctly do.
-    "miscellaneous": None,                      # Explicitly None — skip to keyword match
+    "miscellaneous": None,  # Explicitly None — skip to keyword match
 }
 
 # Single account used when no category, code, keyword, or type rule matches.
@@ -205,80 +204,181 @@ _KEYWORD_RULES: List[Tuple[re.Pattern, str]] = [
         re.compile(r"\b(46678xbqa|wellsuc7tb4|wellsucceed\s*embroidery)\b", re.I),
         INVENTORY_FINISHED_GOODS,
     ),
-    (re.compile(r"\b4filment\b", re.I), OUTBOUND_SHIPPING),  # Warehouse distributor shipping
-
+    (
+        re.compile(r"\b4filment\b", re.I),
+        OUTBOUND_SHIPPING,
+    ),  # Warehouse distributor shipping
     # ── Import fees / duties (UPS etc.) ─────────────────────────────────────
     (re.compile(r"\bups\b", re.I), COGS_DUTIES),  # UPS = import/customs fees
-
     # ── Shipping / logistics ────────────────────────────────────────────────
-    (re.compile(r"\b(dhl|fedex|dpd|evri|hermes|royal\s*mail|parcelforce|yodel)\b", re.I), OUTBOUND_SHIPPING),
-    (re.compile(r"\b(shipping|freight|courier|postage|parcel)\b", re.I), OUTBOUND_SHIPPING),
-
+    (
+        re.compile(
+            r"\b(dhl|fedex|dpd|evri|hermes|royal\s*mail|parcelforce|yodel)\b", re.I
+        ),
+        OUTBOUND_SHIPPING,
+    ),
+    (
+        re.compile(r"\b(shipping|freight|courier|postage|parcel)\b", re.I),
+        OUTBOUND_SHIPPING,
+    ),
     # ── SaaS / Software ────────────────────────────────────────────────────
     # openai\w* (not \bopenai\b) so merchant-descriptor variants like
     # "Openaiopcol Op" still match — a plain \b boundary requires a break
     # immediately after "openai", which garbled payment descriptors don't have.
-    (re.compile(r"\b(shopify|squarespace|notion|figma|canva|adobe|slack|zoom|dropbox|github|aws|google\s*workspace|microsoft|openai\w*|anthropic|vercel|netlify|heroku|lightricks)\b", re.I), TECHNOLOGY_SAAS),
-    (re.compile(r"\b(saas|subscription|software|app\s*store|google\s*play)\b", re.I), TECHNOLOGY_SAAS),
-
+    (
+        re.compile(
+            r"\b(shopify|squarespace|notion|figma|canva|adobe|slack|zoom|dropbox|github|aws|google\s*workspace|microsoft|openai\w*|anthropic|vercel|netlify|heroku|lightricks)\b",
+            re.I,
+        ),
+        TECHNOLOGY_SAAS,
+    ),
+    (
+        re.compile(r"\b(saas|subscription|software|app\s*store|google\s*play)\b", re.I),
+        TECHNOLOGY_SAAS,
+    ),
     # ── Marketing / Advertising ─────────────────────────────────────────────
     # moo = MOO.com, print marketing materials (business cards, stickers)
-    (re.compile(r"\b(google\s*ads?|meta\s*ads?|facebook|instagram|tiktok|mailchimp|klaviyo|hubspot|semrush|moo)\b", re.I), MARKETING),
+    (
+        re.compile(
+            r"\b(google\s*ads?|meta\s*ads?|facebook|instagram|tiktok|mailchimp|klaviyo|hubspot|semrush|moo)\b",
+            re.I,
+        ),
+        MARKETING,
+    ),
     (re.compile(r"\b(advertising|advert|promo|campaign|seo|ppc)\b", re.I), MARKETING),
-
     # ── Marketplace fees ────────────────────────────────────────────────────
-    (re.compile(r"\b(asos|amazon\s*(seller|fees)|ebay\s*(fees|managed))\b", re.I), MARKETPLACE_FEES),
-
+    (
+        re.compile(r"\b(asos|amazon\s*(seller|fees)|ebay\s*(fees|managed))\b", re.I),
+        MARKETPLACE_FEES,
+    ),
     # ── Materials / product sourcing ────────────────────────────────────────
-    (re.compile(r"\b(fabric|textile|yarn|thread|dye|trim|button|zipper|lining|leather)\b", re.I), COGS_FABRIC),
-    (re.compile(r"\b(manufacturer|cmt|garment\s*tech|factory|sampling)\b", re.I), COGS_CMT),
-    (re.compile(r"\b(packaging|label|tag|tissue\s*paper|box|poly\s*bag)\b", re.I), COGS_PACKAGING),
-
+    (
+        re.compile(
+            r"\b(fabric|textile|yarn|thread|dye|trim|button|zipper|lining|leather)\b",
+            re.I,
+        ),
+        COGS_FABRIC,
+    ),
+    (
+        re.compile(r"\b(manufacturer|cmt|garment\s*tech|factory|sampling)\b", re.I),
+        COGS_CMT,
+    ),
+    (
+        re.compile(r"\b(packaging|label|tag|tissue\s*paper|box|poly\s*bag)\b", re.I),
+        COGS_PACKAGING,
+    ),
     # ── Professional services ───────────────────────────────────────────────
-    (re.compile(r"\b(accountant|accounting|audit|bookkeep|xero|quickbooks|freeagent)\b", re.I), ACCOUNTING_AUDIT),
-    (re.compile(r"\b(solicitor|lawyer|legal|law\s*firm|ip\s*protect)\b", re.I), LEGAL_FEES),
-    (re.compile(r"\b(consult|advisory|freelance|contractor)\b", re.I), PROFESSIONAL_FEES),
-
+    (
+        re.compile(
+            r"\b(accountant|accounting|audit|bookkeep|xero|quickbooks|freeagent)\b",
+            re.I,
+        ),
+        ACCOUNTING_AUDIT,
+    ),
+    (
+        re.compile(r"\b(solicitor|lawyer|legal|law\s*firm|ip\s*protect)\b", re.I),
+        LEGAL_FEES,
+    ),
+    (
+        re.compile(r"\b(consult|advisory|freelance|contractor)\b", re.I),
+        PROFESSIONAL_FEES,
+    ),
     # ── Office / general ────────────────────────────────────────────────────
-    (re.compile(r"\b(stationery|printing|ink|paper|office\s*depot|staples)\b", re.I), OFFICE_SUPPLIES),
-    (re.compile(r"\b(amazon|ebay)\b", re.I), COGS_PRODUCTION_SUPPLIES),  # Amazon/eBay = production supplies
-
+    (
+        re.compile(r"\b(stationery|printing|ink|paper|office\s*depot|staples)\b", re.I),
+        OFFICE_SUPPLIES,
+    ),
+    (
+        re.compile(r"\b(amazon|ebay)\b", re.I),
+        COGS_PRODUCTION_SUPPLIES,
+    ),  # Amazon/eBay = production supplies
     # ── Travel & entertainment ──────────────────────────────────────────────
     # lime = e-scooter/bike hire, same category as uber/taxi below.
-    (re.compile(r"\b(hotel|airbnb|booking\.com|agoda|flight|airline|trainline|uber|taxi|cab|lime)\b", re.I), TRAVEL_ENTERTAINMENT),
-    (re.compile(r"\b(british\s*airways|easyjet|ryanair|jet2|tui|heathrow|gatwick|eurostar|avanti|lner|gwr)\b", re.I), TRAVEL_ENTERTAINMENT),
-    (re.compile(r"\b(restaurant|cafe|coffee|deliveroo|just\s*eat|uber\s*eats)\b", re.I), TRAVEL_ENTERTAINMENT),
-
+    (
+        re.compile(
+            r"\b(hotel|airbnb|booking\.com|agoda|flight|airline|trainline|uber|taxi|cab|lime)\b",
+            re.I,
+        ),
+        TRAVEL_ENTERTAINMENT,
+    ),
+    (
+        re.compile(
+            r"\b(british\s*airways|easyjet|ryanair|jet2|tui|heathrow|gatwick|eurostar|avanti|lner|gwr)\b",
+            re.I,
+        ),
+        TRAVEL_ENTERTAINMENT,
+    ),
+    (
+        re.compile(
+            r"\b(restaurant|cafe|coffee|deliveroo|just\s*eat|uber\s*eats)\b", re.I
+        ),
+        TRAVEL_ENTERTAINMENT,
+    ),
     # ── Rent / occupancy ────────────────────────────────────────────────────
     (re.compile(r"\b(rent|lease|landlord|rates|council\s*tax)\b", re.I), RENT),
-
     # ── Utilities ───────────────────────────────────────────────────────────
-    (re.compile(r"\b(electric|gas|water|energy|british\s*gas|edf|octopus|bulb)\b", re.I), UTILITIES),
-
+    (
+        re.compile(
+            r"\b(electric|gas|water|energy|british\s*gas|edf|octopus|bulb)\b", re.I
+        ),
+        UTILITIES,
+    ),
     # ── Insurance ───────────────────────────────────────────────────────────
-    (re.compile(r"\b(insurance|insure|hiscox|simply\s*business|zurich)\b", re.I), INSURANCE),
-
+    (
+        re.compile(r"\b(insurance|insure|hiscox|simply\s*business|zurich)\b", re.I),
+        INSURANCE,
+    ),
     # ── Bank charges / fees ─────────────────────────────────────────────────
-    (re.compile(r"\b(bank\s*(fee|charge)|payment\s*fee|card\s*fee|stripe\s*fee|plan\s*fee)\b", re.I), BANK_CHARGES),
+    (
+        re.compile(
+            r"\b(bank\s*(fee|charge)|payment\s*fee|card\s*fee|stripe\s*fee|plan\s*fee)\b",
+            re.I,
+        ),
+        BANK_CHARGES,
+    ),
     (re.compile(r"\b(capital\s*on\s*tap|amex|revolut|monzo)\b", re.I), BANK_CHARGES),
-
     # ── Photography / content production ──────────────────────────────────────
     # Vendor names: Park Cameras, Cineden, LightingByJoe, Luminary VFX, Epitome, Refined Imagery, CameraWorld, Blaze Image
-    (re.compile(r"\b(park\s*cameras|cineden|lightingbyjoe|luminary\s*vfx|epitome|refined\s*imagery|cameraworld|blaze\s*image)\b", re.I), PHOTOGRAPHY),
+    (
+        re.compile(
+            r"\b(park\s*cameras|cineden|lightingbyjoe|luminary\s*vfx|epitome|refined\s*imagery|cameraworld|blaze\s*image)\b",
+            re.I,
+        ),
+        PHOTOGRAPHY,
+    ),
     # Film crew roles & shoot-day terms
-    (re.compile(r"\b(dop|d\.o\.p|director\s*of\s*photography|sound\s*recordist|sound\s*design|gaffer|1st\s*ac|art\s*direction|lighting\s*assistant)\b", re.I), PHOTOGRAPHY),
+    (
+        re.compile(
+            r"\b(dop|d\.o\.p|director\s*of\s*photography|sound\s*recordist|sound\s*design|gaffer|1st\s*ac|art\s*direction|lighting\s*assistant)\b",
+            re.I,
+        ),
+        PHOTOGRAPHY,
+    ),
     # General production & shoot keywords
-    (re.compile(r"\b(vfx|visual\s*fx|camera\s*kit|camera\s*equip|backdrop|production\s*rate|production\s*exp|film\s*shoot|shoot|tba\s*film|tba\s*cap|studio\s*hire|studio\s*rental)\b", re.I), PHOTOGRAPHY),
+    (
+        re.compile(
+            r"\b(vfx|visual\s*fx|camera\s*kit|camera\s*equip|backdrop|production\s*rate|production\s*exp|film\s*shoot|shoot|tba\s*film|tba\s*cap|studio\s*hire|studio\s*rental)\b",
+            re.I,
+        ),
+        PHOTOGRAPHY,
+    ),
     # Original photography & general content terms
-    (re.compile(r"\b(photograph|model\s*agency|lookbook|videograph|content\s*creat)\b", re.I), PHOTOGRAPHY),
-
+    (
+        re.compile(
+            r"\b(photograph|model\s*agency|lookbook|videograph|content\s*creat)\b", re.I
+        ),
+        PHOTOGRAPHY,
+    ),
     # ── PR / Press ──────────────────────────────────────────────────────────
-    (re.compile(r"\b(pr\s*agency|press|media\s*relation|vogue|elle|conde\s*nast)\b", re.I), PR_PRESS),
-
+    (
+        re.compile(
+            r"\b(pr\s*agency|press|media\s*relation|vogue|elle|conde\s*nast)\b", re.I
+        ),
+        PR_PRESS,
+    ),
     # ── Tax payments (HMRC) ─────────────────────────────────────────────────
     (re.compile(r"\bhmrc\b", re.I), VAT_PAYABLE),  # VAT/Corp tax → liability
     (re.compile(r"\b(corporation\s*tax|vat\s*payment)\b", re.I), VAT_PAYABLE),
-
     # ── Interest ────────────────────────────────────────────────────────────
     (re.compile(r"\b(interest|loan\s*repay|overdraft)\b", re.I), INTEREST_EXPENSE),
 ]

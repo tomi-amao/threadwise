@@ -645,8 +645,8 @@ def local_app(monkeypatch, seed):
                 password,
             ),
         )
-    except httpx.HTTPError:
-        pytest.skip("could not sign in to the local stack")
+    except httpx.HTTPError as exc:
+        raise pytest.skip.Exception("could not sign in to the local stack") from exc
     yield tokens
     core_auth._jwks_client.cache_clear()
     supabase_client.get_supabase_client.cache_clear()

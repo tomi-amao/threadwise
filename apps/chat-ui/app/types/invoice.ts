@@ -13,13 +13,7 @@
 export type InvoiceType = 'SALE' | 'PURCHASE';
 
 export type InvoiceStatus =
-  | 'DRAFT'
-  | 'OPEN'
-  | 'PAID'
-  | 'PARTIALLY_PAID'
-  | 'OVERDUE'
-  | 'CANCELLED'
-  | 'VOID';
+  'DRAFT' | 'OPEN' | 'PAID' | 'PARTIALLY_PAID' | 'OVERDUE' | 'CANCELLED' | 'VOID';
 
 export interface InvoiceContact {
   id: string;

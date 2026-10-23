@@ -4,20 +4,19 @@ Orchestrates bulk loading from Revolut Business API endpoints
 with paginated extraction and raw event storage.
 """
 
-import asyncio
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
 import httpx
 import inngest
 from inngest.experimental import realtime
 
-from .config import get_client
-from .channels import get_sync_channel, SyncProgressData, SyncStatusData
-from ...services.external_sync_service import sync_service
 from ...integrations.common import resolve_sync_since
-from ...integrations.revolut import RevolutAdapter, ENDPOINTS
+from ...integrations.revolut import ENDPOINTS, RevolutAdapter
+from ...services.external_sync_service import sync_service
+from .channels import SyncProgressData, SyncStatusData, get_sync_channel
+from .config import get_client, utc_now_iso
 
 logger = logging.getLogger(__name__)
 
@@ -34,11 +33,11 @@ PAGE_DELAY_SECONDS = 1.0
 )
 async def revolut_sync_all(ctx: inngest.Context) -> Dict[str, Any]:
     """Orchestrate a full Revolut sync for all endpoints."""
-    source_id: Optional[str] = None
+    source_id: str = ""
 
     try:
-        event_data = ctx.event.data
-        source_id = event_data.get("source_id")
+        event_data: Dict[str, Any] = dict(ctx.event.data)
+        source_id = event_data.get("source_id") or ""
         force_full = bool(event_data.get("force_full", False))
 
         if not source_id:
@@ -93,17 +92,13 @@ async def revolut_sync_all(ctx: inngest.Context) -> Dict[str, Any]:
                     status="syncing",
                     endpoints_completed=completed_count,
                     endpoints_total=len(ENDPOINTS),
-                    total_items=sum(
-                        r.get("items_stored", 0) for r in results.values()
-                    ),
+                    total_items=sum(r.get("items_stored", 0) for r in results.values()),
                     error=None,
                     timestamp=datetime.now().isoformat(),
                 ),
             )
 
-            await ctx.step.sleep(
-                f"delay-after-{endpoint}", timedelta(seconds=2)
-            )
+            await ctx.step.sleep(f"delay-after-{endpoint}", timedelta(seconds=2))
 
         await ctx.step.run(
             "update-sync-status",
@@ -149,13 +144,14 @@ async def revolut_sync_all(ctx: inngest.Context) -> Dict[str, Any]:
         }
 
     except Exception as e:
+        error_text = str(e)
         ctx.logger.error(f"Error in Revolut sync: {str(e)}")
 
         if source_id:
             await ctx.step.run(
                 "update-sync-status",
                 lambda: sync_service.update_sync_status(
-                    source_id, "error", error=str(e)
+                    source_id, "error", error=error_text
                 ),
             )
 
@@ -175,9 +171,7 @@ async def revolut_sync_all(ctx: inngest.Context) -> Dict[str, Any]:
                     ),
                 )
             except Exception as pub_err:
-                ctx.logger.error(
-                    f"Failed to publish error status: {str(pub_err)}"
-                )
+                ctx.logger.error(f"Failed to publish error status: {str(pub_err)}")
 
         raise
 
@@ -197,8 +191,8 @@ async def revolut_sync_endpoint(ctx: inngest.Context) -> Dict[str, Any]:
     endpoint: str = "unknown"
 
     try:
-        event_data = ctx.event.data
-        source_id = event_data.get("source_id")
+        event_data: Dict[str, Any] = dict(ctx.event.data)
+        source_id: str = event_data.get("source_id") or ""
         endpoint = event_data.get("endpoint", "unknown")
         resume_cursor = event_data.get("cursor")
         force_full = bool(event_data.get("force_full", False))
@@ -217,7 +211,7 @@ async def revolut_sync_endpoint(ctx: inngest.Context) -> Dict[str, Any]:
         run_started_at = datetime.fromisoformat(
             await ctx.step.run(
                 "get-run-start-time",
-                lambda: datetime.now(timezone.utc).isoformat(),
+                utc_now_iso,
             )
         )
 
@@ -356,11 +350,12 @@ async def revolut_sync_endpoint(ctx: inngest.Context) -> Dict[str, Any]:
         }
 
     except Exception as e:
+        error_text = str(e)
         ctx.logger.error(f"Error syncing Revolut {endpoint}: {str(e)}")
 
         try:
-            event_data = ctx.event.data
-            source_id = event_data.get("source_id")
+            event_data = dict(ctx.event.data)
+            source_id = event_data.get("source_id") or ""
             if source_id:
                 channel = get_sync_channel(source_id)
                 await realtime.publish(
@@ -380,13 +375,11 @@ async def revolut_sync_endpoint(ctx: inngest.Context) -> Dict[str, Any]:
                 await ctx.step.run(
                     "set-sync-watermark-error",
                     lambda: sync_service.set_sync_watermark(
-                        source_id, endpoint, status="error", error=str(e)
+                        source_id, endpoint, status="error", error=error_text
                     ),
                 )
         except Exception as pub_err:
-            ctx.logger.error(
-                f"Failed to publish error status: {str(pub_err)}"
-            )
+            ctx.logger.error(f"Failed to publish error status: {str(pub_err)}")
 
         # 401/403 are permanent - the same key will fail every retry, so
         # don't burn ~100s of exponential backoff (retries=3) on a call

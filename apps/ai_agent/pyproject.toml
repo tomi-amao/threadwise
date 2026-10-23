@@ -57,6 +57,10 @@ warn_unused_configs = true
 pythonpath = ["src"]
 testpaths = ["tests"]
 
+[tool.coverage.run]
+# The coverage-comment action reads .coverage on another path and needs relative files.
+relative_files = true
+
 [tool.poetry.group.dev.dependencies]
 black = "^26.3.0"
 isort = "^6.0.1"

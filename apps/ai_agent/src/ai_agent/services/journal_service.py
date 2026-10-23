@@ -20,7 +20,7 @@ import logging
 import re
 from datetime import datetime, timezone
 from decimal import Decimal
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, cast
 from uuid import UUID
 
 from langchain.chat_models import init_chat_model
@@ -28,7 +28,7 @@ from pydantic import BaseModel, Field
 
 from ..core.config import settings
 from ..core.supabase_client import get_supabase_client
-from ..normalization.utils import extract_id as _extract_id, extract_row, extract_rows
+from ..normalization.utils import extract_row, extract_rows
 from . import account_mapping as accts
 
 logger = logging.getLogger(__name__)
@@ -90,6 +90,7 @@ def _compute_gbp_equivalent(txn: dict, native_amount: Decimal) -> Optional[float
 
 class JournalError(Exception):
     """Raised when journal operations fail."""
+
     pass
 
 
@@ -139,13 +140,15 @@ class JournalService:
         )
         return extract_rows(result)
 
-    async def seed_chart_of_accounts(self, entity_id: Optional[UUID] = None) -> Dict[str, Any]:
+    async def seed_chart_of_accounts(
+        self, entity_id: Optional[UUID] = None
+    ) -> Dict[str, Any]:
         """Seed the standard chart of accounts.
 
         Calls the seed_chart_of_accounts SQL function (no longer entity-scoped).
         The entity_id parameter is kept for backward compat but is ignored.
         """
-        result = await asyncio.to_thread(
+        await asyncio.to_thread(
             lambda: self.client.rpc(
                 "seed_chart_of_accounts",
                 {},
@@ -155,7 +158,10 @@ class JournalService:
         accounts = await self.get_chart_of_accounts()
         return {
             "accounts_created": len(accounts),
-            "accounts": [{"account_number": a["account_number"], "name": a["name"]} for a in accounts],
+            "accounts": [
+                {"account_number": a["account_number"], "name": a["name"]}
+                for a in accounts
+            ],
         }
 
     async def _get_account_id(
@@ -306,57 +312,71 @@ class JournalService:
 
         # DEBIT clearing for the expected net settlement from the gateway.
         if clearing_amount > 0:
-            line_items.append({
-                "account_id": str(clearing_id),
-                "debit": float(clearing_amount),
-                "credit": 0,
-                "currency": currency,
-                "description": f"Clearing for payment on order {order_ref}",
-            })
+            line_items.append(
+                {
+                    "account_id": str(clearing_id),
+                    "debit": float(clearing_amount),
+                    "credit": 0,
+                    "currency": currency,
+                    "description": f"Clearing for payment on order {order_ref}",
+                }
+            )
 
         # DEBIT gateway fees to bank charges at accrual time.
         if fee_amount > 0:
-            line_items.append({
-                "account_id": str(fees_id),
-                "debit": float(fee_amount),
-                "credit": 0,
-                "currency": currency,
-                "description": f"Processing fee for payment on order {order_ref}",
-            })
+            line_items.append(
+                {
+                    "account_id": str(fees_id),
+                    "debit": float(fee_amount),
+                    "credit": 0,
+                    "currency": currency,
+                    "description": f"Processing fee for payment on order {order_ref}",
+                }
+            )
 
         # CREDIT revenue (subtotal - discounts)
         if revenue_amount > 0:
-            line_items.append({
-                "account_id": str(revenue_id),
-                "debit": 0,
-                "credit": float(revenue_amount),
-                "currency": currency,
-                "description": f"Revenue for order {order_ref}",
-            })
+            line_items.append(
+                {
+                    "account_id": str(revenue_id),
+                    "debit": 0,
+                    "credit": float(revenue_amount),
+                    "currency": currency,
+                    "description": f"Revenue for order {order_ref}",
+                }
+            )
 
         # CREDIT shipping revenue (separate account for reporting)
         if shipping_total > 0:
-            line_items.append({
-                "account_id": str(shipping_rev_id),
-                "debit": 0,
-                "credit": float(shipping_total),
-                "currency": currency,
-                "description": f"Shipping revenue for order {order_ref}",
-            })
+            line_items.append(
+                {
+                    "account_id": str(shipping_rev_id),
+                    "debit": 0,
+                    "credit": float(shipping_total),
+                    "currency": currency,
+                    "description": f"Shipping revenue for order {order_ref}",
+                }
+            )
 
         # CREDIT tax payable
         if tax_total > 0:
-            line_items.append({
-                "account_id": str(tax_id),
-                "debit": 0,
-                "credit": float(tax_total),
-                "currency": currency,
-                "description": f"Tax for order {order_ref}",
-            })
+            line_items.append(
+                {
+                    "account_id": str(tax_id),
+                    "debit": 0,
+                    "credit": float(tax_total),
+                    "currency": currency,
+                    "description": f"Tax for order {order_ref}",
+                }
+            )
 
         # Validate balance
-        total_debit = sum(Decimal(str(li["debit"])) for li in line_items)
-        total_credit = sum(Decimal(str(li["credit"])) for li in line_items)
+        total_debit = sum(
+            (Decimal(str(li["debit"])) for li in line_items), Decimal("0")
+        )
+        total_credit = sum(
+            (Decimal(str(li["credit"])) for li in line_items), Decimal("0")
+        )
         if abs(total_debit - total_credit) > BALANCE_TOLERANCE:
             raise JournalError(
                 f"Accrual journal does not balance: debit={total_debit} credit={total_credit}"
@@ -405,7 +425,9 @@ class JournalService:
         """
         txn = await self._fetch_financial_transaction(str(financial_transaction_id))
         if not txn:
-            raise JournalError(f"Financial transaction not found: {financial_transaction_id}")
+            raise JournalError(
+                f"Financial transaction not found: {financial_transaction_id}"
+            )
 
         # Guard: only inbound transfers from gateways
         direction = txn.get("direction", "")
@@ -521,7 +543,9 @@ class JournalService:
         """
         txn = await self._fetch_financial_transaction(str(financial_transaction_id))
         if not txn:
-            raise JournalError(f"Financial transaction not found: {financial_transaction_id}")
+            raise JournalError(
+                f"Financial transaction not found: {financial_transaction_id}"
+            )
 
         # Idempotency
         existing = await self._find_journal(
@@ -567,7 +591,9 @@ class JournalService:
         # Detect personal funding vs. merchant/third-party
         is_personal = self._is_personal_funding(description_text, counterparty, txn)
         is_wholesale = self._is_wholesale_payment(description_text, counterparty, txn)
-        is_brand_collab = self._is_brand_collaboration(description_text, counterparty, txn)
+        is_brand_collab = self._is_brand_collaboration(
+            description_text, counterparty, txn
+        )
 
         if is_personal:
             credit_code = accts.DIRECTORS_LOAN
@@ -581,7 +607,9 @@ class JournalService:
             journal_desc = f"Wholesale receipt: {counterparty or description_text}"
         elif is_brand_collab:
             credit_code = accts.BRAND_COLLAB_INCOME
-            credit_label = f"Brand collaboration income: {counterparty or description_text}"
+            credit_label = (
+                f"Brand collaboration income: {counterparty or description_text}"
+            )
             journal_desc = f"Brand collaboration: {counterparty or description_text}"
         else:
             credit_code = accts.REVENUE_ECOMMERCE
@@ -593,7 +621,9 @@ class JournalService:
         journal_status = "posted"
         if is_foreign_currency and fx_rate is None:
             journal_status = "draft"
-            journal_desc += f" [DRAFT — FX rate not confirmed for {raw_currency}]"  # noqa: E501
+            journal_desc += (
+                f" [DRAFT — FX rate not confirmed for {raw_currency}]"  # noqa: E501
+            )
 
         credit_id = await self._get_account_id(entity_id, credit_code)
 
@@ -662,10 +692,15 @@ class JournalService:
         """
         txn = await self._fetch_financial_transaction(str(financial_transaction_id))
         if not txn:
-            raise JournalError(f"Financial transaction not found: {financial_transaction_id}")
+            raise JournalError(
+                f"Financial transaction not found: {financial_transaction_id}"
+            )
 
         existing = await self._find_journal(
-            entity_id, "financial_transaction", financial_transaction_id, "sales_receipt"
+            entity_id,
+            "financial_transaction",
+            financial_transaction_id,
+            "sales_receipt",
         )
         if existing and not force:
             return existing
@@ -700,8 +735,12 @@ class JournalService:
         cash_id = await self._get_account_id(entity_id, cash_code)
 
         # Detect brand collab receipts that arrived via PayPal direct
-        is_brand_collab = self._is_brand_collaboration(description_text, counterparty, txn)
-        revenue_account_code = accts.BRAND_COLLAB_INCOME if is_brand_collab else accts.REVENUE_ECOMMERCE
+        is_brand_collab = self._is_brand_collaboration(
+            description_text, counterparty, txn
+        )
+        revenue_account_code = (
+            accts.BRAND_COLLAB_INCOME if is_brand_collab else accts.REVENUE_ECOMMERCE
+        )
         revenue_id = await self._get_account_id(entity_id, revenue_account_code)
         fees_id = await self._get_account_id(entity_id, accts.BANK_CHARGES)
 
@@ -719,13 +758,17 @@ class JournalService:
             )
         # Extract fee from metadata
         fee_info = meta.get("fee_amount") or {}
-        fee_amount = abs(Decimal(str(fee_info.get("value", "0")))) if fee_info else Decimal("0")
+        fee_amount = (
+            abs(Decimal(str(fee_info.get("value", "0")))) if fee_info else Decimal("0")
+        )
 
         gross_revenue = amount + fee_amount
 
         # GBP equivalent for non-GBP PayPal receipts
         gbp_equiv = _compute_gbp_equivalent(txn, amount)
-        gbp_equiv_field: Dict[str, Any] = {"gbp_equivalent": gbp_equiv} if gbp_equiv is not None else {}
+        gbp_equiv_field: Dict[str, Any] = (
+            {"gbp_equivalent": gbp_equiv} if gbp_equiv is not None else {}
+        )
 
         line_items: List[Dict[str, Any]] = [
             {
@@ -739,28 +782,47 @@ class JournalService:
         ]
 
         if fee_amount > 0:
-            line_items.append({
-                "account_id": str(fees_id),
-                "debit": float(fee_amount),
-                "credit": 0,
-                "currency": currency,
-                "description": f"PayPal fee: {counterparty or description_text}",
-                **({"gbp_equivalent": _compute_gbp_equivalent(txn, fee_amount)} if gbp_equiv is not None else {}),
-            })
+            line_items.append(
+                {
+                    "account_id": str(fees_id),
+                    "debit": float(fee_amount),
+                    "credit": 0,
+                    "currency": currency,
+                    "description": f"PayPal fee: {counterparty or description_text}",
+                    **(
+                        {"gbp_equivalent": _compute_gbp_equivalent(txn, fee_amount)}
+                        if gbp_equiv is not None
+                        else {}
+                    ),
+                }
+            )
 
-        gbp_equiv_gross = round(float(gbp_equiv) + float(_compute_gbp_equivalent(txn, fee_amount) or 0), 4) if gbp_equiv is not None else None
-        line_items.append({
-            "account_id": str(revenue_id),
-            "debit": 0,
-            "credit": float(gross_revenue),
-            "currency": currency,
-            "description": (
-                f"Brand collaboration income: {counterparty or description_text}"
-                if is_brand_collab
-                else f"Sales revenue: {counterparty or description_text}"
-            ),
-            **({"gbp_equivalent": gbp_equiv_gross} if gbp_equiv_gross is not None else {}),
-        })
+        gbp_equiv_gross = (
+            round(
+                float(gbp_equiv) + float(_compute_gbp_equivalent(txn, fee_amount) or 0),
+                4,
+            )
+            if gbp_equiv is not None
+            else None
+        )
+        line_items.append(
+            {
+                "account_id": str(revenue_id),
+                "debit": 0,
+                "credit": float(gross_revenue),
+                "currency": currency,
+                "description": (
+                    f"Brand collaboration income: {counterparty or description_text}"
+                    if is_brand_collab
+                    else f"Sales revenue: {counterparty or description_text}"
+                ),
+                **(
+                    {"gbp_equivalent": gbp_equiv_gross}
+                    if gbp_equiv_gross is not None
+                    else {}
+                ),
+            }
+        )
 
         return await self._create_journal(
             entity_id=entity_id,
@@ -795,7 +857,9 @@ class JournalService:
         """
         txn = await self._fetch_financial_transaction(str(financial_transaction_id))
         if not txn:
-            raise JournalError(f"Financial transaction not found: {financial_transaction_id}")
+            raise JournalError(
+                f"Financial transaction not found: {financial_transaction_id}"
+            )
 
         existing = await self._find_journal(
             entity_id, "financial_transaction", financial_transaction_id, "refund"
@@ -909,10 +973,15 @@ class JournalService:
         """
         txn = await self._fetch_financial_transaction(str(financial_transaction_id))
         if not txn:
-            raise JournalError(f"Financial transaction not found: {financial_transaction_id}")
+            raise JournalError(
+                f"Financial transaction not found: {financial_transaction_id}"
+            )
 
         existing = await self._find_journal(
-            entity_id, "financial_transaction", financial_transaction_id, "fx_conversion"
+            entity_id,
+            "financial_transaction",
+            financial_transaction_id,
+            "fx_conversion",
         )
         if existing and not force:
             return existing
@@ -971,21 +1040,25 @@ class JournalService:
         ]
 
         if fee > 0:
-            line_items.append({
-                "account_id": str(fx_loss_id),
-                "debit": float(fee),
-                "credit": 0,
-                "currency": "GBP",
-                "description": f"FX conversion fee",
-            })
+            line_items.append(
+                {
+                    "account_id": str(fx_loss_id),
+                    "debit": float(fee),
+                    "credit": 0,
+                    "currency": "GBP",
+                    "description": "FX conversion fee",
+                }
+            )
 
-        line_items.append({
-            "account_id": str(source_id),
-            "debit": 0,
-            "credit": float(source_amount),
-            "currency": "GBP",
-            "description": f"FX conversion source: {source_currency}",
-        })
+        line_items.append(
+            {
+                "account_id": str(source_id),
+                "debit": 0,
+                "credit": float(source_amount),
+                "currency": "GBP",
+                "description": f"FX conversion source: {source_currency}",
+            }
+        )
 
         return await self._create_journal(
             entity_id=entity_id,
@@ -1056,11 +1129,15 @@ class JournalService:
             j_source_id = invoice_id
 
         # Check idempotency — skip if a journal already exists, unless force=True
-        existing = await self._find_journal(entity_id, j_source_type, j_source_id, "purchase")
+        existing = await self._find_journal(
+            entity_id, j_source_type, j_source_id, "purchase"
+        )
         if existing and not force:
             return existing
 
-        total = Decimal(str(invoice.get("gross_amount") or invoice.get("net_amount") or 0))
+        total = Decimal(
+            str(invoice.get("gross_amount") or invoice.get("net_amount") or 0)
+        )
         tax_total = Decimal(str(invoice.get("tax_amount") or 0))
         currency = invoice.get("currency", "GBP")
 
@@ -1101,33 +1178,41 @@ class JournalService:
                 debit_account_id = li.get("gl_account_id") or str(default_cogs_id)
                 description = li.get("description", "Purchase item")
 
-                line_items.append({
-                    "account_id": debit_account_id,
-                    "debit": float(line_net),
-                    "credit": 0,
-                    "currency": currency,
-                    "description": f"{description} — {counterparty_name} (inv {inv_number})",
-                })
+                line_items.append(
+                    {
+                        "account_id": debit_account_id,
+                        "debit": float(line_net),
+                        "credit": 0,
+                        "currency": currency,
+                        "description": f"{description} — {counterparty_name} (inv {inv_number})",
+                    }
+                )
 
             # If there's tax, add a VAT input debit (or lump it into the last COGS entry)
             if tax_total > 0:
-                tax_account = str(vat_input_id) if vat_input_id else str(default_cogs_id)
-                line_items.append({
-                    "account_id": tax_account,
-                    "debit": float(tax_total),
-                    "credit": 0,
-                    "currency": currency,
-                    "description": f"Input VAT — {counterparty_name} (inv {inv_number})",
-                })
+                tax_account = (
+                    str(vat_input_id) if vat_input_id else str(default_cogs_id)
+                )
+                line_items.append(
+                    {
+                        "account_id": tax_account,
+                        "debit": float(tax_total),
+                        "credit": 0,
+                        "currency": currency,
+                        "description": f"Input VAT — {counterparty_name} (inv {inv_number})",
+                    }
+                )
         else:
             # No line items — fall back to single COGS debit for gross total
-            line_items.append({
-                "account_id": str(default_cogs_id),
-                "debit": float(total),
-                "credit": 0,
-                "currency": currency,
-                "description": f"Purchase from {counterparty_name} (inv {inv_number})",
-            })
+            line_items.append(
+                {
+                    "account_id": str(default_cogs_id),
+                    "debit": float(total),
+                    "credit": 0,
+                    "currency": currency,
+                    "description": f"Purchase from {counterparty_name} (inv {inv_number})",
+                }
+            )
 
         # CREDIT Accounts Payable — invoices always create an AP obligation.
         # The matching bank transaction clears the AP via create_invoice_payment_journal.
@@ -1138,17 +1223,23 @@ class JournalService:
                 "Check that this account number exists and is not a header."
             )
 
-        line_items.append({
-            "account_id": str(ap_id),
-            "debit": 0,
-            "credit": float(total),
-            "currency": currency,
-            "description": f"AP for {counterparty_name} (inv {inv_number})",
-        })
+        line_items.append(
+            {
+                "account_id": str(ap_id),
+                "debit": 0,
+                "credit": float(total),
+                "currency": currency,
+                "description": f"AP for {counterparty_name} (inv {inv_number})",
+            }
+        )
 
         # Validate balance
-        total_debit = sum(Decimal(str(li["debit"])) for li in line_items)
-        total_credit = sum(Decimal(str(li["credit"])) for li in line_items)
+        total_debit = sum(
+            (Decimal(str(li["debit"])) for li in line_items), Decimal("0")
+        )
+        total_credit = sum(
+            (Decimal(str(li["credit"])) for li in line_items), Decimal("0")
+        )
         if abs(total_debit - total_credit) > BALANCE_TOLERANCE:
             # Adjust last debit entry to absorb rounding differences
             diff = float(total_credit - total_debit)
@@ -1161,7 +1252,9 @@ class JournalService:
                     li["debit"] = float(Decimal(str(li["debit"])) + Decimal(str(diff)))
                     break
 
-        journal_date = invoice.get("invoice_date", datetime.now(timezone.utc).isoformat())
+        journal_date = invoice.get(
+            "invoice_date", datetime.now(timezone.utc).isoformat()
+        )
 
         journal = await self._create_journal(
             entity_id=entity_id,
@@ -1233,8 +1326,7 @@ class JournalService:
             return None
 
         relevant = [
-            m for m in extract_rows(movements)
-            if str(m.get("reference_id")) in line_ids
+            m for m in extract_rows(movements) if str(m.get("reference_id")) in line_ids
         ]
         if not relevant:
             return None
@@ -1261,7 +1353,9 @@ class JournalService:
             logger.info(
                 "Order %s is dated %s, covered by the manual restatement before %s "
                 "— skipping COGS journal to avoid double-counting",
-                order_id, journal_date[:10], self.PERPETUAL_COGS_START,
+                order_id,
+                journal_date[:10],
+                self.PERPETUAL_COGS_START,
             )
             return None
 
@@ -1390,18 +1484,24 @@ class JournalService:
         movement_date = occurred_at or datetime.now(timezone.utc).isoformat()
 
         movement = await asyncio.to_thread(
-            lambda: self.client.table("inventory_movements").insert({
-                "inventory_item_id": str(inventory_item_id),
-                "transaction_type": disposal_type,
-                "quantity": -abs(quantity),
-                "unit_cost": unit_cost,
-                "movement_date": movement_date,
-                "movement_date_source": "order" if occurred_at else "estimated",
-                "notes": (
-                    notes
-                    or ("Gifted stock" if disposal_type == "GIFT" else "Written off")
-                ),
-            }).execute()
+            lambda: self.client.table("inventory_movements")
+            .insert(
+                {
+                    "inventory_item_id": str(inventory_item_id),
+                    "transaction_type": disposal_type,
+                    "quantity": -abs(quantity),
+                    "unit_cost": unit_cost,
+                    "movement_date": movement_date,
+                    "movement_date_source": "order" if occurred_at else "estimated",
+                    "notes": (
+                        notes
+                        or (
+                            "Gifted stock" if disposal_type == "GIFT" else "Written off"
+                        )
+                    ),
+                }
+            )
+            .execute()
         )
         movement_row = extract_row(movement)
         if not movement_row:
@@ -1519,8 +1619,10 @@ class JournalService:
         """
         order_row = await asyncio.to_thread(
             lambda: self.client.table("orders")
-            .select("id, order_number, status, created_at, "
-                    "grand_total_amount, refunded_total_amount")
+            .select(
+                "id, order_number, status, created_at, "
+                "grand_total_amount, refunded_total_amount"
+            )
             .eq("id", str(order_id))
             .limit(1)
             .execute()
@@ -1538,11 +1640,15 @@ class JournalService:
             logger.info(
                 "Order %s is dated %s, before the %s cutoff — refund covered by "
                 "the manual restatement, skipping",
-                order_id, created_at[:10], self.PERPETUAL_COGS_START,
+                order_id,
+                created_at[:10],
+                self.PERPETUAL_COGS_START,
             )
             return None
 
-        existing = await self._find_journal(entity_id, "order_refund", order_id, "refund")
+        existing = await self._find_journal(
+            entity_id, "order_refund", order_id, "refund"
+        )
         if existing and not force:
             # Match the shape of the full-path return rather than the bare
             # journal row _find_journal gives back — a caller checking
@@ -1556,7 +1662,9 @@ class JournalService:
             }
 
         grand_total = Decimal(str(order.get("grand_total_amount") or 0))
-        is_full_refund = grand_total > 0 and abs(refunded - grand_total) < Decimal("0.01")
+        is_full_refund = grand_total > 0 and abs(refunded - grand_total) < Decimal(
+            "0.01"
+        )
         order_ref = order.get("order_number") or str(order_id)
 
         clearing_id = await self._get_account_id(entity_id, accts.MERCHANT_CLEARING)
@@ -1676,7 +1784,8 @@ class JournalService:
         )
         line_ids = await self._order_line_item_ids(order_id)
         relevant = [
-            m for m in extract_rows(sale_movements)
+            m
+            for m in extract_rows(sale_movements)
             if str(m.get("reference_id")) in line_ids
         ]
 
@@ -1684,17 +1793,19 @@ class JournalService:
             return_qty = float(abs(Decimal(str(mv["quantity"] or 0))))
             movements_table = self.client.table("inventory_movements")
             await asyncio.to_thread(
-                lambda m=mv, q=return_qty: movements_table.insert({
-                    "inventory_item_id": m["inventory_item_id"],
-                    "transaction_type": "RETURN",
-                    "reference_id": m["reference_id"],
-                    "reference_table": "order_line_items",
-                    "quantity": q,
-                    "unit_cost": float(m.get("unit_cost") or 0),
-                    "movement_date": created_at,
-                    "movement_date_source": "order",
-                    "notes": f"Stock returned — full refund of order {order_ref}",
-                }).execute()
+                lambda: movements_table.insert(
+                    {
+                        "inventory_item_id": mv["inventory_item_id"],
+                        "transaction_type": "RETURN",
+                        "reference_id": mv["reference_id"],
+                        "reference_table": "order_line_items",
+                        "quantity": return_qty,
+                        "unit_cost": float(mv.get("unit_cost") or 0),
+                        "movement_date": created_at,
+                        "movement_date_source": "order",
+                        "notes": f"Stock returned — full refund of order {order_ref}",
+                    }
+                ).execute()
             )
             result["returned_movements"] += 1
 
@@ -1785,17 +1896,23 @@ class JournalService:
         ]
 
         if tax > 0 and tax_id:
-            line_items.append({
-                "account_id": str(tax_id),
-                "debit": 0,
-                "credit": float(tax),
-                "currency": currency,
-                "description": f"VAT/Tax for inv {inv_number}",
-            })
+            line_items.append(
+                {
+                    "account_id": str(tax_id),
+                    "debit": 0,
+                    "credit": float(tax),
+                    "currency": currency,
+                    "description": f"VAT/Tax for inv {inv_number}",
+                }
+            )
 
         # Validate balance
-        total_debit = sum(Decimal(str(li["debit"])) for li in line_items)
-        total_credit = sum(Decimal(str(li["credit"])) for li in line_items)
+        total_debit = sum(
+            (Decimal(str(li["debit"])) for li in line_items), Decimal("0")
+        )
+        total_credit = sum(
+            (Decimal(str(li["credit"])) for li in line_items), Decimal("0")
+        )
         if abs(total_debit - total_credit) > BALANCE_TOLERANCE:
             raise JournalError(
                 f"Sale journal does not balance: debit={total_debit} credit={total_credit}"
@@ -1804,7 +1921,9 @@ class JournalService:
         return await self._create_journal(
             entity_id=entity_id,
             journal_type="accrual",
-            journal_date=invoice.get("invoice_date", datetime.now(timezone.utc).isoformat()),
+            journal_date=invoice.get(
+                "invoice_date", datetime.now(timezone.utc).isoformat()
+            ),
             description=f"Sale invoice {inv_number} to {counterparty_name}",
             source_type="invoice",
             source_id=invoice_id,
@@ -1905,7 +2024,9 @@ class JournalService:
                     "description": f"AR cleared for {counterparty_name} (inv {inv_number})",
                 },
             ]
-            description = f"Payment received for invoice {inv_number} from {counterparty_name}"
+            description = (
+                f"Payment received for invoice {inv_number} from {counterparty_name}"
+            )
         else:
             # We paid supplier (PURCHASE): debit AP, credit Cash
             ap_id = await self._get_account_id(entity_id, accts.ACCOUNTS_PAYABLE)
@@ -1997,17 +2118,25 @@ class JournalService:
         """
         txn = await self._fetch_financial_transaction(str(financial_transaction_id))
         if not txn:
-            raise JournalError(f"Financial transaction not found: {financial_transaction_id}")
+            raise JournalError(
+                f"Financial transaction not found: {financial_transaction_id}"
+            )
 
         # Guard: reject inbound payment transactions (handled by settlement journals)
         txn_type = txn.get("transaction_type") or txn.get("type", "")
         direction = txn.get("direction", "out")
         if txn_type in ("payout",):
-            raise JournalError("Payout transactions are handled by settlement journals, not expense journals")
+            raise JournalError(
+                "Payout transactions are handled by settlement journals, not expense journals"
+            )
         if txn_type == "payment" and direction == "in":
-            raise JournalError("Inbound payment transactions are handled by settlement journals, not expense journals")
+            raise JournalError(
+                "Inbound payment transactions are handled by settlement journals, not expense journals"
+            )
         if txn_type in ("fx_conversion", "reserve_hold", "reserve_release"):
-            raise JournalError(f"Transaction type '{txn_type}' is not an expensable transaction")
+            raise JournalError(
+                f"Transaction type '{txn_type}' is not an expensable transaction"
+            )
 
         meta = txn.get("metadata") or {}
         description = txn.get("description") or ""
@@ -2052,7 +2181,9 @@ class JournalService:
                 amount=raw_amount,
             )
 
-        raw_currency = (txn.get("currency_code") or txn.get("currency", "GBP") or "GBP").upper()
+        raw_currency = (
+            txn.get("currency_code") or txn.get("currency", "GBP") or "GBP"
+        ).upper()
         base_currency = (txn.get("base_currency_code") or "GBP").upper()
         fx_rate_val = txn.get("fx_rate")
 
@@ -2093,7 +2224,9 @@ class JournalService:
             debit_code = accts.MERCHANT_CLEARING
             debit_id = await self._get_account_id(entity_id, debit_code)
             journal_status = "posted"
-            journal_description = f"Refund settlement — order {linked_order_id}: {counterparty}"
+            journal_description = (
+                f"Refund settlement — order {linked_order_id}: {counterparty}"
+            )
             debit_line_description = f"Refund payout for order {linked_order_id}"
         else:
             debit_code = acct_code
@@ -2106,10 +2239,15 @@ class JournalService:
                 logger.warning(
                     "Could not categorise transaction %s (%s / %s). "
                     "Falling back to %s and marking as draft.",
-                    financial_transaction_id, description, counterparty, acct_code,
+                    financial_transaction_id,
+                    description,
+                    counterparty,
+                    acct_code,
                 )
 
-            category = accts.ACCOUNT_LABEL.get(acct_code, meta.get("expense_category") or "expense")
+            category = accts.ACCOUNT_LABEL.get(
+                acct_code, meta.get("expense_category") or "expense"
+            )
             journal_description = f"Expense: {category} - {counterparty}"
             debit_line_description = f"{category}: {counterparty}"
 
@@ -2181,7 +2319,7 @@ class JournalService:
         if transaction_ids is None:
             transaction_ids = await self._find_unjournaled_expenses(entity_id)
 
-        results = {"created": 0, "skipped": 0, "errors": []}
+        results: Dict[str, Any] = {"created": 0, "skipped": 0, "errors": []}
 
         for i, txn_id in enumerate(transaction_ids):
             # Refresh the Supabase connection every BATCH_SIZE items
@@ -2190,7 +2328,10 @@ class JournalService:
                 await asyncio.sleep(0.5)
                 logger.info(
                     "Expense progress: %d/%d processed (%d created, %d errors)",
-                    i, len(transaction_ids), results["created"], len(results["errors"]),
+                    i,
+                    len(transaction_ids),
+                    results["created"],
+                    len(results["errors"]),
                 )
 
             try:
@@ -2208,19 +2349,25 @@ class JournalService:
                 if "already" in err_msg or "existing" in err_msg or "payout" in err_msg:
                     results["skipped"] += 1
                 else:
-                    results["errors"].append({
-                        "transaction_id": str(txn_id),
-                        "error": str(e),
-                    })
+                    results["errors"].append(
+                        {
+                            "transaction_id": str(txn_id),
+                            "error": str(e),
+                        }
+                    )
             except Exception as e:
                 logger.error(
                     "Unexpected error journalizing expense %s: %s",
-                    txn_id, e, exc_info=True,
+                    txn_id,
+                    e,
+                    exc_info=True,
                 )
-                results["errors"].append({
-                    "transaction_id": str(txn_id),
-                    "error": f"Unexpected: {e}",
-                })
+                results["errors"].append(
+                    {
+                        "transaction_id": str(txn_id),
+                        "error": f"Unexpected: {e}",
+                    }
+                )
 
         return {
             "entity_id": str(entity_id),
@@ -2271,20 +2418,24 @@ class JournalService:
             }
             try:
                 pay_result = await self.auto_journal_payments(entity_id)
-                step.update({
-                    "status": "completed",
-                    "payments_processed": pay_result.get("payments_processed", 0),
-                    "created": pay_result.get("created", 0),
-                    "skipped": pay_result.get("skipped", 0),
-                    "errors": pay_result.get("errors", []),
-                })
+                step.update(
+                    {
+                        "status": "completed",
+                        "payments_processed": pay_result.get("payments_processed", 0),
+                        "created": pay_result.get("created", 0),
+                        "skipped": pay_result.get("skipped", 0),
+                        "errors": pay_result.get("errors", []),
+                    }
+                )
                 if pay_result.get("errors"):
                     for err in pay_result["errors"]:
-                        overall_errors.append({
-                            "step": "journal_payments",
-                            "source_id": err.get("payment_id"),
-                            "error": err.get("error"),
-                        })
+                        overall_errors.append(
+                            {
+                                "step": "journal_payments",
+                                "source_id": err.get("payment_id"),
+                                "error": err.get("error"),
+                            }
+                        )
             except Exception as e:
                 logger.error("Journal payments step failed: %s", e)
                 step.update({"status": "error", "error": str(e)})
@@ -2301,20 +2452,26 @@ class JournalService:
             }
             try:
                 settle_result = await self.auto_journal_settlements(entity_id)
-                step.update({
-                    "status": "completed",
-                    "settlements_processed": settle_result.get("settlements_processed", 0),
-                    "created": settle_result.get("created", 0),
-                    "skipped": settle_result.get("skipped", 0),
-                    "errors": settle_result.get("errors", []),
-                })
+                step.update(
+                    {
+                        "status": "completed",
+                        "settlements_processed": settle_result.get(
+                            "settlements_processed", 0
+                        ),
+                        "created": settle_result.get("created", 0),
+                        "skipped": settle_result.get("skipped", 0),
+                        "errors": settle_result.get("errors", []),
+                    }
+                )
                 if settle_result.get("errors"):
                     for err in settle_result["errors"]:
-                        overall_errors.append({
-                            "step": "journal_settlements",
-                            "source_id": err.get("transaction_id"),
-                            "error": err.get("error"),
-                        })
+                        overall_errors.append(
+                            {
+                                "step": "journal_settlements",
+                                "source_id": err.get("transaction_id"),
+                                "error": err.get("error"),
+                            }
+                        )
             except Exception as e:
                 logger.error("Journal settlements step failed: %s", e)
                 step.update({"status": "error", "error": str(e)})
@@ -2329,22 +2486,28 @@ class JournalService:
             }
             try:
                 inbound_result = await self.auto_journal_inbound(entity_id)
-                step.update({
-                    "status": "completed",
-                    "transactions_processed": inbound_result.get("transactions_processed", 0),
-                    "created": inbound_result.get("created", 0),
-                    "skipped": inbound_result.get("skipped", 0),
-                    "passthrough": inbound_result.get("passthrough", {}),
-                    "by_type": inbound_result.get("by_type", {}),
-                    "errors": inbound_result.get("errors", []),
-                })
+                step.update(
+                    {
+                        "status": "completed",
+                        "transactions_processed": inbound_result.get(
+                            "transactions_processed", 0
+                        ),
+                        "created": inbound_result.get("created", 0),
+                        "skipped": inbound_result.get("skipped", 0),
+                        "passthrough": inbound_result.get("passthrough", {}),
+                        "by_type": inbound_result.get("by_type", {}),
+                        "errors": inbound_result.get("errors", []),
+                    }
+                )
                 if inbound_result.get("errors"):
                     for err in inbound_result["errors"]:
-                        overall_errors.append({
-                            "step": "journal_inbound",
-                            "source_id": err.get("transaction_id"),
-                            "error": err.get("error"),
-                        })
+                        overall_errors.append(
+                            {
+                                "step": "journal_inbound",
+                                "source_id": err.get("transaction_id"),
+                                "error": err.get("error"),
+                            }
+                        )
             except Exception as e:
                 logger.error("Journal inbound step failed: %s", e)
                 step.update({"status": "error", "error": str(e)})
@@ -2359,20 +2522,26 @@ class JournalService:
             }
             try:
                 expense_result = await self.auto_journal_expenses(entity_id)
-                step.update({
-                    "status": "completed",
-                    "transactions_processed": expense_result.get("transactions_processed", 0),
-                    "created": expense_result.get("created", 0),
-                    "skipped": expense_result.get("skipped", 0),
-                    "errors": expense_result.get("errors", []),
-                })
+                step.update(
+                    {
+                        "status": "completed",
+                        "transactions_processed": expense_result.get(
+                            "transactions_processed", 0
+                        ),
+                        "created": expense_result.get("created", 0),
+                        "skipped": expense_result.get("skipped", 0),
+                        "errors": expense_result.get("errors", []),
+                    }
+                )
                 if expense_result.get("errors"):
                     for err in expense_result["errors"]:
-                        overall_errors.append({
-                            "step": "journal_expenses",
-                            "source_id": err.get("transaction_id"),
-                            "error": err.get("error"),
-                        })
+                        overall_errors.append(
+                            {
+                                "step": "journal_expenses",
+                                "source_id": err.get("transaction_id"),
+                                "error": err.get("error"),
+                            }
+                        )
             except Exception as e:
                 logger.error("Journal expenses step failed: %s", e)
                 step.update({"status": "error", "error": str(e)})
@@ -2546,10 +2715,15 @@ class JournalService:
             raise JournalError(f"Failed to post draft journal {journal_id}")
 
         logger.info(
-            "Posted draft journal %s onto account %s", journal_id, account_id,
+            "Posted draft journal %s onto account %s",
+            journal_id,
+            account_id,
         )
 
-        return await self._fetch_journal(journal_id)
+        journal = await self._fetch_journal(journal_id)
+        if journal is None:
+            raise JournalError(f"Journal {journal_id} not found after posting")
+        return journal
 
     # =========================================================================
     # JOURNAL QUERIES
@@ -2570,10 +2744,13 @@ class JournalService:
             status_filter: Optional filter (draft, posted, reversed)
             limit: Max results
         """
+
         def _query():
-            query = self.client.table("journals") \
-                .select("*, journal_line_items(*)") \
+            query = (
+                self.client.table("journals")
+                .select("*, journal_line_items(*)")
                 .eq("entity_id", str(entity_id))
+            )
 
             if journal_type:
                 query = query.eq("journal_type", journal_type)
@@ -2595,15 +2772,20 @@ class JournalService:
           1. **Draft journals** — journals marked ``draft`` because the
              automation could not confidently categorise the transaction.
         """
+
         def _fetch_drafts():
-            return self.client.table("journals") \
-                .select("id, journal_type, journal_date, description, "
-                        "source_type, source_id, journal_line_items(account_id, debit, credit, description)") \
-                .eq("entity_id", str(entity_id)) \
-                .eq("status", "draft") \
-                .order("journal_date", desc=True) \
-                .limit(100) \
+            return (
+                self.client.table("journals")
+                .select(
+                    "id, journal_type, journal_date, description, "
+                    "source_type, source_id, journal_line_items(account_id, debit, credit, description)"
+                )
+                .eq("entity_id", str(entity_id))
+                .eq("status", "draft")
+                .order("journal_date", desc=True)
+                .limit(100)
                 .execute()
+            )
 
         drafts_result = await asyncio.to_thread(_fetch_drafts)
         draft_journals = extract_rows(drafts_result)
@@ -2627,9 +2809,7 @@ class JournalService:
                 "needs_review": len(draft_journals) > 0,
             },
             "draft_journals": draft_journals,
-            "draft_journals_by_type": {
-                k: len(v) for k, v in draft_by_type.items()
-            },
+            "draft_journals_by_type": {k: len(v) for k, v in draft_by_type.items()},
         }
 
     async def suggest_draft_journal_accounts(
@@ -2734,8 +2914,13 @@ class JournalService:
         structured_model = model.with_structured_output(DraftAccountSuggestions)
 
         try:
-            result = await asyncio.to_thread(
-                lambda: structured_model.invoke([{"role": "user", "content": prompt}])
+            result = cast(
+                DraftAccountSuggestions,
+                await asyncio.to_thread(
+                    lambda: structured_model.invoke(
+                        [{"role": "user", "content": prompt}]
+                    )
+                ),
             )
         except Exception as e:
             logger.warning("Draft account suggestion failed: %s", e)
@@ -2771,7 +2956,7 @@ class JournalService:
         if payment_ids is None:
             payment_ids = await self._find_unjournaled_payments(entity_id)
 
-        results = {"created": 0, "skipped": 0, "errors": []}
+        results: Dict[str, Any] = {"created": 0, "skipped": 0, "errors": []}
 
         for i, pid in enumerate(payment_ids):
             if i > 0 and i % self.BATCH_SIZE == 0:
@@ -2779,7 +2964,10 @@ class JournalService:
                 await asyncio.sleep(0.5)
                 logger.info(
                     "Accrual progress: %d/%d processed (%d created, %d errors)",
-                    i, len(payment_ids), results["created"], len(results["errors"]),
+                    i,
+                    len(payment_ids),
+                    results["created"],
+                    len(results["errors"]),
                 )
 
             try:
@@ -2789,19 +2977,25 @@ class JournalService:
                 if "already" in str(e).lower() or "existing" in str(e).lower():
                     results["skipped"] += 1
                 else:
-                    results["errors"].append({
-                        "payment_id": str(pid),
-                        "error": str(e),
-                    })
+                    results["errors"].append(
+                        {
+                            "payment_id": str(pid),
+                            "error": str(e),
+                        }
+                    )
             except Exception as e:
                 logger.error(
                     "Unexpected error journalizing payment %s: %s",
-                    pid, e, exc_info=True,
+                    pid,
+                    e,
+                    exc_info=True,
                 )
-                results["errors"].append({
-                    "payment_id": str(pid),
-                    "error": f"Unexpected: {e}",
-                })
+                results["errors"].append(
+                    {
+                        "payment_id": str(pid),
+                        "error": f"Unexpected: {e}",
+                    }
+                )
 
         return {
             "entity_id": str(entity_id),
@@ -2818,7 +3012,7 @@ class JournalService:
         if transaction_ids is None:
             transaction_ids = await self._find_unjournaled_settlements(entity_id)
 
-        results = {"created": 0, "skipped": 0, "errors": []}
+        results: Dict[str, Any] = {"created": 0, "skipped": 0, "errors": []}
 
         for i, tid in enumerate(transaction_ids):
             if i > 0 and i % self.BATCH_SIZE == 0:
@@ -2837,19 +3031,25 @@ class JournalService:
                 if "already" in str(e).lower() or "existing" in str(e).lower():
                     results["skipped"] += 1
                 else:
-                    results["errors"].append({
-                        "transaction_id": str(tid),
-                        "error": str(e),
-                    })
+                    results["errors"].append(
+                        {
+                            "transaction_id": str(tid),
+                            "error": str(e),
+                        }
+                    )
             except Exception as e:
                 logger.error(
                     "Unexpected error journalizing settlement %s: %s",
-                    tid, e, exc_info=True,
+                    tid,
+                    e,
+                    exc_info=True,
                 )
-                results["errors"].append({
-                    "transaction_id": str(tid),
-                    "error": f"Unexpected: {e}",
-                })
+                results["errors"].append(
+                    {
+                        "transaction_id": str(tid),
+                        "error": f"Unexpected: {e}",
+                    }
+                )
 
         return {
             "entity_id": str(entity_id),
@@ -2896,7 +3096,12 @@ class JournalService:
 
         all_items = 0
         for category, txns in classified.items():
-            cat_results = {"total": len(txns), "created": 0, "skipped": 0, "errors": []}
+            cat_results: Dict[str, Any] = {
+                "total": len(txns),
+                "created": 0,
+                "skipped": 0,
+                "errors": [],
+            }
             method = type_method_map.get(category)
             if not method:
                 continue
@@ -2926,7 +3131,9 @@ class JournalService:
                 except Exception as e:
                     logger.error(
                         "Unexpected error journalizing inbound transaction %s: %s",
-                        txn["id"], e, exc_info=True,
+                        txn["id"],
+                        e,
+                        exc_info=True,
                     )
                     err = {"transaction_id": txn["id"], "error": f"Unexpected: {e}"}
                     cat_results["errors"].append(err)
@@ -3025,7 +3232,9 @@ class JournalService:
         )
         return extract_row(result)
 
-    async def _fetch_payment_with_fees(self, payment_id: str) -> Optional[Dict[str, Any]]:
+    async def _fetch_payment_with_fees(
+        self, payment_id: str
+    ) -> Optional[Dict[str, Any]]:
         """Fetch a payment with its gateway fees from payment_fees."""
         result = await asyncio.to_thread(
             lambda: self.client.table("payments")
@@ -3081,7 +3290,9 @@ class JournalService:
             logger.warning(f"Failed to fetch contact name for {contact_id}: {e}")
         return "Unknown"
 
-    async def _fetch_financial_transaction(self, txn_id: str) -> Optional[Dict[str, Any]]:
+    async def _fetch_financial_transaction(
+        self, txn_id: str
+    ) -> Optional[Dict[str, Any]]:
         result = await asyncio.to_thread(
             lambda: self.client.table("financial_transactions")
             .select("*")
@@ -3148,7 +3359,8 @@ class JournalService:
         except Exception as e:
             logger.warning(
                 "Failed to look up order for refund transaction (invoice_id=%s): %s",
-                invoice_id, e,
+                invoice_id,
+                e,
             )
             return None
 
@@ -3201,8 +3413,11 @@ class JournalService:
     # ── Personal funding detection ──────────────────────────────────────
 
     _PERSONAL_PATTERNS = [
-        "tobi amao", "amao t g a", "amao tga",
-        "treadsoul", "starting up",
+        "tobi amao",
+        "amao t g a",
+        "amao tga",
+        "treadsoul",
+        "starting up",
     ]
 
     def _is_personal_funding(
@@ -3224,7 +3439,12 @@ class JournalService:
     # ── Wholesale / B2B payment detection ─────────────────────────────────────
 
     _WHOLESALE_PATTERNS = [
-        "one yard", "inv ", "invoice", "wholesale", "b2b", "bulk order",
+        "one yard",
+        "inv ",
+        "invoice",
+        "wholesale",
+        "b2b",
+        "bulk order",
     ]
     _WHOLESALE_REF_PATTERN = re.compile(r"\bINV\s+\d", re.IGNORECASE)
 
@@ -3246,9 +3466,22 @@ class JournalService:
     # ── Brand collaboration / content income detection ─────────────────────────
 
     _BRAND_COLLAB_PATTERNS = [
-        "video", "photo", "content", "film", "shoot", "editing", "dop",
-        "photographer", "videographer", "unboxing", "digital cover", "retouch",
-        "hypebeast", "campaign shoot", "brand shoot", "creative direction",
+        "video",
+        "photo",
+        "content",
+        "film",
+        "shoot",
+        "editing",
+        "dop",
+        "photographer",
+        "videographer",
+        "unboxing",
+        "digital cover",
+        "retouch",
+        "hypebeast",
+        "campaign shoot",
+        "brand shoot",
+        "creative direction",
     ]
 
     def _is_brand_collaboration(
@@ -3285,11 +3518,14 @@ class JournalService:
         Updates the IN transaction's ``metadata`` (passthrough_type) and
         ``description`` so downstream journal logic and UI are both clear.
         """
+
         def _query():
             return (
                 self.client.table("financial_transactions")
-                .select("id, direction, amount, currency_code, occurred_at, "
-                        "description, metadata, transaction_type")
+                .select(
+                    "id, direction, amount, currency_code, occurred_at, "
+                    "description, metadata, transaction_type"
+                )
                 .eq("entity_id", str(entity_id))
                 .eq("source", "paypal")
                 .is_("excluded_reason", "null")
@@ -3301,7 +3537,10 @@ class JournalService:
 
         # Bucket by (occurred_at, abs_amount, currency, invoice_id)
         from collections import defaultdict
-        buckets: Dict[tuple, Dict[str, list]] = defaultdict(lambda: {"in": [], "out": []})
+
+        buckets: Dict[tuple, Dict[str, list]] = defaultdict(
+            lambda: {"in": [], "out": []}
+        )
         for r in rows:
             meta = r.get("metadata") or {}
             key = (
@@ -3339,10 +3578,7 @@ class JournalService:
             # T0700 IN = Revolut/bank card topping up PayPal balance (always personal)
             # T1105 IN = reversal passthrough (always personal)
             # T0200 IN + T0006 OUT = Click & Drop / other card passthrough
-            is_personal = (
-                in_event in ("T0700", "T1105")
-                or (out_event == "T0006")
-            )
+            is_personal = in_event in ("T0700", "T1105") or (out_event == "T0006")
 
             if is_personal:
                 in_meta["passthrough_type"] = "personal_funding"
@@ -3350,17 +3586,19 @@ class JournalService:
                 # Update the description so it is clear in the UI and journals
                 orig_desc = in_txn.get("description") or ""
                 if " | Ref:" in orig_desc:
-                    new_desc = orig_desc.replace(" | Ref:", " — Passthrough funding | Ref:", 1)
+                    new_desc = orig_desc.replace(
+                        " | Ref:", " — Passthrough funding | Ref:", 1
+                    )
                 elif orig_desc:
                     new_desc = orig_desc + " — Passthrough funding"
                 else:
                     new_desc = f"{in_event} — Passthrough funding"
 
                 await asyncio.to_thread(
-                    lambda tid=in_txn["id"], m=in_meta, d=new_desc: (
+                    lambda: (
                         self.client.table("financial_transactions")
-                        .update({"metadata": m, "description": d})
-                        .eq("id", tid)
+                        .update({"metadata": in_meta, "description": new_desc})
+                        .eq("id", in_txn["id"])
                         .execute()
                     )
                 )
@@ -3392,18 +3630,21 @@ class JournalService:
 
         Uses pagination to bypass Supabase's 1000-record default limit.
         """
+
         def _query():
             # Paginate payments to get all records beyond the 1000-row default limit
             all_payment_ids: List[str] = []
             page_size = 1000
             offset = 0
             while True:
-                result = self.client.table("payments") \
-                    .select("id") \
-                    .eq("entity_id", str(entity_id)) \
-                    .eq("status", "captured") \
-                    .range(offset, offset + page_size - 1) \
+                result = (
+                    self.client.table("payments")
+                    .select("id")
+                    .eq("entity_id", str(entity_id))
+                    .eq("status", "captured")
+                    .range(offset, offset + page_size - 1)
                     .execute()
+                )
                 if not result.data:
                     break
                 all_payment_ids.extend(row["id"] for row in result.data)
@@ -3418,13 +3659,15 @@ class JournalService:
             accrued_ids: set = set()
             offset = 0
             while True:
-                result = self.client.table("journals") \
-                    .select("source_id") \
-                    .eq("entity_id", str(entity_id)) \
-                    .eq("source_type", "payment") \
-                    .eq("journal_type", "accrual") \
-                    .range(offset, offset + page_size - 1) \
+                result = (
+                    self.client.table("journals")
+                    .select("source_id")
+                    .eq("entity_id", str(entity_id))
+                    .eq("source_type", "payment")
+                    .eq("journal_type", "accrual")
+                    .range(offset, offset + page_size - 1)
                     .execute()
+                )
                 if not result.data:
                     break
                 accrued_ids.update(row["source_id"] for row in result.data)
@@ -3441,6 +3684,7 @@ class JournalService:
 
         Uses pagination to bypass Supabase's 1000-record default limit.
         """
+
         def _query():
             page_size = 1000
 
@@ -3448,14 +3692,16 @@ class JournalService:
             eligible: List[str] = []
             offset = 0
             while True:
-                result = self.client.table("financial_transactions") \
-                    .select("id, description, metadata") \
-                    .eq("entity_id", str(entity_id)) \
-                    .eq("source", "revolut") \
-                    .eq("direction", "in") \
-                    .eq("transaction_type", "transfer") \
-                    .range(offset, offset + page_size - 1) \
+                result = (
+                    self.client.table("financial_transactions")
+                    .select("id, description, metadata")
+                    .eq("entity_id", str(entity_id))
+                    .eq("source", "revolut")
+                    .eq("direction", "in")
+                    .eq("transaction_type", "transfer")
+                    .range(offset, offset + page_size - 1)
                     .execute()
+                )
                 if not result.data:
                     break
                 for t in result.data:
@@ -3463,7 +3709,12 @@ class JournalService:
                     meta = t.get("metadata") or {}
                     if meta.get("state") == "declined":
                         continue
-                    if "stripe" in desc or "paypal" in desc or "shopify" in desc or "squarespace" in desc:
+                    if (
+                        "stripe" in desc
+                        or "paypal" in desc
+                        or "shopify" in desc
+                        or "squarespace" in desc
+                    ):
                         eligible.append(t["id"])
                 if len(result.data) < page_size:
                     break
@@ -3476,14 +3727,16 @@ class JournalService:
             settled_ids: set = set()
             offset = 0
             while True:
-                result = self.client.table("journals") \
-                    .select("source_id") \
-                    .eq("entity_id", str(entity_id)) \
-                    .eq("source_type", "financial_transaction") \
-                    .eq("journal_type", "settlement") \
-                    .neq("status", "reversed") \
-                    .range(offset, offset + page_size - 1) \
+                result = (
+                    self.client.table("journals")
+                    .select("source_id")
+                    .eq("entity_id", str(entity_id))
+                    .eq("source_type", "financial_transaction")
+                    .eq("journal_type", "settlement")
+                    .neq("status", "reversed")
+                    .range(offset, offset + page_size - 1)
                     .execute()
+                )
                 if not result.data:
                     break
                 settled_ids.update(row["source_id"] for row in result.data)
@@ -3514,26 +3767,35 @@ class JournalService:
         - Stripe/PayPal settlement transfers (handled by settlement journal)
         """
         INBOUND_JOURNAL_TYPES = (
-            "funding", "sales_receipt", "refund", "fx_conversion", "receipt",
+            "funding",
+            "sales_receipt",
+            "refund",
+            "fx_conversion",
+            "receipt",
         )
 
         def _query():
             # ── Fetch ALL inbound transactions ──────────────────────────
-            txns = self.client.table("financial_transactions") \
-                .select("id, source, direction, amount, currency_code, "
-                        "description, counterparty_name, transaction_type, "
-                        "metadata, occurred_at") \
-                .eq("entity_id", str(entity_id)) \
-                .eq("direction", "in") \
-                .is_("excluded_reason", "null") \
+            txns = (
+                self.client.table("financial_transactions")
+                .select(
+                    "id, source, direction, amount, currency_code, "
+                    "description, counterparty_name, transaction_type, "
+                    "metadata, occurred_at"
+                )
+                .eq("entity_id", str(entity_id))
+                .eq("direction", "in")
+                .is_("excluded_reason", "null")
                 .execute()
+            )
 
             if not txns.data:
                 return {}
 
             # Filter out declined
             rows = [
-                r for r in txns.data
+                r
+                for r in txns.data
                 if (r.get("metadata") or {}).get("state") != "declined"
             ]
             if not rows:
@@ -3542,36 +3804,41 @@ class JournalService:
             # ── Fetch already-journaled inbound transaction IDs ─────────
             journaled_ids: set = set()
             for jt in INBOUND_JOURNAL_TYPES:
-                j_result = self.client.table("journals") \
-                    .select("source_id") \
-                    .eq("entity_id", str(entity_id)) \
-                    .eq("source_type", "financial_transaction") \
-                    .eq("journal_type", jt) \
-                    .neq("status", "reversed") \
+                j_result = (
+                    self.client.table("journals")
+                    .select("source_id")
+                    .eq("entity_id", str(entity_id))
+                    .eq("source_type", "financial_transaction")
+                    .eq("journal_type", jt)
+                    .neq("status", "reversed")
                     .execute()
-                journaled_ids.update(
-                    row["source_id"] for row in (j_result.data or [])
                 )
+                journaled_ids.update(row["source_id"] for row in (j_result.data or []))
 
             # Also exclude settlement-journaled IDs
-            s_result = self.client.table("journals") \
-                .select("source_id") \
-                .eq("entity_id", str(entity_id)) \
-                .eq("source_type", "financial_transaction") \
-                .eq("journal_type", "settlement") \
-                .neq("status", "reversed") \
+            s_result = (
+                self.client.table("journals")
+                .select("source_id")
+                .eq("entity_id", str(entity_id))
+                .eq("source_type", "financial_transaction")
+                .eq("journal_type", "settlement")
+                .neq("status", "reversed")
                 .execute()
-            journaled_ids.update(
-                row["source_id"] for row in (s_result.data or [])
             )
+            journaled_ids.update(row["source_id"] for row in (s_result.data or []))
 
             eligible = [r for r in rows if r["id"] not in journaled_ids]
             return eligible
 
         raw_eligible = await asyncio.to_thread(_query)
         if not raw_eligible:
-            return {"funding": [], "sales_receipt": [], "refund": [],
-                    "fx_conversion": [], "merchant": []}
+            return {
+                "funding": [],
+                "sales_receipt": [],
+                "refund": [],
+                "fx_conversion": [],
+                "merchant": [],
+            }
 
         classified: Dict[str, List[Dict[str, Any]]] = {
             "funding": [],
@@ -3643,23 +3910,32 @@ class JournalService:
         - Transactions whose metadata.invoice_id matches a known invoice number
           (those are journaled via the invoice path with create_purchase_journal)
         """
+
         def _query():
-            txns = self.client.table("financial_transactions") \
-                .select("id, metadata") \
-                .eq("entity_id", str(entity_id)) \
-                .eq("direction", "out") \
-                .is_("excluded_reason", "null") \
-                .not_.in_("transaction_type", [
-                    "fx_conversion", "reserve_hold", "reserve_release",
-                ]) \
+            txns = (
+                self.client.table("financial_transactions")
+                .select("id, metadata")
+                .eq("entity_id", str(entity_id))
+                .eq("direction", "out")
+                .is_("excluded_reason", "null")
+                .not_.in_(
+                    "transaction_type",
+                    [
+                        "fx_conversion",
+                        "reserve_hold",
+                        "reserve_release",
+                    ],
+                )
                 .execute()
+            )
 
             if not txns.data:
                 return []
 
             # Filter out declined transactions
             eligible_rows = [
-                r for r in txns.data
+                r
+                for r in txns.data
                 if (r.get("metadata") or {}).get("state") != "declined"
             ]
 
@@ -3668,10 +3944,12 @@ class JournalService:
 
             # Exclude transactions that are linked to known invoices
             # (those are handled exclusively by the invoice journaling path)
-            invoice_rows = self.client.table("invoices") \
-                .select("invoice_number") \
-                .eq("entity_id", str(entity_id)) \
+            invoice_rows = (
+                self.client.table("invoices")
+                .select("invoice_number")
+                .eq("entity_id", str(entity_id))
                 .execute()
+            )
             invoice_number_set = {
                 row["invoice_number"]
                 for row in (invoice_rows.data or [])
@@ -3679,7 +3957,8 @@ class JournalService:
             }
 
             non_invoice_rows = [
-                r for r in eligible_rows
+                r
+                for r in eligible_rows
                 if str((r.get("metadata") or {}).get("invoice_id") or "").strip()
                 not in invoice_number_set
             ]
@@ -3688,13 +3967,15 @@ class JournalService:
             if not txn_ids:
                 return []
 
-            journals = self.client.table("journals") \
-                .select("source_id") \
-                .eq("entity_id", str(entity_id)) \
-                .eq("source_type", "financial_transaction") \
-                .in_("journal_type", ["expense", "refund_settlement"]) \
-                .neq("status", "reversed") \
+            journals = (
+                self.client.table("journals")
+                .select("source_id")
+                .eq("entity_id", str(entity_id))
+                .eq("source_type", "financial_transaction")
+                .in_("journal_type", ["expense", "refund_settlement"])
+                .neq("status", "reversed")
                 .execute()
+            )
 
             journaled_ids = {row["source_id"] for row in (journals.data or [])}
             return [UUID(tid) for tid in txn_ids if tid not in journaled_ids]

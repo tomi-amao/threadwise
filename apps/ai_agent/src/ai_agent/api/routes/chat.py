@@ -2,18 +2,15 @@
 
 import asyncio
 import logging
-from datetime import datetime
-from typing import Dict, Any
 
 from fastapi import APIRouter, Depends, HTTPException
 
 from ..deps import current_user
-
 from ..schemas import (
     ChatMessage,
     ChatResponse,
-    ThreadCreateResponse,
     CreateAssistantRequest,
+    ThreadCreateResponse,
 )
 
 router = APIRouter(dependencies=[Depends(current_user)])
@@ -24,15 +21,16 @@ def get_services():
     """Get service instances (lazy import to avoid circular deps)."""
     try:
         from ...services.langgraph_service import LangGraphService
+
         langgraph_service = LangGraphService()
     except ImportError:
         langgraph_service = None
-    
+
     try:
         from ...integrations.inngest import send_chat_message_event
     except ImportError:
         send_chat_message_event = None
-    
+
     return langgraph_service, send_chat_message_event
 
 
@@ -40,10 +38,10 @@ def get_services():
 async def chat_health():
     """Check LangGraph service health."""
     langgraph_service, _ = get_services()
-    
+
     if not langgraph_service:
         return {"status": "error", "message": "LangGraph service not available"}
-    
+
     try:
         health_status = await langgraph_service.health_check()
         return health_status
@@ -55,26 +53,28 @@ async def chat_health():
 async def send_chat_message(message: ChatMessage):
     """Send a message to the LangGraph agent."""
     langgraph_service, send_chat_message_event = get_services()
-    
+
     if not langgraph_service:
         raise HTTPException(status_code=503, detail="LangGraph service not available")
-    
+
     try:
         response = await langgraph_service.send_message(
             content=message.content,
             thread_id=message.thread_id,
             attachments=message.attachments,
-            assistant_id=message.assistant_id
+            assistant_id=message.assistant_id,
         )
-        
+
         # Send event to Inngest for background processing (fire-and-forget)
         if send_chat_message_event:
-            asyncio.create_task(send_chat_message_event(
-                content=message.content,
-                thread_id=response.get("thread_id"),
-                assistant_id=response.get("assistant_id")
-            ))
-        
+            asyncio.create_task(
+                send_chat_message_event(
+                    content=message.content,
+                    thread_id=response.get("thread_id"),
+                    assistant_id=response.get("assistant_id"),
+                )
+            )
+
         return ChatResponse(**response)
     except Exception as e:
         logger.error(f"Chat error: {str(e)}")
@@ -85,10 +85,10 @@ async def send_chat_message(message: ChatMessage):
 async def create_chat_thread():
     """Create a new chat thread."""
     langgraph_service, _ = get_services()
-    
+
     if not langgraph_service:
         raise HTTPException(status_code=503, detail="LangGraph service not available")
-    
+
     try:
         response = await langgraph_service.create_thread()
         return ThreadCreateResponse(**response)
@@ -101,10 +101,10 @@ async def create_chat_thread():
 async def get_thread_messages(thread_id: str):
     """Get all messages from a thread."""
     langgraph_service, _ = get_services()
-    
+
     if not langgraph_service:
         raise HTTPException(status_code=503, detail="LangGraph service not available")
-    
+
     try:
         messages_data = await langgraph_service.get_thread_messages(thread_id)
         return {"messages": messages_data}
@@ -117,10 +117,10 @@ async def get_thread_messages(thread_id: str):
 async def delete_chat_thread(thread_id: str):
     """Delete a chat thread."""
     langgraph_service, _ = get_services()
-    
+
     if not langgraph_service:
         raise HTTPException(status_code=503, detail="LangGraph service not available")
-    
+
     try:
         response = await langgraph_service.delete_thread(thread_id)
         return response
@@ -133,10 +133,10 @@ async def delete_chat_thread(thread_id: str):
 async def list_assistants():
     """List all available assistants."""
     langgraph_service, _ = get_services()
-    
+
     if not langgraph_service:
         raise HTTPException(status_code=503, detail="LangGraph service not available")
-    
+
     try:
         response = await langgraph_service.list_assistants()
         return response
@@ -149,16 +149,16 @@ async def list_assistants():
 async def create_assistant(request: CreateAssistantRequest):
     """Create a new assistant."""
     langgraph_service, _ = get_services()
-    
+
     if not langgraph_service:
         raise HTTPException(status_code=503, detail="LangGraph service not available")
-    
+
     try:
         response = await langgraph_service.create_assistant(
             graph_name=request.graph_name,
             model_name=request.model_name,
             assistant_name=request.assistant_name,
-            context=request.context
+            context=request.context,
         )
         return response
     except Exception as e:

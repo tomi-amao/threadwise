@@ -3,25 +3,22 @@
 Contains API routes, schemas, and endpoint definitions.
 """
 
-from .schemas import (
-    # Chat schemas
+from .routes import router
+from .schemas import (  # Chat schemas; Embedding schemas; Legacy schemas
     ChatMessage,
     ChatResponse,
-    ThreadCreateResponse,
     CreateAssistantRequest,
-    # Embedding schemas
-    EmbedFileRequest,
-    EmbedFileResponse,
-    SearchRequest,
-    HybridSearchRequest,
-    SearchResponse,
     DeleteEmbeddingsRequest,
     DeleteNamespaceRequest,
-    # Legacy schemas
+    EmbedFileRequest,
+    EmbedFileResponse,
+    HybridSearchRequest,
     Message,
     MessageResponse,
+    SearchRequest,
+    SearchResponse,
+    ThreadCreateResponse,
 )
-from .routes import router
 
 __all__ = [
     # Schemas

@@ -67,6 +67,10 @@ jobs:
         with:
           fail-on-severity: moderate
           deny-licenses: GPL-3.0, LGPL-3.0
+          # pglast (GPL-3.0-or-later) is Postgres's parser behind the agent's SQL guard
+          # (core/scoped_sql.py). Accepted because the backend runs as a hosted service and
+          # is not distributed; revisit before shipping it to customers.
+          allow-dependencies-licenses: pkg:pypi/pglast
           comment-summary-in-pr: always
 
   npm-audit:
@@ -159,6 +163,9 @@ jobs:
     name: Code Coverage Report
     runs-on: ubuntu-latest
     if: github.event_name == 'pull_request'
+    permissions:
+      contents: write
+      pull-requests: write
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -194,9 +201,9 @@ jobs:
 
       - name: Generate coverage comment
         uses: py-cov-action/python-coverage-comment-action@v3
-        if: always()
         with:
           GITHUB_TOKEN: ${{ github.token }}
+          COVERAGE_PATH: apps/ai_agent
           MINIMUM_GREEN: 80
           MINIMUM_ORANGE: 60
 

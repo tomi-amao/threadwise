@@ -5,18 +5,18 @@ with paginated extraction and raw event storage.
 """
 
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
 import httpx
 import inngest
 from inngest.experimental import realtime
 
-from .config import get_client
-from .channels import get_sync_channel, SyncProgressData, SyncStatusData
-from ...services.external_sync_service import sync_service
 from ...integrations.common import resolve_sync_since
-from ...integrations.shopify import ShopifyAdapter, ENDPOINTS
+from ...integrations.shopify import ENDPOINTS, ShopifyAdapter
+from ...services.external_sync_service import sync_service
+from .channels import SyncProgressData, SyncStatusData, get_sync_channel
+from .config import get_client, utc_now_iso
 
 logger = logging.getLogger(__name__)
 
@@ -33,11 +33,11 @@ PAGE_DELAY_SECONDS = 0.5  # Shopify REST: ~2 req/s leaky-bucket default
 )
 async def shopify_sync_all(ctx: inngest.Context) -> Dict[str, Any]:
     """Orchestrate a full Shopify sync for all endpoints."""
-    source_id: Optional[str] = None
+    source_id: str = ""
 
     try:
-        event_data = ctx.event.data
-        source_id = event_data.get("source_id")
+        event_data: Dict[str, Any] = dict(ctx.event.data)
+        source_id = event_data.get("source_id") or ""
         force_full = bool(event_data.get("force_full", False))
 
         if not source_id:
@@ -147,12 +147,15 @@ async def shopify_sync_all(ctx: inngest.Context) -> Dict[str, Any]:
         }
 
     except Exception as e:
+        error_text = str(e)
         ctx.logger.error(f"Error in Shopify sync: {str(e)}")
 
         if source_id:
             await ctx.step.run(
                 "update-sync-status",
-                lambda: sync_service.update_sync_status(source_id, "error", error=str(e)),
+                lambda: sync_service.update_sync_status(
+                    source_id, "error", error=error_text
+                ),
             )
             try:
                 channel = get_sync_channel(source_id)
@@ -189,8 +192,8 @@ async def shopify_sync_endpoint(ctx: inngest.Context) -> Dict[str, Any]:
     endpoint: str = "unknown"
 
     try:
-        event_data = ctx.event.data
-        source_id = event_data.get("source_id")
+        event_data: Dict[str, Any] = dict(ctx.event.data)
+        source_id: str = event_data.get("source_id") or ""
         endpoint = event_data.get("endpoint", "unknown")
         resume_cursor = event_data.get("cursor")
         force_full = bool(event_data.get("force_full", False))
@@ -213,7 +216,7 @@ async def shopify_sync_endpoint(ctx: inngest.Context) -> Dict[str, Any]:
         run_started_at = datetime.fromisoformat(
             await ctx.step.run(
                 "get-run-start-time",
-                lambda: datetime.now(timezone.utc).isoformat(),
+                utc_now_iso,
             )
         )
 
@@ -355,7 +358,9 @@ async def shopify_sync_endpoint(ctx: inngest.Context) -> Dict[str, Any]:
         # When orders are synced directly, also fetch order transactions
         # so non-Shopify-Payments payments are always captured.
         if endpoint == "orders":
-            ctx.logger.info("Orders endpoint synced — triggering order transactions sync")
+            ctx.logger.info(
+                "Orders endpoint synced — triggering order transactions sync"
+            )
             await ctx.step.invoke(
                 "sync-order-transactions",
                 function=shopify_sync_order_transactions,
@@ -371,11 +376,12 @@ async def shopify_sync_endpoint(ctx: inngest.Context) -> Dict[str, Any]:
         }
 
     except Exception as e:
+        error_text = str(e)
         ctx.logger.error(f"Error syncing Shopify {endpoint}: {str(e)}")
 
         try:
-            event_data = ctx.event.data
-            source_id = event_data.get("source_id")
+            event_data = dict(ctx.event.data)
+            source_id = event_data.get("source_id") or ""
             if source_id:
                 channel = get_sync_channel(source_id)
                 await realtime.publish(
@@ -399,7 +405,7 @@ async def shopify_sync_endpoint(ctx: inngest.Context) -> Dict[str, Any]:
                 await ctx.step.run(
                     "set-sync-watermark-error",
                     lambda: sync_service.set_sync_watermark(
-                        source_id, endpoint, status="error", error=str(e)
+                        source_id, endpoint, status="error", error=error_text
                     ),
                 )
         except Exception as pub_err:
@@ -431,11 +437,11 @@ async def shopify_sync_order_transactions(ctx: inngest.Context) -> Dict[str, Any
     payment_gateway_names doesn't solely contain shopify_payments, then
     calls GET /orders/{id}/transactions.json for each qualifying order.
     """
-    source_id: Optional[str] = None
+    source_id: str = ""
 
     try:
-        event_data = ctx.event.data
-        source_id = event_data.get("source_id")
+        event_data: Dict[str, Any] = dict(ctx.event.data)
+        source_id = event_data.get("source_id") or ""
 
         if not source_id:
             raise ValueError("source_id is required")
@@ -450,38 +456,46 @@ async def shopify_sync_order_transactions(ctx: inngest.Context) -> Dict[str, Any
         # normalizer can compute the GBP base_amount via the FX rate.
         async def _get_qualifying_orders():
             import asyncio as _asyncio
+
             from ...services.external_sync_service import sync_service as svc
 
             def _query():
-                return svc.client.table("external_raw_events") \
-                    .select("external_id, payload") \
-                    .eq("source_id", source_id) \
-                    .eq("entity_type", "order") \
+                return (
+                    svc.client.table("external_raw_events")
+                    .select("external_id, payload")
+                    .eq("source_id", source_id)
+                    .eq("entity_type", "order")
                     .execute()
+                )
 
             result = await _asyncio.to_thread(_query)
             rows = result.data or []
-            ctx.logger.info(f"Found {len(rows)} total Shopify order raw events for source {source_id}")
+            ctx.logger.info(
+                f"Found {len(rows)} total Shopify order raw events for source {source_id}"
+            )
             qualifying = []
             for row in rows:
                 payload = row.get("payload", {})
                 gateways = payload.get("payment_gateway_names", [])
                 ctx.logger.debug(f"Order {row['external_id']} gateways: {gateways}")
                 if gateways != ["shopify_payments"]:
-                    qualifying.append({
-                        "external_id": row["external_id"],
-                        "total_price_set": payload.get("total_price_set"),
-                    })
+                    qualifying.append(
+                        {
+                            "external_id": row["external_id"],
+                            "total_price_set": payload.get("total_price_set"),
+                        }
+                    )
             ctx.logger.info(
                 f"Qualifying (non-Shopify-Payments) order count: {len(qualifying)}"
             )
             return qualifying
 
-        qualifying_orders = await ctx.step.run("get-qualifying-orders", _get_qualifying_orders)
+        qualifying_orders = await ctx.step.run(
+            "get-qualifying-orders", _get_qualifying_orders
+        )
         # Build a lookup: order external_id → total_price_set
         order_price_set: Dict[str, Any] = {
-            o["external_id"]: o["total_price_set"]
-            for o in qualifying_orders
+            o["external_id"]: o["total_price_set"] for o in qualifying_orders
         }
         order_ids = list(order_price_set.keys())
 
@@ -563,7 +577,9 @@ async def shopify_sync_order_transactions(ctx: inngest.Context) -> Dict[str, Any
                 )
                 return stored
 
-            batch_stored = await ctx.step.run(f"fetch-transactions-batch-{i}", _fetch_and_store)
+            batch_stored = await ctx.step.run(
+                f"fetch-transactions-batch-{i}", _fetch_and_store
+            )
             items_stored += batch_stored or 0
 
             orders_processed += len(batch_order_ids)
@@ -571,9 +587,7 @@ async def shopify_sync_order_transactions(ctx: inngest.Context) -> Dict[str, Any
                 f"Progress: {orders_processed}/{len(order_ids)} orders processed, "
                 f"{items_stored} transactions stored so far"
             )
-            await ctx.step.sleep(
-                f"rate-limit-order-txns-{i}", timedelta(seconds=1)
-            )
+            await ctx.step.sleep(f"rate-limit-order-txns-{i}", timedelta(seconds=1))
 
         ctx.logger.info(
             f"Order transactions sync complete: {items_stored} transactions "

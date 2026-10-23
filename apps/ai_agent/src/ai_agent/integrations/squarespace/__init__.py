@@ -6,7 +6,7 @@ Never transforms data - stores exact API payloads.
 
 import logging
 from datetime import datetime, timezone
-from typing import Any, AsyncIterator, Dict, List, Optional
+from typing import Any, AsyncIterator, Dict, Optional
 
 import httpx
 
@@ -26,28 +26,23 @@ ENDPOINTS = {
     "orders": f"{SQUARESPACE_BASE_URL}/1.0/commerce/orders",
     "inventory": f"{SQUARESPACE_BASE_URL}/1.0/commerce/inventory",
     "transactions": f"{SQUARESPACE_BASE_URL}/1.0/commerce/transactions",
-    "profiles": f"{SQUARESPACE_BASE_URL}/1.0/profiles"
+    "profiles": f"{SQUARESPACE_BASE_URL}/1.0/profiles",
 }
 
 
 class SquarespaceAdapter:
     """Adapter for Squarespace Commerce API.
-    
+
     Features:
     - Paginated extraction from all commerce endpoints
     - Slow pagination to respect rate limits
     - Never transforms data - stores exact API payloads
     - Yields raw events for streaming storage
     """
-    
-    def __init__(
-        self,
-        api_key: str,
-        page_size: int = 50,
-        timeout: float = 30.0
-    ):
+
+    def __init__(self, api_key: str, page_size: int = 50, timeout: float = 30.0):
         """Initialize the Squarespace adapter.
-        
+
         Args:
             api_key: Squarespace API key
             page_size: Number of items per page (default: 50, max: 100)
@@ -59,41 +54,36 @@ class SquarespaceAdapter:
         self._headers = {
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
-            "User-Agent": "ThreadWise/1.0"
+            "User-Agent": "ThreadWise/1.0",
         }
-    
+
     async def _make_request(
-        self,
-        url: str,
-        params: Optional[Dict[str, Any]] = None
+        self, url: str, params: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         """Make an authenticated request to Squarespace API.
-        
+
         Args:
             url: API endpoint URL
             params: Query parameters
-            
+
         Returns:
             API response as dict
-            
+
         Raises:
             httpx.HTTPStatusError: If request fails
         """
         async with httpx.AsyncClient(timeout=self.timeout) as client:
-            response = await client.get(
-                url,
-                headers=self._headers,
-                params=params or {}
-            )
+            response = await client.get(url, headers=self._headers, params=params or {})
             response.raise_for_status()
-            return response.json()
-    
+            data: Dict[str, Any] = response.json()
+            return data
+
     def _get_entity_type(self, endpoint: str) -> str:
         """Map endpoint to entity type.
-        
+
         Args:
             endpoint: API endpoint name
-            
+
         Returns:
             Entity type string for storage
         """
@@ -106,25 +96,21 @@ class SquarespaceAdapter:
             "profiles": "profile",
         }
         return mapping.get(endpoint, endpoint)
-    
-    def _extract_external_id(
-        self,
-        item: Dict[str, Any],
-        entity_type: str
-    ) -> str:
+
+    def _extract_external_id(self, item: Dict[str, Any], entity_type: str) -> str:
         """Extract the external ID from an item based on entity type.
-        
+
         Args:
             item: Raw API item
             entity_type: Type of entity
-            
+
         Returns:
             External ID string
         """
         # Squarespace uses 'id' for most entities
         if "id" in item:
             return str(item["id"])
-        
+
         # Fallback mappings
         id_fields = {
             "product": ["productId", "id"],
@@ -134,27 +120,28 @@ class SquarespaceAdapter:
             "transaction": ["transactionId", "id"],
             "profile": ["profileId", "id"],
         }
-        
+
         for field in id_fields.get(entity_type, ["id"]):
             if field in item:
                 return str(item[field])
-        
+
         # Last resort: use hash of payload
         import hashlib
         import json
-        return hashlib.sha256(json.dumps(item, sort_keys=True).encode()).hexdigest()[:32]
-    
+
+        return hashlib.sha256(json.dumps(item, sort_keys=True).encode()).hexdigest()[
+            :32
+        ]
+
     def _extract_occurred_at(
-        self,
-        item: Dict[str, Any],
-        entity_type: str
+        self, item: Dict[str, Any], entity_type: str
     ) -> Optional[datetime]:
         """Extract the occurred_at timestamp from an item.
-        
+
         Args:
             item: Raw API item
             entity_type: Type of entity
-            
+
         Returns:
             datetime or None
         """
@@ -167,19 +154,17 @@ class SquarespaceAdapter:
             "updatedAt",
             "createdAt",
         ]
-        
+
         for field in timestamp_fields:
             if field in item and item[field]:
                 try:
                     # Squarespace uses ISO format
-                    return datetime.fromisoformat(
-                        item[field].replace("Z", "+00:00")
-                    )
+                    return datetime.fromisoformat(item[field].replace("Z", "+00:00"))
                 except (ValueError, TypeError):
                     continue
-        
+
         return None
-    
+
     async def fetch_page(
         self,
         endpoint: str,
@@ -208,7 +193,7 @@ class SquarespaceAdapter:
         if not url:
             raise ValueError(f"Unknown endpoint: {endpoint}")
 
-        params = {"pageSize": self.page_size}
+        params: Dict[str, Any] = {"pageSize": self.page_size}
         if cursor:
             params["cursor"] = cursor
         elif since is not None and endpoint == "orders":
@@ -219,10 +204,10 @@ class SquarespaceAdapter:
             )
 
         logger.info(f"Fetching {endpoint} page (cursor: {cursor or 'start'})")
-        
+
         response = await self._make_request(url, params)
         fetched_at = datetime.now(timezone.utc)
-        
+
         # Extract items based on endpoint response structure
         # Squarespace wraps results in different keys
         items_key_mapping = {
@@ -233,23 +218,23 @@ class SquarespaceAdapter:
             "transactions": "documents",
             "profiles": "profiles",
         }
-        
+
         items_key = items_key_mapping.get(endpoint, endpoint)
         items = response.get(items_key, response.get("result", []))
-        
+
         # Get pagination info
         pagination = response.get("pagination", {})
         next_cursor = pagination.get("nextPageCursor")
         has_more = pagination.get("hasNextPage", bool(next_cursor))
-        
+
         return PaginatedResult(
             items=items if isinstance(items, list) else [],
             cursor=next_cursor,
             has_more=has_more,
             endpoint=endpoint,
-            fetched_at=fetched_at
+            fetched_at=fetched_at,
         )
-    
+
     async def stream_endpoint(
         self,
         endpoint: str,
@@ -293,7 +278,9 @@ class SquarespaceAdapter:
             page_count += 1
 
             try:
-                result = await self.fetch_page(endpoint, cursor, since=since, until=until)
+                result = await self.fetch_page(
+                    endpoint, cursor, since=since, until=until
+                )
             except httpx.HTTPStatusError as e:
                 logger.error(
                     f"HTTP error fetching {endpoint}: {e.response.status_code}"
@@ -302,51 +289,50 @@ class SquarespaceAdapter:
             except Exception as e:
                 logger.error(f"Error fetching {endpoint}: {e}")
                 raise
-            
+
             for item in result.items:
                 total_items += 1
-                
+
                 yield RawEventRecord(
                     provider="squarespace",
                     entity_type=entity_type,
                     external_id=self._extract_external_id(item, entity_type),
                     payload=item,  # Never transform - exact API payload
                     occurred_at=self._extract_occurred_at(item, entity_type),
-                    fetched_at=result.fetched_at
+                    fetched_at=result.fetched_at,
                 )
-            
+
             logger.info(
                 f"Processed page {page_count} of {endpoint} "
                 f"({len(result.items)} items, {total_items} total)"
             )
-            
+
             if not result.has_more or not result.cursor:
                 break
-            
+
             cursor = result.cursor
-        
+
         logger.info(
             f"Completed streaming {endpoint}: "
             f"{total_items} items across {page_count} pages"
         )
-    
+
     async def stream_all_endpoints(
-        self,
-        cursors: Optional[Dict[str, str]] = None
+        self, cursors: Optional[Dict[str, str]] = None
     ) -> AsyncIterator[tuple[str, RawEventRecord]]:
         """Stream all endpoints sequentially.
-        
+
         Args:
             cursors: Optional dict of endpoint -> cursor for resuming
-            
+
         Yields:
             Tuple of (endpoint, RawEventRecord) for each item
         """
         cursors = cursors or {}
-        
+
         for endpoint in ENDPOINTS:
             cursor = cursors.get(endpoint)
-            
+
             try:
                 async for record in self.stream_endpoint(endpoint, cursor):
                     yield (endpoint, record)
@@ -354,10 +340,10 @@ class SquarespaceAdapter:
                 logger.error(f"Error streaming {endpoint}: {e}")
                 # Continue with other endpoints
                 continue
-    
+
     async def test_connection(self) -> bool:
         """Test the API connection.
-        
+
         Returns:
             True if connection is successful
         """

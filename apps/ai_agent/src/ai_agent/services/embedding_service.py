@@ -8,27 +8,27 @@ This service uses Pinecone as the vector store with the following architecture:
 - **Metadata**: Rich metadata for filtering (category, file_type, timestamps)
 """
 
-import os
-import hashlib
-import re
-from io import BytesIO
-from typing import List, Dict, Any, Optional
-from datetime import datetime, timezone
-import logging
-from urllib.parse import urlparse, unquote
 import asyncio
+import hashlib
+import logging
+import os
+import re
+from datetime import datetime, timezone
+from io import BytesIO
+from typing import Any, Dict, List, Optional
+from urllib.parse import unquote, urlparse
 
 import httpx
 
 try:
     from pypdf import PdfReader
 except ImportError:
-    PdfReader = None
+    PdfReader = None  # type: ignore[assignment,misc]
 
 try:
     from docx import Document as DocxDocument
 except ImportError:
-    DocxDocument = None
+    DocxDocument = None  # type: ignore[assignment,misc]
 
 # langchain_huggingface, langchain_community.document_loaders and
 # langchain_text_splitters are imported lazily where they're used: each of them
@@ -39,8 +39,8 @@ except ImportError:
 try:
     from pinecone import Pinecone, ServerlessSpec
 except ImportError:
-    Pinecone = None
-    ServerlessSpec = None
+    Pinecone = None  # type: ignore[assignment,misc]
+    ServerlessSpec = None  # type: ignore[assignment,misc]
 
 from dotenv import load_dotenv
 
@@ -132,7 +132,9 @@ def get_embeddings():
         _embeddings = HuggingFaceEmbeddings(
             model_name=EMBEDDING_MODEL,
             model_kwargs={"device": "cpu"},  # Use CPU for compatibility
-            encode_kwargs={"normalize_embeddings": True},  # Normalize for cosine similarity
+            encode_kwargs={
+                "normalize_embeddings": True
+            },  # Normalize for cosine similarity
         )
         logger.info("Embedding model initialized successfully")
     return _embeddings
@@ -148,7 +150,7 @@ def get_pinecone_client():
             )
         if not PINECONE_API_KEY:
             raise ValueError("PINECONE_API_KEY environment variable is not set")
-        
+
         logger.info("Initializing Pinecone client")
         _pinecone_client = Pinecone(api_key=PINECONE_API_KEY)
         logger.info("Pinecone client initialized successfully")
@@ -157,17 +159,17 @@ def get_pinecone_client():
 
 def get_pinecone_index():
     """Get or initialize the Pinecone index (singleton pattern).
-    
+
     Note: For hybrid search, the index must use dotproduct metric.
     If migrating from cosine metric, you'll need to recreate the index.
     """
     global _pinecone_index
     if _pinecone_index is None:
         pc = get_pinecone_client()
-        
+
         # Check if index exists, create if not
         existing_indexes = [idx.name for idx in pc.list_indexes()]
-        
+
         if PINECONE_INDEX_NAME not in existing_indexes:
             logger.info(f"Creating Pinecone index: {PINECONE_INDEX_NAME}")
             logger.info(f"Using metric: {INDEX_METRIC} (required for hybrid search)")
@@ -187,7 +189,7 @@ def get_pinecone_index():
                     f"but hybrid search requires '{INDEX_METRIC}'. "
                     f"Consider recreating the index for hybrid search support."
                 )
-        
+
         _pinecone_index = pc.Index(PINECONE_INDEX_NAME)
         logger.info(f"Connected to Pinecone index: {PINECONE_INDEX_NAME}")
     return _pinecone_index
@@ -201,22 +203,22 @@ def get_pinecone_index():
 class EmbeddingService:
     """
     Service for handling file embedding operations with Pinecone Hybrid Search.
-    
+
     Architecture:
     - **Hybrid Search**: Combines dense (semantic) and sparse (lexical) vectors
     - **Dense Embeddings**: HuggingFace sentence-transformers for semantic understanding
     - **Sparse Embeddings**: Pinecone's pinecone-sparse-english-v0 for keyword matching
     - **Namespaces**: Multi-tenant data isolation (entity_id → namespace)
     - **Hierarchical IDs**: Format `{document_id}#{chunk}` for efficient deletion
-    
+
     Hybrid Search Benefits:
     - Semantic search captures meaning and relationships
     - Lexical search captures exact keyword matches
     - Combined approach handles both domain-specific terms AND synonyms
-    
+
     Example usage:
         service = EmbeddingService()
-        
+
         # Embed a PDF file (stores both dense and sparse vectors)
         result = await service.embed_file(
             file_url="https://example.com/invoice.pdf",
@@ -224,14 +226,14 @@ class EmbeddingService:
             file_type="application/pdf",
             entity_id="tenant-123"
         )
-        
+
         # Hybrid search (default alpha=0.7: 70% semantic, 30% lexical)
         results = await service.hybrid_search(
             query="invoice total amount",
             namespace="tenant-123",
             alpha=0.7  # Adjust balance between semantic/lexical
         )
-        
+
         # Pure semantic search
         results = await service.search_documents(
             query="invoice total amount",
@@ -255,14 +257,14 @@ class EmbeddingService:
     ) -> Dict[str, Any]:
         """
         Generate sparse embedding using Pinecone's hosted sparse model.
-        
+
         Uses pinecone-sparse-english-v0 which outperforms BM25 by estimating
         lexical importance of tokens using context (DeepImpact architecture).
-        
+
         Args:
             text: The text to embed
             input_type: "passage" for documents, "query" for search queries
-            
+
         Returns:
             Dict with 'indices' and 'values' for sparse vector
         """
@@ -276,7 +278,7 @@ class EmbeddingService:
                     "truncate": "END",  # Truncate at 512 tokens if too long
                 },
             )
-            
+
             # Extract sparse values from response
             sparse_data = response.data[0]
             return {
@@ -293,19 +295,19 @@ class EmbeddingService:
     ) -> List[Dict[str, Any]]:
         """
         Generate sparse embeddings for multiple texts in batch.
-        
+
         Pinecone's sparse model supports batch size of 96 sequences.
-        
+
         Args:
             texts: List of texts to embed
             input_type: "passage" for documents, "query" for search queries
-            
+
         Returns:
             List of sparse vectors with 'indices' and 'values'
         """
         sparse_embeddings = []
         batch_size = 96  # Max batch size for pinecone-sparse-english-v0
-        
+
         for i in range(0, len(texts), batch_size):
             batch = texts[i : i + batch_size]
             try:
@@ -318,19 +320,19 @@ class EmbeddingService:
                         "truncate": "END",
                     },
                 )
-                
+
                 for sparse_data in response.data:
-                    sparse_embeddings.append({
-                        "indices": sparse_data.sparse_indices,
-                        "values": sparse_data.sparse_values,
-                    })
+                    sparse_embeddings.append(
+                        {
+                            "indices": sparse_data.sparse_indices,
+                            "values": sparse_data.sparse_values,
+                        }
+                    )
             except Exception as e:
                 logger.warning(f"Failed to generate sparse batch: {e}")
                 # Add empty sparse vectors for failed batch
-                sparse_embeddings.extend(
-                    [{"indices": [], "values": []} for _ in batch]
-                )
-        
+                sparse_embeddings.extend([{"indices": [], "values": []} for _ in batch])
+
         return sparse_embeddings
 
     def _apply_hybrid_weighting(
@@ -341,30 +343,30 @@ class EmbeddingService:
     ) -> tuple:
         """
         Apply alpha weighting to balance dense and sparse vectors.
-        
+
         Uses convex combination: alpha * dense + (1 - alpha) * sparse
-        
+
         Args:
             dense_vector: Dense embedding values
             sparse_vector: Dict with 'indices' and 'values'
             alpha: Weight for dense vs sparse (0.0 to 1.0)
                    1.0 = pure semantic, 0.0 = pure lexical
-                   
+
         Returns:
             Tuple of (weighted_dense, weighted_sparse)
         """
         if alpha < 0 or alpha > 1:
             raise ValueError("Alpha must be between 0 and 1")
-        
+
         # Weight dense vector
         weighted_dense = [v * alpha for v in dense_vector]
-        
+
         # Weight sparse vector
         weighted_sparse = {
             "indices": sparse_vector["indices"],
             "values": [v * (1 - alpha) for v in sparse_vector["values"]],
         }
-        
+
         return weighted_dense, weighted_sparse
 
     # =========================================================================
@@ -374,11 +376,11 @@ class EmbeddingService:
     def _infer_document_category(self, filename: str, file_type: str) -> str:
         """
         Infer document category based on filename patterns and file type.
-        
+
         Args:
             filename: The name of the file
             file_type: MIME type of the file
-            
+
         Returns:
             Category string for organization and searchability
         """
@@ -415,11 +417,14 @@ class EmbeddingService:
     def _generate_document_id(self, file_url: str, filename: str) -> str:
         """
         Generate a stable document ID for tracking embeddings.
-        
+
         The document ID is used as a prefix for vector IDs, enabling
         efficient deletion of all chunks for a document.
         """
-        url_hash = hashlib.md5(file_url.encode()).hexdigest()[:12]
+        # An identifier, not a security control; the digest must stay MD5 so ids
+        # already stored in the vector index keep matching.
+        digest = hashlib.md5(file_url.encode(), usedforsecurity=False).hexdigest()
+        url_hash = digest[:12]
         # Clean filename for use in ID (alphanumeric and hyphens only)
         clean_name = re.sub(r"[^a-zA-Z0-9]", "-", filename.lower())[:30]
         return f"{clean_name}-{url_hash}"
@@ -427,7 +432,7 @@ class EmbeddingService:
     def _generate_vector_id(self, document_id: str, chunk_index: int) -> str:
         """
         Generate a hierarchical vector ID for efficient deletion.
-        
+
         Format: {document_id}#{chunk_index:04d}
         This enables listing and deleting all vectors for a document using prefix.
         """
@@ -446,7 +451,7 @@ class EmbeddingService:
     ) -> Dict[str, Any]:
         """
         Build enriched metadata for a document chunk.
-        
+
         This metadata enables filtering, context retrieval, and document management.
         The text content is stored in metadata for retrieval (Pinecone pattern).
         """
@@ -576,13 +581,13 @@ class EmbeddingService:
     ) -> Dict[str, Any]:
         """
         Process a file: download, extract text, create embeddings, and store in Pinecone.
-        
+
         Args:
             file_url: URL to download the file from
             filename: Original filename
             file_type: MIME type of the file
             entity_id: Optional entity/tenant ID for namespace isolation
-            
+
         Returns:
             Dict with success status, document ID, chunk count, etc.
         """
@@ -591,7 +596,7 @@ class EmbeddingService:
         # Extract clean filename if URL-based
         clean_filename = self._extract_filename_from_url(file_url) or filename
         document_id = self._generate_document_id(file_url, clean_filename)
-        
+
         # Determine namespace (entity_id for multi-tenancy, or default)
         namespace = entity_id if entity_id else DEFAULT_NAMESPACE
 
@@ -642,10 +647,10 @@ class EmbeddingService:
 
             # Prepare vectors for upsert (with both dense and sparse)
             vectors_to_upsert = []
-            
+
             for idx, doc in enumerate(documents):
                 original_metadata = doc.metadata.copy() if doc.metadata else {}
-                
+
                 # Build enriched metadata
                 metadata = self._build_enriched_metadata(
                     filename=clean_filename,
@@ -657,35 +662,35 @@ class EmbeddingService:
                     entity_id=entity_id,
                     extra_metadata=original_metadata,
                 )
-                
+
                 # Generate hierarchical vector ID
                 vector_id = self._generate_vector_id(document_id, idx)
-                
+
                 # Get dense and sparse embeddings for this chunk
                 dense_embedding = dense_embeddings[idx]
                 sparse_embedding = sparse_embeddings[idx]
-                
+
                 # Build vector record with both dense and sparse values
                 vector_record = {
                     "id": vector_id,
                     "values": dense_embedding,
                     "metadata": metadata,
                 }
-                
+
                 # Add sparse values if available (for hybrid search)
                 if sparse_embedding["indices"] and sparse_embedding["values"]:
                     vector_record["sparse_values"] = {
                         "indices": sparse_embedding["indices"],
                         "values": sparse_embedding["values"],
                     }
-                
+
                 vectors_to_upsert.append(vector_record)
 
             # Upsert vectors to Pinecone in batches
             logger.info(
                 f"Upserting {len(vectors_to_upsert)} vectors to namespace: {namespace}"
             )
-            
+
             batch_size = 100  # Pinecone recommends batches of 100
             for i in range(0, len(vectors_to_upsert), batch_size):
                 batch = vectors_to_upsert[i : i + batch_size]
@@ -694,10 +699,11 @@ class EmbeddingService:
                 )
 
             category = self._infer_document_category(clean_filename, file_type)
-            
+
             # Count chunks with sparse embeddings
             sparse_count = sum(
-                1 for v in vectors_to_upsert 
+                1
+                for v in vectors_to_upsert
                 if "sparse_values" in v and v["sparse_values"]["indices"]
             )
 
@@ -738,7 +744,7 @@ class EmbeddingService:
     ) -> List[Dict[str, Any]]:
         """
         Search for similar documents with optional metadata filtering.
-        
+
         Args:
             query: The search query text
             limit: Maximum number of results to return
@@ -748,16 +754,16 @@ class EmbeddingService:
                     {"document_category": {"$eq": "invoice"}}
                     {"file_type": {"$eq": "application/pdf"}}
             similarity_threshold: Minimum similarity score (0-1) for results
-            
+
         Returns:
             List of matching documents with content and metadata
         """
         try:
             logger.info(f"Searching documents for: {query}")
-            
+
             # Use default namespace if not specified
             search_namespace = namespace if namespace else DEFAULT_NAMESPACE
-            
+
             if filter_metadata:
                 logger.info(f"With metadata filter: {filter_metadata}")
 
@@ -773,43 +779,43 @@ class EmbeddingService:
                 "include_metadata": True,
                 "namespace": search_namespace,
             }
-            
+
             # Add filter if provided (Pinecone filter format)
             if filter_metadata:
                 query_params["filter"] = filter_metadata
 
             # Execute query
-            response = await asyncio.to_thread(
-                self.index.query, **query_params
-            )
+            response = await asyncio.to_thread(self.index.query, **query_params)
 
             # Process results
             results = []
             for match in response.matches:
                 score = match.score
-                
+
                 # Apply similarity threshold
                 if score < similarity_threshold:
                     continue
-                
+
                 metadata = match.metadata or {}
-                
-                results.append({
-                    "id": match.id,
-                    "score": score,
-                    "content": metadata.get("text", ""),
-                    "metadata": {
-                        "document_id": metadata.get("document_id"),
-                        "file_name": metadata.get("file_name"),
-                        "file_type": metadata.get("file_type"),
-                        "source": metadata.get("source"),
-                        "document_category": metadata.get("document_category"),
-                        "chunk_index": metadata.get("chunk_index"),
-                        "total_chunks": metadata.get("total_chunks"),
-                        "entity_id": metadata.get("entity_id"),
-                        "embedded_at": metadata.get("embedded_at"),
-                    },
-                })
+
+                results.append(
+                    {
+                        "id": match.id,
+                        "score": score,
+                        "content": metadata.get("text", ""),
+                        "metadata": {
+                            "document_id": metadata.get("document_id"),
+                            "file_name": metadata.get("file_name"),
+                            "file_type": metadata.get("file_type"),
+                            "source": metadata.get("source"),
+                            "document_category": metadata.get("document_category"),
+                            "chunk_index": metadata.get("chunk_index"),
+                            "total_chunks": metadata.get("total_chunks"),
+                            "entity_id": metadata.get("entity_id"),
+                            "embedded_at": metadata.get("embedded_at"),
+                        },
+                    }
+                )
 
             logger.info(f"Search returned {len(results)} results")
             return results
@@ -829,10 +835,10 @@ class EmbeddingService:
     ) -> List[Dict[str, Any]]:
         """
         Perform hybrid search combining semantic and lexical matching.
-        
+
         Hybrid search uses both dense (semantic) and sparse (lexical) vectors
         to find documents that match by meaning AND/OR keywords.
-        
+
         Args:
             query: The search query text
             limit: Maximum number of results to return
@@ -843,17 +849,17 @@ class EmbeddingService:
                    - 0.0 = pure lexical search (keyword-based)
                    - 0.7 = recommended default (70% semantic, 30% lexical)
             similarity_threshold: Minimum score for results (default 0.0 for hybrid)
-            
+
         Returns:
             List of matching documents with content, scores, and metadata
-            
+
         Example:
             # Balanced hybrid search
             results = await service.hybrid_search(
                 query="Q3 revenue analysis",
                 alpha=0.7  # 70% semantic, 30% keyword
             )
-            
+
             # Keyword-focused search (good for exact terms)
             results = await service.hybrid_search(
                 query="invoice #12345",
@@ -862,24 +868,24 @@ class EmbeddingService:
         """
         try:
             logger.info(f"Hybrid search for: {query} (alpha={alpha})")
-            
+
             search_namespace = namespace if namespace else DEFAULT_NAMESPACE
-            
+
             # Generate dense embedding
             dense_embedding = await asyncio.to_thread(
                 self.embeddings.embed_query, query
             )
-            
+
             # Generate sparse embedding
             sparse_embedding = await self._generate_sparse_embedding(
                 query, input_type="query"
             )
-            
+
             # Check if sparse embedding was generated successfully
             has_sparse = bool(
                 sparse_embedding["indices"] and sparse_embedding["values"]
             )
-            
+
             if not has_sparse:
                 logger.warning(
                     "Sparse embedding generation failed, falling back to dense-only"
@@ -892,12 +898,12 @@ class EmbeddingService:
                     filter_metadata=filter_metadata,
                     similarity_threshold=similarity_threshold,
                 )
-            
+
             # Apply alpha weighting
             weighted_dense, weighted_sparse = self._apply_hybrid_weighting(
                 dense_embedding, sparse_embedding, alpha
             )
-            
+
             # Build hybrid query parameters
             query_params = {
                 "vector": weighted_dense,
@@ -906,47 +912,47 @@ class EmbeddingService:
                 "include_metadata": True,
                 "namespace": search_namespace,
             }
-            
+
             if filter_metadata:
                 query_params["filter"] = filter_metadata
-            
+
             # Execute hybrid query
-            response = await asyncio.to_thread(
-                self.index.query, **query_params
-            )
-            
+            response = await asyncio.to_thread(self.index.query, **query_params)
+
             # Process results
             results = []
             for match in response.matches:
                 score = match.score
-                
+
                 if score < similarity_threshold:
                     continue
-                
+
                 metadata = match.metadata or {}
-                
-                results.append({
-                    "id": match.id,
-                    "score": score,
-                    "search_type": "hybrid",
-                    "alpha": alpha,
-                    "content": metadata.get("text", ""),
-                    "metadata": {
-                        "document_id": metadata.get("document_id"),
-                        "file_name": metadata.get("file_name"),
-                        "file_type": metadata.get("file_type"),
-                        "source": metadata.get("source"),
-                        "document_category": metadata.get("document_category"),
-                        "chunk_index": metadata.get("chunk_index"),
-                        "total_chunks": metadata.get("total_chunks"),
-                        "entity_id": metadata.get("entity_id"),
-                        "embedded_at": metadata.get("embedded_at"),
-                    },
-                })
-            
+
+                results.append(
+                    {
+                        "id": match.id,
+                        "score": score,
+                        "search_type": "hybrid",
+                        "alpha": alpha,
+                        "content": metadata.get("text", ""),
+                        "metadata": {
+                            "document_id": metadata.get("document_id"),
+                            "file_name": metadata.get("file_name"),
+                            "file_type": metadata.get("file_type"),
+                            "source": metadata.get("source"),
+                            "document_category": metadata.get("document_category"),
+                            "chunk_index": metadata.get("chunk_index"),
+                            "total_chunks": metadata.get("total_chunks"),
+                            "entity_id": metadata.get("entity_id"),
+                            "embedded_at": metadata.get("embedded_at"),
+                        },
+                    }
+                )
+
             logger.info(f"Hybrid search returned {len(results)} results")
             return results
-            
+
         except Exception as e:
             logger.error(f"Error in hybrid search: {e}")
             return [{"error": str(e)}]
@@ -960,29 +966,29 @@ class EmbeddingService:
     ) -> List[Dict[str, Any]]:
         """
         Rerank search results using Pinecone's hosted reranking model.
-        
+
         Reranking is a two-stage retrieval optimization that improves result
         quality by re-scoring initial candidates based on their semantic
         relevance to the query using a specialized cross-encoder model.
-        
+
         How it works:
         1. Initial retrieval (hybrid search) returns N candidates quickly
         2. Reranker evaluates query-document pairs more thoroughly
         3. Returns top_n results with improved relevance ordering
-        
+
         Args:
             query: The original search query
             results: List of search results to rerank (from hybrid_search)
             top_n: Number of top results to return after reranking
             rank_field: The field in results to use for reranking (default: "content")
-            
+
         Returns:
             Reranked list of results with updated scores, ordered by relevance
-            
+
         Example:
             # Get initial candidates
             candidates = await service.hybrid_search(query="invoice terms", limit=15)
-            
+
             # Rerank to get top 5 most relevant
             top_results = await service.rerank_results(
                 query="invoice terms",
@@ -993,19 +999,19 @@ class EmbeddingService:
         if not results or len(results) == 0:
             logger.info("No results to rerank")
             return results
-        
+
         # Filter out error results before reranking
         valid_results = [r for r in results if "error" not in r]
         if not valid_results:
             logger.warning("No valid results to rerank")
             return results
-        
+
         try:
             logger.info(
                 f"Reranking {len(valid_results)} results with {RERANK_MODEL} "
                 f"(returning top {top_n})"
             )
-            
+
             # Prepare documents for reranking
             # Format: list of dicts with id and the text field to rank by
             documents = []
@@ -1015,7 +1021,7 @@ class EmbeddingService:
                     rank_field: result.get(rank_field, result.get("content", "")),
                 }
                 documents.append(doc)
-            
+
             # Call Pinecone rerank API
             rerank_response = await asyncio.to_thread(
                 self.pc.inference.rerank,
@@ -1027,29 +1033,29 @@ class EmbeddingService:
                 return_documents=True,
                 parameters={"truncate": "END"},  # Truncate long docs at end
             )
-            
+
             # Map reranked results back to original result objects with new scores
             reranked_results = []
             for item in rerank_response.data:
                 original_index = item.index
                 rerank_score = item.score  # Normalized 0-1, higher is more relevant
-                
+
                 # Get the original result and update its score
                 original_result = valid_results[original_index].copy()
                 original_result["original_score"] = original_result.get("score", 0)
                 original_result["score"] = rerank_score
                 original_result["reranked"] = True
                 original_result["rerank_model"] = RERANK_MODEL
-                
+
                 reranked_results.append(original_result)
-            
-            top_score = reranked_results[0]['score'] if reranked_results else 0.0
+
+            top_score = reranked_results[0]["score"] if reranked_results else 0.0
             logger.info(
                 f"Reranking complete: returned {len(reranked_results)} results "
                 f"(top score: {top_score:.4f})"
             )
             return reranked_results
-            
+
         except Exception as e:
             logger.error(f"Error reranking results: {e}")
             # On error, return original results unchanged
@@ -1068,14 +1074,14 @@ class EmbeddingService:
     ) -> List[Dict[str, Any]]:
         """
         Perform hybrid search with optional reranking for improved relevance.
-        
+
         This is the recommended search method for RAG pipelines as it combines:
         1. Hybrid search (semantic + lexical) for broad candidate retrieval
         2. Cross-encoder reranking for precise relevance ordering
-        
+
         The two-stage approach retrieves more candidates initially, then uses
         a more accurate (but slower) reranking model to select the best matches.
-        
+
         Args:
             query: The search query text
             limit: Final number of results to return (after reranking)
@@ -1086,10 +1092,10 @@ class EmbeddingService:
             rerank: Whether to apply reranking (default: True)
             rerank_candidates_multiplier: How many more candidates to retrieve
                 for reranking (default: 3x the limit)
-                
+
         Returns:
             List of search results, reranked for optimal relevance
-            
+
         Example:
             # Search with reranking (recommended for RAG)
             results = await service.hybrid_search_with_rerank(
@@ -1097,7 +1103,7 @@ class EmbeddingService:
                 limit=5,  # Get top 5 after reranking
                 filter_metadata={"document_category": {"$eq": "invoice"}}
             )
-            
+
             # Without reranking (faster, less accurate)
             results = await service.hybrid_search_with_rerank(
                 query="invoice total",
@@ -1115,14 +1121,14 @@ class EmbeddingService:
                 alpha=alpha,
                 similarity_threshold=similarity_threshold,
             )
-        
+
         # Retrieve more candidates for reranking
         candidate_limit = limit * rerank_candidates_multiplier
         logger.info(
             f"Hybrid search with rerank: retrieving {candidate_limit} candidates "
             f"for top {limit} results"
         )
-        
+
         # Stage 1: Retrieve candidates with hybrid search
         candidates = await self.hybrid_search(
             query=query,
@@ -1132,18 +1138,18 @@ class EmbeddingService:
             alpha=alpha,
             similarity_threshold=similarity_threshold,
         )
-        
+
         # Check for errors in candidates
         if candidates and "error" in candidates[0]:
             return candidates
-        
+
         # Stage 2: Rerank candidates to get final results
         reranked_results = await self.rerank_results(
             query=query,
             results=candidates,
             top_n=limit,
         )
-        
+
         return reranked_results
 
     async def search_across_namespaces(
@@ -1155,15 +1161,15 @@ class EmbeddingService:
     ) -> List[Dict[str, Any]]:
         """
         Search across multiple namespaces (tenants) and merge results.
-        
+
         Useful for admin queries or cross-tenant search scenarios.
-        
+
         Args:
             query: The search query text
             namespaces: List of namespaces to search
             limit: Maximum number of results per namespace
             filter_metadata: Optional metadata filter
-            
+
         Returns:
             Merged and ranked list of results from all namespaces
         """
@@ -1185,13 +1191,15 @@ class EmbeddingService:
             results = []
             for match in response.matches:
                 metadata = match.metadata or {}
-                results.append({
-                    "id": match.id,
-                    "score": match.score,
-                    "namespace": match.namespace,
-                    "content": metadata.get("text", ""),
-                    "metadata": metadata,
-                })
+                results.append(
+                    {
+                        "id": match.id,
+                        "score": match.score,
+                        "namespace": match.namespace,
+                        "content": metadata.get("text", ""),
+                        "metadata": metadata,
+                    }
+                )
 
             return results
 
@@ -1207,21 +1215,21 @@ class EmbeddingService:
     ) -> bool:
         """
         Delete all embeddings for a specific file using hierarchical IDs.
-        
+
         This uses Pinecone's list operation with prefix to find all vectors
         for a document, then deletes them by ID (more efficient than metadata filter).
-        
+
         Args:
             filename: The file_name (used to generate document_id if document_id not provided)
             document_id: The document_id prefix for vectors
             namespace: The namespace containing the vectors
-            
+
         Returns:
             True if deletion was successful
         """
         try:
             search_namespace = namespace if namespace else DEFAULT_NAMESPACE
-            
+
             # Determine the document ID prefix
             if document_id:
                 prefix = document_id
@@ -1233,23 +1241,25 @@ class EmbeddingService:
                 logger.error("Must provide either filename or document_id")
                 return False
 
-            logger.info(f"Deleting vectors with prefix: {prefix} from namespace: {search_namespace}")
+            logger.info(
+                f"Deleting vectors with prefix: {prefix} from namespace: {search_namespace}"
+            )
 
             # List all vectors with the document ID prefix
             vector_ids = []
-            
+
             # Paginate through all matching vectors
             list_response = await asyncio.to_thread(
                 self.index.list,
                 prefix=prefix,
                 namespace=search_namespace,
             )
-            
+
             # Handle pagination
             while True:
                 for vector in list_response.vectors:
                     vector_ids.append(vector.id)
-                
+
                 if list_response.pagination and list_response.pagination.next:
                     list_response = await asyncio.to_thread(
                         self.index.list,
@@ -1284,27 +1294,27 @@ class EmbeddingService:
     async def delete_namespace(self, namespace: str) -> bool:
         """
         Delete an entire namespace (all documents for a tenant).
-        
+
         Useful for tenant offboarding or data cleanup.
-        
+
         Args:
             namespace: The namespace to delete
-            
+
         Returns:
             True if deletion was successful
         """
         try:
             logger.info(f"Deleting entire namespace: {namespace}")
-            
+
             await asyncio.to_thread(
                 self.index.delete,
                 delete_all=True,
                 namespace=namespace,
             )
-            
+
             logger.info(f"Namespace {namespace} deleted successfully")
             return True
-            
+
         except Exception as e:
             logger.error(f"Error deleting namespace: {e}")
             return False
@@ -1367,5 +1377,3 @@ def get_embedding_service() -> EmbeddingService:
     if _embedding_service is None:
         _embedding_service = EmbeddingService()
     return _embedding_service
-
-

@@ -16,7 +16,6 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import RedirectResponse
 
 from ...core.config import settings
-from ..deps import CurrentUser, current_user
 from ...integrations.zoho_calendar import ZohoCalendarAdapter
 from ...integrations.zoho_calendar.oauth import (
     ZohoOAuthError,
@@ -25,6 +24,7 @@ from ...integrations.zoho_calendar.oauth import (
     verify_state,
 )
 from ...services.external_sync_service import sync_service
+from ..deps import CurrentUser, current_user
 
 logger = logging.getLogger(__name__)
 
@@ -130,6 +130,10 @@ async def zoho_calendar_oauth_callback(
         )
     except Exception as e:
         logger.error("Failed to create external_sources row for Zoho Calendar: %s", e)
+        return _redirect_to_integrations("error", reason="source_creation_failed")
+
+    if source is None:
+        logger.error("Zoho Calendar external_sources row was not created")
         return _redirect_to_integrations("error", reason="source_creation_failed")
 
     await sync_service.update_api_key_status(source["id"], "valid")

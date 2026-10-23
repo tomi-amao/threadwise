@@ -13,7 +13,7 @@ from enum import Enum
 from typing import Any, Dict, List, Optional
 from uuid import UUID
 
-from pydantic import BaseModel, Field, field_validator, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 def _utcnow() -> datetime:
@@ -28,7 +28,7 @@ def _utcnow() -> datetime:
 
 class ProcessingStatus(str, Enum):
     """Status of raw event processing."""
-    
+
     PENDING = "pending"
     PROCESSING = "processing"
     COMPLETED = "completed"
@@ -38,7 +38,7 @@ class ProcessingStatus(str, Enum):
 
 class OrderStatus(str, Enum):
     """Canonical order statuses."""
-    
+
     PENDING = "pending"
     CONFIRMED = "confirmed"
     PROCESSING = "processing"
@@ -50,7 +50,7 @@ class OrderStatus(str, Enum):
 
 class FulfillmentStatus(str, Enum):
     """Canonical fulfillment statuses."""
-    
+
     UNFULFILLED = "unfulfilled"
     PARTIAL = "partial"
     FULFILLED = "fulfilled"
@@ -58,7 +58,7 @@ class FulfillmentStatus(str, Enum):
 
 class PaymentStatus(str, Enum):
     """Canonical payment statuses."""
-    
+
     PENDING = "pending"
     AUTHORIZED = "authorized"
     CAPTURED = "captured"
@@ -149,30 +149,34 @@ TransactionDirection = TxnDirection
 
 class CanonicalBase(BaseModel):
     """Base class for all canonical models.
-    
+
     Provides common fields for tracking provenance and auditing.
     """
-    
+
     model_config = ConfigDict(
         frozen=True,  # Immutable
         extra="forbid",  # Strict validation
     )
-    
+
     # Provenance tracking
     provider: str = Field(description="Source provider (e.g., 'squarespace', 'stripe')")
     external_id: str = Field(description="Original ID from the provider")
     raw_event_id: UUID = Field(description="Reference to external_raw_events.id")
-    
+
     # Timestamps
-    created_at: Optional[datetime] = Field(default=None, description="When created in source system")
-    updated_at: Optional[datetime] = Field(default=None, description="When last updated in source system")
+    created_at: Optional[datetime] = Field(
+        default=None, description="When created in source system"
+    )
+    updated_at: Optional[datetime] = Field(
+        default=None, description="When last updated in source system"
+    )
 
 
 class ProcessingResult(BaseModel):
     """Result of processing a raw event."""
-    
+
     model_config = ConfigDict(frozen=True)
-    
+
     raw_event_id: UUID
     status: ProcessingStatus
     entity_type: str
@@ -184,9 +188,9 @@ class ProcessingResult(BaseModel):
 
 class Address(BaseModel):
     """Canonical address model."""
-    
+
     model_config = ConfigDict(frozen=True)
-    
+
     first_name: Optional[str] = None
     last_name: Optional[str] = None
     address_line_1: Optional[str] = None
@@ -200,12 +204,14 @@ class Address(BaseModel):
 
 class Money(BaseModel):
     """Canonical money model with precise decimal handling."""
-    
+
     model_config = ConfigDict(frozen=True)
-    
+
     amount: Decimal = Field(description="Amount as decimal")
-    currency: str = Field(min_length=3, max_length=3, description="ISO 4217 currency code")
-    
+    currency: str = Field(
+        min_length=3, max_length=3, description="ISO 4217 currency code"
+    )
+
     @field_validator("amount", mode="before")
     @classmethod
     def parse_amount(cls, v: Any) -> Decimal:
@@ -229,85 +235,91 @@ class Money(BaseModel):
 
 class CanonicalCustomer(CanonicalBase):
     """Canonical customer model.
-    
+
     Represents a customer across all commerce platforms.
     Only contains fields universal to every provider.
     Provider-specific data lives in metadata.
     """
-    
+
     # Required for identity resolution
     entity_id: UUID = Field(description="Parent entity ID for multi-tenant scoping")
-    
+
     # Customer details
     email: Optional[str] = None
     first_name: Optional[str] = None
     last_name: Optional[str] = None
     phone: Optional[str] = None
-    
+
     # Address
     default_address: Optional[Address] = None
-    
+
     # Provider-specific extras
-    metadata: Dict[str, Any] = Field(default_factory=dict, description="Provider-specific fields")
+    metadata: Dict[str, Any] = Field(
+        default_factory=dict, description="Provider-specific fields"
+    )
 
 
 class CanonicalLineItem(BaseModel):
     """Canonical order line item model.
-    
+
     Represents a single product in an order.
     """
-    
+
     model_config = ConfigDict(frozen=True)
-    
+
     # Identity
     external_id: str = Field(description="Line item ID from provider")
-    
+
     # Product reference
     product_external_id: Optional[str] = None
     variant_external_id: Optional[str] = None
     sku: Optional[str] = None
-    
+
     # Description
     product_name: str
     variant_name: Optional[str] = None
-    
+
     # Quantities and pricing
     quantity: int = Field(ge=0)
     unit_price: Money
     total_price: Money
     discount_amount: Optional[Money] = None
     tax_amount: Optional[Money] = None
-    
+
     # Provider-specific extras
-    metadata: Dict[str, Any] = Field(default_factory=dict, description="Provider-specific fields")
+    metadata: Dict[str, Any] = Field(
+        default_factory=dict, description="Provider-specific fields"
+    )
 
 
 class CanonicalOrder(CanonicalBase):
     """Canonical order model.
-    
+
     Represents an order across all commerce platforms.
     Only contains fields universal to every provider.
     Provider-specific data lives in metadata.
     """
-    
+
     # Required for identity resolution
     entity_id: UUID = Field(description="Parent entity ID for multi-tenant scoping")
-    
+
     # Customer reference
     customer_external_id: Optional[str] = None
     customer_email: Optional[str] = None
-    
+
     # Order details
     order_number: str
-    currency: str = Field(min_length=3, max_length=3, description="ISO 4217 currency code")
-    
+    currency: str = Field(
+        min_length=3, max_length=3, description="ISO 4217 currency code"
+    )
+
     # Status
     status: OrderStatus = OrderStatus.PENDING
     fulfillment_status: FulfillmentStatus = FulfillmentStatus.UNFULFILLED
-    
+
     # Line items
     line_items: List[CanonicalLineItem] = Field(default_factory=list)
-    
+
     # Totals (all in the order's currency)
     subtotal: Money
     discount_total: Money
@@ -315,33 +327,39 @@ class CanonicalOrder(CanonicalBase):
     tax_total: Money
     grand_total: Money
     refunded_total: Optional[Money] = None
-    
+
     # Addresses
     shipping_address: Optional[Address] = None
     billing_address: Optional[Address] = None
-    
+
     # Provider-specific extras
-    metadata: Dict[str, Any] = Field(default_factory=dict, description="Provider-specific fields")
+    metadata: Dict[str, Any] = Field(
+        default_factory=dict, description="Provider-specific fields"
+    )
 
 
 class CanonicalPaymentFee(BaseModel):
     """Canonical payment processing fee model.
-    
+
     Represents a processing fee charged by a payment gateway.
     """
-    
+
     model_config = ConfigDict(frozen=True)
-    
+
     external_fee_id: Optional[str] = None
     gross_fee: Money
     refunded_fee: Money
     net_fee: Money
 
     # Base-currency equivalent (GBP). None until FX rate is known.
-    base_fee_amount: Optional[Decimal] = Field(default=None, description="Fee in base currency (GBP)")
+    base_fee_amount: Optional[Decimal] = Field(
+        default=None, description="Fee in base currency (GBP)"
+    )
 
     # Provider-specific extras
-    metadata: Dict[str, Any] = Field(default_factory=dict, description="Provider-specific fields")
+    metadata: Dict[str, Any] = Field(
+        default_factory=dict, description="Provider-specific fields"
+    )
 
 
 class CanonicalPayment(CanonicalBase):
@@ -364,12 +382,21 @@ class CanonicalPayment(CanonicalBase):
     status: PaymentStatus = PaymentStatus.PENDING
 
     # Base-currency equivalent (GBP). None for same-currency payments until computed.
-    base_amount: Optional[Decimal] = Field(default=None, description="Payment amount in base currency (GBP)")
-    fx_rate: Optional[Decimal] = Field(default=None, description="Exchange rate: base_amount = amount * fx_rate. None if same currency.")
+    base_amount: Optional[Decimal] = Field(
+        default=None, description="Payment amount in base currency (GBP)"
+    )
+    fx_rate: Optional[Decimal] = Field(
+        default=None,
+        description="Exchange rate: base_amount = amount * fx_rate. None if same currency.",
+    )
 
     # Payment gateway
-    gateway: Optional[str] = Field(default=None, description="Payment gateway/processor (e.g. STRIPE, SQUARE)")
-    external_payment_id: Optional[str] = Field(default=None, description="Payment transaction ID from the gateway")
+    gateway: Optional[str] = Field(
+        default=None, description="Payment gateway/processor (e.g. STRIPE, SQUARE)"
+    )
+    external_payment_id: Optional[str] = Field(
+        default=None, description="Payment transaction ID from the gateway"
+    )
 
     # Payment method
     payment_method: Optional[str] = None
@@ -378,13 +405,19 @@ class CanonicalPayment(CanonicalBase):
     transaction_id: Optional[str] = None
 
     # Timing
-    paid_on: Optional[datetime] = Field(default=None, description="When the payment was actually made")
+    paid_on: Optional[datetime] = Field(
+        default=None, description="When the payment was actually made"
+    )
 
     # Processing fees
-    fees: List[CanonicalPaymentFee] = Field(default_factory=list, description="Processing fees for this payment")
+    fees: List[CanonicalPaymentFee] = Field(
+        default_factory=list, description="Processing fees for this payment"
+    )
 
     # Provider-specific extras
-    metadata: Dict[str, Any] = Field(default_factory=dict, description="Provider-specific fields")
+    metadata: Dict[str, Any] = Field(
+        default_factory=dict, description="Provider-specific fields"
+    )
 
 
 # =============================================================================
@@ -394,25 +427,27 @@ class CanonicalPayment(CanonicalBase):
 
 class CanonicalProductVariant(BaseModel):
     """Canonical product variant model.
-    
+
     Only contains fields universal to every provider.
     """
-    
+
     model_config = ConfigDict(frozen=True)
-    
+
     external_id: str
     sku: Optional[str] = None
     name: Optional[str] = None
-    
+
     # Pricing
     price: Optional[Money] = None
     compare_at_price: Optional[Money] = None
     on_sale: bool = False
-    
+
     # Inventory
     quantity: int = 0
     is_unlimited: bool = False
-    inventory_item_id: Optional[str] = None  # Provider's internal inventory item ID (e.g. Shopify inventory_item_id)
+    inventory_item_id: Optional[str] = (
+        None  # Provider's internal inventory item ID (e.g. Shopify inventory_item_id)
+    )
     unit_cost: Optional[Decimal] = None
 
     # Attributes (size, color, etc.)
@@ -421,37 +456,41 @@ class CanonicalProductVariant(BaseModel):
 
 class CanonicalProduct(CanonicalBase):
     """Canonical product model.
-    
+
     Represents a product catalog entry.
     Only contains fields universal to every provider.
     Provider-specific data lives in metadata.
     """
-    
+
     entity_id: UUID = Field(description="Parent entity ID for multi-tenant scoping")
-    
+
     # Product details
     name: str
     description: Optional[str] = None
     product_type: Optional[str] = None
-    status: str = Field(default="active", description="Product lifecycle: active, archived, draft")
-    
+    status: str = Field(
+        default="active", description="Product lifecycle: active, archived, draft"
+    )
+
     # Variants
     variants: List[CanonicalProductVariant] = Field(default_factory=list)
-    
+
     # Tags
     tags: List[str] = Field(default_factory=list)
-    
+
     # Provider-specific extras
-    metadata: Dict[str, Any] = Field(default_factory=dict, description="Provider-specific fields")
+    metadata: Dict[str, Any] = Field(
+        default_factory=dict, description="Provider-specific fields"
+    )
 
 
 class InventoryMovementType(str, Enum):
     """Types of inventory movements."""
 
-    INITIAL = "INITIAL"        # Opening / migration balance
-    SALE = "SALE"              # Stock out from a fulfilled order
-    PURCHASE = "PURCHASE"      # Stock in from a purchase invoice
-    RETURN = "RETURN"          # Stock in from a customer return
+    INITIAL = "INITIAL"  # Opening / migration balance
+    SALE = "SALE"  # Stock out from a fulfilled order
+    PURCHASE = "PURCHASE"  # Stock in from a purchase invoice
+    RETURN = "RETURN"  # Stock in from a customer return
     ADJUSTMENT = "ADJUSTMENT"  # Manual or provider-sync adjustment
 
 
@@ -477,13 +516,15 @@ class CanonicalInventoryItem(CanonicalBase):
 
     # Stock snapshot (updated on every sync)
     available_quantity: Optional[int] = None
-    location_external_id: Optional[str] = None  # Provider location ID (e.g. Shopify location_id)
+    location_external_id: Optional[str] = (
+        None  # Provider location ID (e.g. Shopify location_id)
+    )
 
     # Item details
     description: Optional[str] = None
     category: Optional[str] = None
     unit_cost: Decimal = Decimal("0")
-    
+
     # GL account references
     asset_account_id: Optional[UUID] = None
     cogs_account_id: Optional[UUID] = None
@@ -491,55 +532,55 @@ class CanonicalInventoryItem(CanonicalBase):
 
 class CanonicalInventoryMovement(BaseModel):
     """Canonical inventory movement model.
-    
+
     Represents a single stock movement in the inventory ledger.
     Positive quantity = stock IN; negative = stock OUT.
     """
-    
+
     model_config = ConfigDict(frozen=True)
-    
+
     # Which inventory item
     inventory_item_id: Optional[UUID] = None  # Resolved at persistence time
-    
+
     # Identifiers to resolve inventory_item_id if not known
     entity_id: UUID
     provider: str
     variant_external_id: str
-    
+
     # Movement details
     transaction_type: InventoryMovementType
     quantity: Decimal  # positive = IN, negative = OUT
     unit_cost: Decimal = Decimal("0")
-    
+
     # Reference to source record
     reference_id: Optional[UUID] = None
     reference_table: Optional[str] = None  # 'order_line_items', 'invoice_line_items'
-    
+
     notes: Optional[str] = None
 
 
 class CanonicalInventoryAdjustment(BaseModel):
     """Canonical inventory adjustment model.
-    
+
     Represents a change in inventory levels.
     """
-    
+
     model_config = ConfigDict(frozen=True)
-    
+
     # Identity
     provider: str
     raw_event_id: UUID
     entity_id: UUID
-    
+
     # Item reference
     variant_external_id: str
     sku: Optional[str] = None
-    
+
     # Adjustment details
     quantity_change: int
     quantity_after: int
     reason: InventoryAdjustmentReason
-    
+
     # Source reference (order ID, etc.)
     source_type: Optional[str] = None
     source_external_id: Optional[str] = None
@@ -567,12 +608,18 @@ class CanonicalBankAccount(CanonicalBase):
 
     # Account details
     name: Optional[str] = None
-    currency: str = Field(min_length=3, max_length=3, description="ISO 4217 currency code")
+    currency: str = Field(
+        min_length=3, max_length=3, description="ISO 4217 currency code"
+    )
     balance: Decimal = Field(default=Decimal("0"), description="Current balance")
-    state: Optional[str] = Field(default=None, description="Account state (e.g., 'active')")
+    state: Optional[str] = Field(
+        default=None, description="Account state (e.g., 'active')"
+    )
 
     # Provider-specific extras
-    metadata: Dict[str, Any] = Field(default_factory=dict, description="Provider-specific fields")
+    metadata: Dict[str, Any] = Field(
+        default_factory=dict, description="Provider-specific fields"
+    )
 
 
 class CanonicalFinancialTransaction(CanonicalBase):
@@ -591,11 +638,15 @@ class CanonicalFinancialTransaction(CanonicalBase):
     entity_id: UUID = Field(description="Parent entity ID for multi-tenant scoping")
 
     # Account reference
-    bank_account_id: Optional[UUID] = Field(default=None, description="FK to bank_accounts")
+    bank_account_id: Optional[UUID] = Field(
+        default=None, description="FK to bank_accounts"
+    )
 
     # Transaction identity
     source: TxnSource = Field(description="Source system (revolut, paypal, etc.)")
-    external_transaction_id: str = Field(description="Provider's own ID (unique per source)")
+    external_transaction_id: str = Field(
+        description="Provider's own ID (unique per source)"
+    )
 
     # Transaction details
     transaction_type: TxnType
@@ -610,7 +661,9 @@ class CanonicalFinancialTransaction(CanonicalBase):
     amount: Decimal = Field(description="Always positive; direction carries the sign")
     currency_code: str = Field(min_length=3, max_length=3, description="ISO 4217")
     base_currency_code: str = Field(default="GBP", min_length=3, max_length=3)
-    fx_rate: Optional[Decimal] = Field(default=None, description="NULL if same currency")
+    fx_rate: Optional[Decimal] = Field(
+        default=None, description="NULL if same currency"
+    )
     base_amount: Decimal = Field(description="Amount in base currency")
 
     # Processing state
@@ -620,7 +673,9 @@ class CanonicalFinancialTransaction(CanonicalBase):
     excluded_reason: Optional[str] = None
 
     # Provider-specific extras (merchant info, expense_category, etc.)
-    metadata: Dict[str, Any] = Field(default_factory=dict, description="Provider-specific fields")
+    metadata: Dict[str, Any] = Field(
+        default_factory=dict, description="Provider-specific fields"
+    )
 
 
 class ExpenseEnrichment(BaseModel):
@@ -630,6 +685,7 @@ class ExpenseEnrichment(BaseModel):
     (e.g., Revolut Expenses API vs Transactions API), this model merges
     enrichment data into the transaction's ``metadata`` JSONB column.
     """
+
     model_config = ConfigDict(frozen=True)
 
     # Identity fields to locate existing transaction
@@ -641,12 +697,10 @@ class ExpenseEnrichment(BaseModel):
 
     # Enrichment data (merged into metadata)
     expense_category: Optional[str] = Field(
-        default=None,
-        description="Expense category from provider's expense API"
+        default=None, description="Expense category from provider's expense API"
     )
     account_code: Optional[str] = Field(
-        default=None,
-        description="Chart of accounts code derived from expense category"
+        default=None, description="Chart of accounts code derived from expense category"
     )
 
     # Metadata

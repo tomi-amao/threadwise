@@ -120,7 +120,8 @@ class ShopifyAdapter:
                 },
             )
             response.raise_for_status()
-            return response.json()
+            token_response: dict = response.json()
+            return token_response
 
     async def _ensure_token(self) -> None:
         """Refresh the access token if missing or about to expire."""
@@ -190,9 +191,7 @@ class ShopifyAdapter:
             )
             response.raise_for_status()
             data = response.json()
-            next_cursor = self._extract_next_cursor(
-                response.headers.get("link", "")
-            )
+            next_cursor = self._extract_next_cursor(response.headers.get("link", ""))
             return data, next_cursor
 
     async def _fetch_inventory_item_costs(
@@ -212,7 +211,9 @@ class ShopifyAdapter:
 
         for id_chunk in self._chunked(inventory_item_ids, 100):
             ids_csv = ",".join(id_chunk)
-            data, _ = await self._make_request(url, {"ids": ids_csv, "limit": len(id_chunk)})
+            data, _ = await self._make_request(
+                url, {"ids": ids_csv, "limit": len(id_chunk)}
+            )
             for item in data.get("inventory_items", []) or []:
                 item_id = str(item.get("id", "")).strip()
                 if not item_id:
@@ -223,11 +224,15 @@ class ShopifyAdapter:
                 try:
                     costs[item_id] = Decimal(str(raw_cost))
                 except Exception:
-                    logger.debug("Skipping unparsable Shopify inventory cost", exc_info=True)
+                    logger.debug(
+                        "Skipping unparsable Shopify inventory cost", exc_info=True
+                    )
 
         return costs
 
-    async def _enrich_products_with_inventory_costs(self, products: list[Dict[str, Any]]) -> None:
+    async def _enrich_products_with_inventory_costs(
+        self, products: list[Dict[str, Any]]
+    ) -> None:
         """Attach inventory item cost metadata to each product variant payload."""
         inventory_item_ids = {
             str(variant.get("inventory_item_id"))
@@ -253,7 +258,9 @@ class ShopifyAdapter:
                 # Keep as string so payload remains JSON-serializable and lossless.
                 variant["inventory_item_cost"] = str(cost)
 
-    async def _enrich_inventory_with_costs(self, inventory_levels: list[Dict[str, Any]]) -> None:
+    async def _enrich_inventory_with_costs(
+        self, inventory_levels: list[Dict[str, Any]]
+    ) -> None:
         """Attach inventory item cost metadata to inventory level payloads."""
         inventory_item_ids = {
             str(level.get("inventory_item_id"))
@@ -287,7 +294,7 @@ class ShopifyAdapter:
         match = re.search(r'<([^>]+)>;\s*rel="next"', link_header)
         if not match:
             return None
-        pi_match = re.search(r'[?&]page_info=([^&]+)', match.group(1))
+        pi_match = re.search(r"[?&]page_info=([^&]+)", match.group(1))
         return pi_match.group(1) if pi_match else None
 
     # -------------------------------------------------------------------------
@@ -443,15 +450,17 @@ class ShopifyAdapter:
                 )
             except httpx.HTTPStatusError as e:
                 status_code = e.response.status_code
-                if endpoint in PAYMENTS_ONLY_ENDPOINTS and status_code in (402, 404, 422):
+                if endpoint in PAYMENTS_ONLY_ENDPOINTS and status_code in (
+                    402,
+                    404,
+                    422,
+                ):
                     logger.warning(
                         f"Shopify {endpoint} returned {status_code} — "
                         "store may not use Shopify Payments; skipping endpoint"
                     )
                     return
-                logger.error(
-                    f"HTTP error fetching Shopify {endpoint}: {status_code}"
-                )
+                logger.error(f"HTTP error fetching Shopify {endpoint}: {status_code}")
                 raise
             except Exception as e:
                 logger.error(f"Error fetching Shopify {endpoint}: {e}")
@@ -539,9 +548,7 @@ class ShopifyAdapter:
                 )
             )
 
-        logger.info(
-            f"Fetched {len(records)} transactions for Shopify order {order_id}"
-        )
+        logger.info(f"Fetched {len(records)} transactions for Shopify order {order_id}")
         return records
 
     async def test_connection(self) -> bool:

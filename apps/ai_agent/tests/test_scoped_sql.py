@@ -103,8 +103,8 @@ LOCAL_DB = os.environ.get(
 def two_businesses():
     try:
         conn = psycopg2.connect(LOCAL_DB, connect_timeout=2)
-    except psycopg2.Error:
-        pytest.skip("local Supabase database is not running")
+    except psycopg2.Error as exc:
+        raise pytest.skip.Exception("local Supabase database is not running") from exc
     with conn, conn.cursor() as cur:
         cur.execute(
             "select e.owner_user_id::text, e.id::text, "

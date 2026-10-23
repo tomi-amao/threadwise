@@ -364,8 +364,8 @@ def seed():
     manifest = json.loads(MANIFEST.read_text())
     try:
         conn = psycopg2.connect(LOCAL_DB, connect_timeout=2)
-    except psycopg2.Error:
-        pytest.skip("local Supabase database is not running")
+    except psycopg2.Error as exc:
+        raise pytest.skip.Exception("local Supabase database is not running") from exc
     with conn, conn.cursor() as cur:
         cur.execute(
             "select name, owner_user_id::text, id::text from entities "

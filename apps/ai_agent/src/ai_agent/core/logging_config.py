@@ -4,15 +4,14 @@ This module configures structlog to work properly with the langgraph library
 and prevent warning messages about format_exc_info conflicts.
 """
 
-import logging
 import structlog
 
 
 def configure_logging():
     """Configure structlog to prevent format_exc_info conflicts.
-    
+
     This must be called before langgraph or inngest imports to prevent
-    the warning: "Remove format_exc_info from your processor chain if 
+    the warning: "Remove format_exc_info from your processor chain if
     you want pretty exceptions."
     """
     structlog.configure(

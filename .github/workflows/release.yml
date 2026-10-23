@@ -1,5 +1,9 @@
 name: Release
 
+# Normally started by tag-release.yml, which tags a green commit on main and dispatches this
+# workflow for the tag. It can also be run by hand (workflow_dispatch) or by pushing a
+# vX.Y.Z tag yourself. It does not re-run CI: tag-release.yml only tags commits whose CI passed.
+
 on:
   push:
     tags:
@@ -50,14 +54,9 @@ jobs:
           echo "version-without-v=$VERSION_WITHOUT_V" >> $GITHUB_OUTPUT
           echo "Releasing version: $VERSION"
 
-  build-and-test:
-    name: Build & Test
-    needs: validate-version
-    uses: ./.github/workflows/ci.yml
-
   build-release-artifacts:
     name: Build Release Artifacts
-    needs: [validate-version, build-and-test]
+    needs: validate-version
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -120,7 +119,7 @@ jobs:
 
   build-and-push-docker:
     name: Build & Push Release Docker Images
-    needs: [validate-version, build-and-test]
+    needs: validate-version
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -190,6 +189,12 @@ jobs:
             COMMITS=$(git log ${PREVIOUS_TAG}..HEAD --pretty=format:"- %s (%h)" --no-merges)
           fi
 
+          if [ -z "$PREVIOUS_TAG" ]; then
+            FULL_CHANGELOG="First release: https://github.com/${{ github.repository }}/commits/${{ needs.validate-version.outputs.version }}"
+          else
+            FULL_CHANGELOG="**Full Changelog**: https://github.com/${{ github.repository }}/compare/${PREVIOUS_TAG}...${{ needs.validate-version.outputs.version }}"
+          fi
+
           # Create changelog
           cat > RELEASE_NOTES.md << EOF
           ## What's Changed
@@ -203,7 +208,7 @@ jobs:
 
           ## Full Changelog
 
-          **Full Changelog**: https://github.com/${{ github.repository }}/compare/${PREVIOUS_TAG}...${{ needs.validate-version.outputs.version }}
+          ${FULL_CHANGELOG}
           EOF
 
           cat RELEASE_NOTES.md
@@ -238,7 +243,7 @@ jobs:
           name: changelog
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.validate-version.outputs.version }}
           name: ThreadWise ${{ needs.validate-version.outputs.version }}

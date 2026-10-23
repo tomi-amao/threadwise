@@ -19,9 +19,7 @@ from ..common import PaginatedResult, RawEventRecord
 
 logger = logging.getLogger(__name__)
 
-PAYPAL_BASE_URL = os.environ.get(
-    "PAYPAL_API_URL", "https://api-m.paypal.com"
-)
+PAYPAL_BASE_URL = os.environ.get("PAYPAL_API_URL", "https://api-m.paypal.com")
 
 ENDPOINTS = {
     "transactions": f"{PAYPAL_BASE_URL}/v1/reporting/transactions",
@@ -97,7 +95,7 @@ class PayPalAdapter:
             response = await client.post(
                 url,
                 headers=headers,
-                data="grant_type=client_credentials",
+                data={"grant_type": "client_credentials"},
             )
             response.raise_for_status()
             token_data = response.json()
@@ -111,10 +109,7 @@ class PayPalAdapter:
 
     async def _ensure_authenticated(self) -> None:
         """Ensure we have a valid access token, refreshing if needed."""
-        if (
-            self._access_token is None
-            or time.monotonic() >= self._token_expires_at
-        ):
+        if self._access_token is None or time.monotonic() >= self._token_expires_at:
             await self._authenticate()
 
     # =========================================================================
@@ -197,9 +192,9 @@ class PayPalAdapter:
         # Last resort: use hash of payload
         import hashlib
 
-        return hashlib.sha256(
-            json.dumps(item, sort_keys=True).encode()
-        ).hexdigest()[:32]
+        return hashlib.sha256(json.dumps(item, sort_keys=True).encode()).hexdigest()[
+            :32
+        ]
 
     def _extract_occurred_at(
         self,
@@ -227,9 +222,7 @@ class PayPalAdapter:
             value = txn_info.get(field)
             if value:
                 try:
-                    return datetime.fromisoformat(
-                        value.replace("Z", "+00:00")
-                    )
+                    return datetime.fromisoformat(value.replace("Z", "+00:00"))
                 except (ValueError, TypeError):
                     continue
 

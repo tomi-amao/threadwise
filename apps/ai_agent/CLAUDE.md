@@ -57,17 +57,22 @@ poetry run isort src/ tests/
 ```
 
 CI (`.github/workflows/ci.yml`) runs the backend-lint/typecheck/security/test jobs
-above against `apps/ai_agent` with `--max-line-length=90` for flake8 — note this
-differs from the `.flake8` file's own default and from what the README describes;
-the CI invocation is authoritative. Pre-commit hooks (root `.pre-commit-config.yaml`,
-invoked via Husky) run Black/isort/flake8/mypy/bandit on changed Python files at
-commit time.
+above against `apps/ai_agent` with `--max-line-length=90` for flake8, the same value as
+`.flake8`, which also ignores E501 because Black owns line length (it cannot wrap long SQL, prompt
+or description strings). All of Black, isort, flake8, mypy and bandit are clean today, so a new
+finding is yours. Pre-commit hooks (root `.pre-commit-config.yaml`, invoked via Husky) run
+Black/isort/flake8/mypy/bandit on changed Python files at commit time.
 
-Only `tests/test_normalization.py` exists today — most services (journal_service,
-account_mapping, langgraph_service, etc.) have no test coverage yet. Auth and the agent are
-covered by `tests/test_auth.py`, `tests/test_api_auth.py`, `tests/test_scoped_sql.py` and
-`tests/test_chat_agent.py` (the last two use the local Supabase database and the e2e seed
-manifest when they exist, and skip those parts otherwise).
+There are 11 test files (about 260 tests): `test_normalization.py`, `test_invoice_rules.py`,
+`test_invoice_service.py`, `test_limits.py`, `test_auth.py`, `test_api_auth.py`,
+`test_ui_contract.py`, and the database-backed `test_scoped_sql.py`, `test_chat_agent.py`,
+`test_actions.py` and `test_evals.py`. The database-backed ones use the local Supabase stack and the
+e2e seed manifest and skip those parts when they are absent. Most services (journal_service,
+account_mapping, langgraph_service, etc.) have no direct coverage yet.
+
+`tests/conftest.py` sets `INNGEST_DEV=1`. CI has no `.env`, and without dev mode the Inngest SDK
+raises `SigningKeyMissingError` as soon as the app is imported, which fails the whole run at
+collection. Keep tests independent of a developer's `.env`; to check, move it aside and run pytest.
 
 ## Architecture
 
@@ -211,7 +216,18 @@ is Inngest-orchestrated, under `integrations/inngest/`:
 - `<provider>_sync_functions.py` — pulls raw data from each provider's API and
   writes to `external_raw_events`.
 - `events.py` — typed Inngest event senders (`send_<provider>_sync_event`, etc.)
-  that trigger the pipeline steps.
+  that trigger the pipeline steps. `client.send()` takes `inngest.Event(name=..., data=...)`,
+  not a dict: a dict raises `AttributeError` (inngest 0.5), which these helpers catch and report
+  as `False`, so a malformed send fails silently.
+- Inngest handler conventions (inngest 0.5): a handler takes only `ctx` and uses `ctx.step`
+  (`async def f(ctx: inngest.Context)`, not `(ctx, step)`); `ctx.event.data` is typed as broad JSON,
+  so read it into a `Dict[str, Any]`; and a function wrapped by `@client.create_function` becomes an
+  Inngest `Function`, which is **not callable**, so shared logic goes in a plain undecorated helper
+  (see `_sync_squarespace_endpoint`). `step.run` accepts handler args and sync callables.
+- Known gap: the PayPal normalizer leaves `base_amount` empty for foreign-currency transactions on
+  purpose, but `CanonicalFinancialTransaction.base_amount` and the `financial_transactions` column
+  are required, so those rows fail validation. Marked with a `type: ignore` in
+  `normalization/paypal_normalizer.py`; it needs a decision on how to convert them to GBP.
 - `normalization/inngest_functions.py` — the canonical processing path: consumes
   raw events, dispatches to the provider-specific normalizer, persists canonical
   records. Chained via `normalize_after_<provider>_sync` triggers.

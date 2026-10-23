@@ -16,7 +16,6 @@ from typing import Any, Dict, List, Optional
 from uuid import UUID
 
 from .models import (
-    CanonicalBankAccount,
     CanonicalFinancialTransaction,
     TxnDirection,
     TxnSource,
@@ -65,8 +64,8 @@ class PayPalNormalizer(FinancialNormalizer):
         # Unmatched T0600s represent real outflows from PayPal to a non-tracked account.
         "T0600": TxnType.TRANSFER,
         "T0700": TxnType.TRANSFER,
-        "T0803": TxnType.OTHER,       # chargeback reversal debit
-        "T1000": TxnType.PAYMENT,     # consumer-initiated payment
+        "T0803": TxnType.OTHER,  # chargeback reversal debit
+        "T1000": TxnType.PAYMENT,  # consumer-initiated payment
         "T1106": TxnType.FX_CONVERSION,
         # T1107 = chargeback reversal / non-bank reversal. NOT an FX conversion.
         # The cleaning service handles T1107+T0600 chargeback pairs (excludes both).
@@ -164,19 +163,13 @@ class PayPalNormalizer(FinancialNormalizer):
             # -----------------------------------------------------------------
             # Direction (negative = OUT, positive = IN)
             # -----------------------------------------------------------------
-            direction = (
-                TxnDirection.IN
-                if amount_decimal > 0
-                else TxnDirection.OUT
-            )
+            direction = TxnDirection.IN if amount_decimal > 0 else TxnDirection.OUT
 
             # -----------------------------------------------------------------
             # Transaction type from event code
             # -----------------------------------------------------------------
             event_code = txn_info.get("transaction_event_code", "")
-            txn_type = self.TRANSACTION_TYPE_MAP.get(
-                event_code, TxnType.OTHER
-            )
+            txn_type = self.TRANSACTION_TYPE_MAP.get(event_code, TxnType.OTHER)
 
             # -----------------------------------------------------------------
             # Declined / voided / failed detection
@@ -197,19 +190,16 @@ class PayPalNormalizer(FinancialNormalizer):
                     "no money movement occurred; excluded from business records"
                 )
                 txn_model_status = TxnStatus.EXCLUDED
-                warnings.append(f"Transaction excluded: PayPal status={paypal_status} ({label})")
+                warnings.append(
+                    f"Transaction excluded: PayPal status={paypal_status} ({label})"
+                )
 
             # -----------------------------------------------------------------
             # Timestamps
             # -----------------------------------------------------------------
-            occurred_at = (
-                self._parse_datetime(
-                    txn_info.get("transaction_initiation_date")
-                )
-                or self._parse_datetime(
-                    txn_info.get("transaction_updated_date")
-                )
-            )
+            occurred_at = self._parse_datetime(
+                txn_info.get("transaction_initiation_date")
+            ) or self._parse_datetime(txn_info.get("transaction_updated_date"))
             if not occurred_at:
                 return NormalizationResult.failure_result(
                     entity_type="financial_transaction",
@@ -256,9 +246,8 @@ class PayPalNormalizer(FinancialNormalizer):
                     seen.add(n)
                     unique_item_names.append(n)
 
-            subject_or_note = (
-                txn_info.get("transaction_subject")
-                or txn_info.get("transaction_note")
+            subject_or_note = txn_info.get("transaction_subject") or txn_info.get(
+                "transaction_note"
             )
 
             if unique_item_names:
@@ -353,11 +342,13 @@ class PayPalNormalizer(FinancialNormalizer):
                 ]
 
                 # Deduplicated invoice numbers for easy lookup
-                invoice_numbers = list({
-                    item.get("invoice_number")
-                    for item in item_details
-                    if item.get("invoice_number")
-                })
+                invoice_numbers = list(
+                    {
+                        item.get("invoice_number")
+                        for item in item_details
+                        if item.get("invoice_number")
+                    }
+                )
                 if invoice_numbers:
                     metadata["invoice_numbers"] = invoice_numbers
 
@@ -397,7 +388,10 @@ class PayPalNormalizer(FinancialNormalizer):
                 currency_code=currency,
                 base_currency_code=base_currency,
                 fx_rate=fx_rate,
-                base_amount=base_amount,
+                # Known gap: None for foreign-currency PayPal rows (see above), but the
+                # model and the NOT NULL column require a value, so those rows fail
+                # validation today. Needs a decision on how to convert them.
+                base_amount=base_amount,  # type: ignore[arg-type]
                 status=txn_model_status,
                 excluded_reason=txn_excluded_reason,
                 metadata=metadata,
@@ -412,9 +406,7 @@ class PayPalNormalizer(FinancialNormalizer):
             )
 
         except Exception as e:
-            logger.exception(
-                "Error normalizing PayPal transaction %s", external_id
-            )
+            logger.exception("Error normalizing PayPal transaction %s", external_id)
             return NormalizationResult.failure_result(
                 entity_type="financial_transaction",
                 external_id=external_id,

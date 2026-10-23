@@ -17,27 +17,26 @@ Supports:
 import asyncio
 import logging
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional
+from functools import partial
+from typing import Any, Dict, List, Optional, cast
 from uuid import UUID
 
 import inngest  # type: ignore
 from inngest.experimental import realtime
 
-from ..integrations.inngest.config import get_client
 from ..integrations.inngest.channels import (
-    get_normalization_channel,
     NormalizationProgressData,
     NormalizationStatusData,
+    get_normalization_channel,
 )
-from .models import ProcessingStatus
-from .normalizer import NormalizationResult
-from .persistence import persistence_service
-from .squarespace_normalizer import SquarespaceNormalizer
-from .revolut_normalizer import RevolutNormalizer
+from ..integrations.inngest.config import get_client
 from .paypal_normalizer import PayPalNormalizer
+from .persistence import persistence_service
+from .revolut_normalizer import RevolutNormalizer
 from .shopify_normalizer import ShopifyNormalizer
-from .zoho_calendar_normalizer import ZohoCalendarNormalizer
+from .squarespace_normalizer import SquarespaceNormalizer
 from .utils import extract_id, extract_row, extract_rows
+from .zoho_calendar_normalizer import ZohoCalendarNormalizer
 
 logger = logging.getLogger(__name__)
 
@@ -66,18 +65,32 @@ PROVIDER_NORMALIZERS = {
 
 # Entity type processing order (respects foreign key dependencies)
 ENTITY_TYPE_ORDER = [
-    "profile", "product", "customer", "inventory_item", "order", "transaction",
-    "bank_account", "financial_transaction", "expense", "payment_transaction",
-    "order_transaction", "calendar_event",
+    "profile",
+    "product",
+    "customer",
+    "inventory_item",
+    "order",
+    "transaction",
+    "bank_account",
+    "financial_transaction",
+    "expense",
+    "payment_transaction",
+    "order_transaction",
+    "calendar_event",
 ]
 
 # Dependency tiers: types within the same tier share no FK dependencies and
 # can be processed in parallel.  Tiers must still be executed in order.
 ENTITY_TYPE_TIERS: List[List[str]] = [
     ["profile", "product", "customer", "bank_account", "calendar_event"],  # Tier 0
-    ["inventory_item", "order"],                          # Tier 1 — depends on profile/product
-    ["transaction", "financial_transaction", "payment_transaction", "order_transaction"],  # Tier 2 — depends on order/bank_account
-    ["expense"],                                          # Tier 3 — depends on financial_transaction
+    ["inventory_item", "order"],  # Tier 1 — depends on profile/product
+    [
+        "transaction",
+        "financial_transaction",
+        "payment_transaction",
+        "order_transaction",
+    ],  # Tier 2 — depends on order/bank_account
+    ["expense"],  # Tier 3 — depends on financial_transaction
 ]
 
 
@@ -86,7 +99,8 @@ def get_normalizer(provider: str, entity_id: UUID):
     normalizer_class = PROVIDER_NORMALIZERS.get(provider)
     if not normalizer_class:
         raise ValueError(f"No normalizer found for provider: {provider}")
-    return normalizer_class(entity_id)
+    # Only concrete subclasses are registered; mypy sees the abstract base.
+    return normalizer_class(entity_id)  # type: ignore[abstract]
 
 
 # =============================================================================
@@ -122,12 +136,22 @@ async def _process_batch_parallel(
         raw_event_id = UUID(raw_event["id"])
 
         if raw_event.get("processing_status") == "completed":
-            return {"status": "skipped", "raw_event_id": str(raw_event_id), "error": None}
+            return {
+                "status": "skipped",
+                "raw_event_id": str(raw_event_id),
+                "error": None,
+            }
 
         entity_id_str = entity_id_cache.get(raw_event["source_id"])
         if not entity_id_str:
-            error = f"Could not determine entity_id for source: {raw_event['source_id']}"
-            return {"status": "failed", "raw_event_id": str(raw_event_id), "error": error}
+            error = (
+                f"Could not determine entity_id for source: {raw_event['source_id']}"
+            )
+            return {
+                "status": "failed",
+                "raw_event_id": str(raw_event_id),
+                "error": error,
+            }
 
         entity_id = UUID(entity_id_str)
 
@@ -144,7 +168,11 @@ async def _process_batch_parallel(
             )
 
         if persist_result.get("skipped"):
-            return {"status": "skipped", "raw_event_id": str(raw_event_id), "error": None}
+            return {
+                "status": "skipped",
+                "raw_event_id": str(raw_event_id),
+                "error": None,
+            }
 
         return {
             "status": "completed" if persist_result["success"] else "failed",
@@ -157,14 +185,21 @@ async def _process_batch_parallel(
         return_exceptions=True,
     )
 
-    aggregated: Dict[str, Any] = {"completed": 0, "failed": 0, "skipped": 0, "errors": []}
+    aggregated: Dict[str, Any] = {
+        "completed": 0,
+        "failed": 0,
+        "skipped": 0,
+        "errors": [],
+    }
     for i, result in enumerate(per_event_results):
-        if isinstance(result, Exception):
+        if isinstance(result, BaseException):
             aggregated["failed"] += 1
-            aggregated["errors"].append({
-                "raw_event_id": pending_events[i].get("id"),
-                "error": str(result),
-            })
+            aggregated["errors"].append(
+                {
+                    "raw_event_id": pending_events[i].get("id"),
+                    "error": str(result),
+                }
+            )
         elif result["status"] == "completed":
             aggregated["completed"] += 1
         elif result["status"] == "skipped":
@@ -172,10 +207,12 @@ async def _process_batch_parallel(
         else:
             aggregated["failed"] += 1
             if result.get("error"):
-                aggregated["errors"].append({
-                    "raw_event_id": result["raw_event_id"],
-                    "error": result["error"],
-                })
+                aggregated["errors"].append(
+                    {
+                        "raw_event_id": result["raw_event_id"],
+                        "error": result["error"],
+                    }
+                )
 
     return aggregated
 
@@ -192,61 +229,55 @@ async def _process_batch_parallel(
 )
 async def normalize_raw_event(ctx: inngest.Context) -> Dict[str, Any]:
     """Normalize a single raw event.
-    
+
     Triggered when a new raw event is stored or when reprocessing is requested.
-    
+
     Event data:
         - raw_event_id: UUID of the raw event to process
         - force: Boolean to force reprocessing even if already processed
     """
     try:
-        event_data = ctx.event.data
+        event_data: Dict[str, Any] = dict(ctx.event.data)
         raw_event_id = UUID(event_data.get("raw_event_id"))
         force = event_data.get("force", False)
-        
+
         ctx.logger.info(f"Normalizing raw event {raw_event_id}")
-        
+
         # Step 1: Fetch the raw event
         raw_event = await ctx.step.run(
-            "fetch-raw-event",
-            lambda: _fetch_raw_event(raw_event_id)
+            "fetch-raw-event", lambda: _fetch_raw_event(raw_event_id)
         )
-        
+
         if not raw_event:
-            return {
-                "status": "error",
-                "error": f"Raw event not found: {raw_event_id}"
-            }
-        
+            return {"status": "error", "error": f"Raw event not found: {raw_event_id}"}
+
         # Check if already processed
         if raw_event.get("processing_status") == "completed" and not force:
             return {
                 "status": "skipped",
                 "reason": "Already processed",
-                "raw_event_id": str(raw_event_id)
+                "raw_event_id": str(raw_event_id),
             }
-        
+
         # Step 2: Mark as processing
         await ctx.step.run(
-            "mark-processing",
-            lambda: persistence_service.mark_processing(raw_event_id)
+            "mark-processing", lambda: persistence_service.mark_processing(raw_event_id)
         )
-        
+
         # Step 3: Get entity_id from source
         entity_id_str = await ctx.step.run(
-            "get-entity-id",
-            lambda: _get_entity_id_from_source(raw_event["source_id"])
+            "get-entity-id", lambda: _get_entity_id_from_source(raw_event["source_id"])
         )
-        
+
         if not entity_id_str:
             return {
                 "status": "error",
-                "error": f"Could not determine entity_id for source: {raw_event['source_id']}"
+                "error": f"Could not determine entity_id for source: {raw_event['source_id']}",
             }
-        
+
         # Convert back to UUID for normalizer
         entity_id = UUID(entity_id_str)
-        
+
         # Step 4: Normalize + Persist in one step (avoids double normalization)
         persist_result = await ctx.step.run(
             "normalize-and-persist",
@@ -256,15 +287,15 @@ async def normalize_raw_event(ctx: inngest.Context) -> Dict[str, Any]:
                 external_id=raw_event["external_id"],
                 payload=raw_event["payload"],
                 raw_event_id=raw_event_id,
-                entity_id=entity_id
-            )
+                entity_id=entity_id,
+            ),
         )
-        
+
         success = persist_result["success"]
         skipped = persist_result.get("skipped", False)
         canonical_id = persist_result["canonical_id"]
         error = persist_result["error"]
-        
+
         if skipped:
             return {
                 "status": "skipped",
@@ -273,9 +304,9 @@ async def normalize_raw_event(ctx: inngest.Context) -> Dict[str, Any]:
                 "external_id": raw_event["external_id"],
                 "canonical_id": None,
                 "error": None,
-                "processed_at": datetime.now().isoformat()
+                "processed_at": datetime.now().isoformat(),
             }
-        
+
         return {
             "status": "completed" if success else "failed",
             "raw_event_id": str(raw_event_id),
@@ -283,9 +314,9 @@ async def normalize_raw_event(ctx: inngest.Context) -> Dict[str, Any]:
             "external_id": raw_event["external_id"],
             "canonical_id": str(canonical_id) if canonical_id else None,
             "error": error,
-            "processed_at": datetime.now().isoformat()
+            "processed_at": datetime.now().isoformat(),
         }
-        
+
     except Exception as e:
         ctx.logger.error(f"Error normalizing raw event: {str(e)}")
         raise
@@ -298,7 +329,7 @@ async def normalize_raw_event(ctx: inngest.Context) -> Dict[str, Any]:
 )
 async def normalize_batch(ctx: inngest.Context) -> Dict[str, Any]:
     """Process a batch of pending raw events for a specific entity type.
-    
+
     Event data:
         - entity_type: Optional filter by entity type
         - limit: Max events to process (default 100)
@@ -306,7 +337,7 @@ async def normalize_batch(ctx: inngest.Context) -> Dict[str, Any]:
         - source_id_for_channel: Optional source_id for realtime channel
     """
     try:
-        event_data = ctx.event.data
+        event_data: Dict[str, Any] = dict(ctx.event.data)
         entity_type = event_data.get("entity_type")
         limit = event_data.get("limit", 100)
         source_id = event_data.get("source_id")
@@ -315,21 +346,19 @@ async def normalize_batch(ctx: inngest.Context) -> Dict[str, Any]:
         cumulative_processed = event_data.get("cumulative_processed", 0)
         cumulative_succeeded = event_data.get("cumulative_succeeded", 0)
         cumulative_failed = event_data.get("cumulative_failed", 0)
-        
+
         ctx.logger.info(
             f"Starting batch normalization (type={entity_type}, limit={limit})"
         )
-        
+
         # Step 1: Get pending events
         pending_events = await ctx.step.run(
             "fetch-pending-events",
             lambda: _fetch_pending_events(
-                entity_type=entity_type,
-                limit=limit,
-                source_id=source_id
-            )
+                entity_type=entity_type, limit=limit, source_id=source_id
+            ),
         )
-        
+
         if not pending_events:
             return {
                 "status": "completed",
@@ -338,9 +367,9 @@ async def normalize_batch(ctx: inngest.Context) -> Dict[str, Any]:
                 "completed": 0,
                 "failed": 0,
                 "skipped": 0,
-                "message": "No pending events found"
+                "message": "No pending events found",
             }
-        
+
         ctx.logger.info(f"Found {len(pending_events)} pending events")
 
         # Step 2: Process all events in parallel inside a single step.
@@ -348,12 +377,15 @@ async def normalize_batch(ctx: inngest.Context) -> Dict[str, Any]:
         # reduces N Inngest round-trips down to 1.
         results = await ctx.step.run(
             "process-batch-parallel",
-            lambda evts=pending_events: _process_batch_parallel(evts),
+            _process_batch_parallel,
+            pending_events,
         )
-        
+
         # Step 3: Publish progress/completion for this batch
         if channel_source_id and entity_type:
-            effective_total = total_pending_count if total_pending_count else len(pending_events)
+            effective_total = (
+                total_pending_count if total_pending_count else len(pending_events)
+            )
             total_done = results["completed"] + results["failed"] + results["skipped"]
             final_processed = cumulative_processed + total_done
             is_final_batch = final_processed >= effective_total
@@ -383,7 +415,7 @@ async def normalize_batch(ctx: inngest.Context) -> Dict[str, Any]:
             **results,
             "processed_at": datetime.now().isoformat(),
         }
-        
+
     except Exception as e:
         ctx.logger.error(f"Error in batch normalization: {str(e)}")
         raise
@@ -401,11 +433,11 @@ async def normalize_batch(ctx: inngest.Context) -> Dict[str, Any]:
 )
 async def normalize_source(ctx: inngest.Context) -> Dict[str, Any]:
     """Normalize all raw events for a specific source.
-    
+
     This is the primary entry point for the UI "Load Data" action.
     Processes events in dependency order with realtime progress updates.
     Supports hard/soft sync modes.
-    
+
     Event data:
         - source_id: External source ID (required)
         - mode: 'hard' or 'soft' (default: 'soft')
@@ -415,37 +447,38 @@ async def normalize_source(ctx: inngest.Context) -> Dict[str, Any]:
     """
     source_id = None
     mode = "soft"
-    
+
     try:
-        event_data = ctx.event.data
+        event_data: Dict[str, Any] = dict(ctx.event.data)
         source_id = event_data.get("source_id")
         mode = event_data.get("mode", "soft")
         batch_size = event_data.get("batch_size", 100)
-        
+
         if not source_id:
             raise ValueError("source_id is required")
-        
-        ctx.logger.info(
-            f"Starting source normalization for {source_id} (mode={mode})"
-        )
-        
+
+        ctx.logger.info(f"Starting source normalization for {source_id} (mode={mode})")
+
         channel = get_normalization_channel(source_id)
-        
+
         # Determine which entity types this provider supports
         provider = await ctx.step.run(
-            "get-provider",
-            lambda: _get_provider_from_source(source_id)
+            "get-provider", lambda: _get_provider_from_source(source_id)
         )
-        
+
         normalizer_class = PROVIDER_NORMALIZERS.get(provider)
         if normalizer_class:
-            supported = normalizer_class.supported_entity_types if hasattr(normalizer_class, 'supported_entity_types') else ENTITY_TYPE_ORDER
+            supported = (
+                normalizer_class.supported_entity_types
+                if hasattr(normalizer_class, "supported_entity_types")
+                else ENTITY_TYPE_ORDER
+            )
             entity_types_to_process = [
                 et for et in ENTITY_TYPE_ORDER if et in supported
             ]
         else:
             entity_types_to_process = ENTITY_TYPE_ORDER
-        
+
         # Publish initial status
         await realtime.publish(
             client=inngest_client,
@@ -463,22 +496,20 @@ async def normalize_source(ctx: inngest.Context) -> Dict[str, Any]:
                 timestamp=datetime.now().isoformat(),
             ),
         )
-        
+
         # Step 1: If hard mode, reset processing status
         if mode == "hard":
             reset_count = await ctx.step.run(
-                "reset-processing-status",
-                lambda: _reset_processing_status(source_id)
+                "reset-processing-status", lambda: _reset_processing_status(source_id)
             )
             ctx.logger.info(f"Hard mode: reset {reset_count} events to pending")
-        
+
         # Step 2: Build dependency-ordered tiers filtered to this provider's entity types.
         # Entity types within each tier have no FK dependencies on each other and
         # can be processed in parallel.  Tiers are still executed sequentially.
         entity_type_set = set(entity_types_to_process)
         filtered_tiers = [
-            [et for et in tier if et in entity_type_set]
-            for tier in ENTITY_TYPE_TIERS
+            [et for et in tier if et in entity_type_set] for tier in ENTITY_TYPE_TIERS
         ]
         filtered_tiers = [t for t in filtered_tiers if t]  # drop empty tiers
 
@@ -509,9 +540,12 @@ async def normalize_source(ctx: inngest.Context) -> Dict[str, Any]:
             # Count pending events for all types in this tier in parallel
             count_results = await ctx.group.parallel(
                 tuple(
-                    lambda et=et: ctx.step.run(
+                    partial(
+                        ctx.step.run,
                         f"count-pending-{et}",
-                        lambda e=et: _count_pending_events(entity_type=e, source_id=source_id),
+                        partial(
+                            _count_pending_events, entity_type=et, source_id=source_id
+                        ),
                     )
                     for et in tier_entity_types
                 )
@@ -538,7 +572,10 @@ async def normalize_source(ctx: inngest.Context) -> Dict[str, Any]:
                     )
                     completed_types += 1
                     all_results[entity_type] = {
-                        "completed": 0, "failed": 0, "skipped": 0, "events_total": 0
+                        "completed": 0,
+                        "failed": 0,
+                        "skipped": 0,
+                        "events_total": 0,
                     }
 
             # Active types are those with pending events
@@ -580,7 +617,9 @@ async def normalize_source(ctx: inngest.Context) -> Dict[str, Any]:
                 batch_results_list = await ctx.group.parallel(invoke_tasks)
 
                 finished: List[str] = []
-                for et, batch_result in zip(list(active_types.keys()), batch_results_list):
+                for et, batch_result in zip(
+                    list(active_types.keys()), batch_results_list
+                ):
                     batch_total = batch_result.get("events_total", 0)
                     type_results[et]["completed"] += batch_result.get("completed", 0)
                     type_results[et]["failed"] += batch_result.get("failed", 0)
@@ -593,7 +632,9 @@ async def normalize_source(ctx: inngest.Context) -> Dict[str, Any]:
                 for et in finished:
                     del active_types[et]
 
-            for entity_type in [et for et in tier_entity_types if tier_pending_counts[et] > 0]:
+            for entity_type in [
+                et for et in tier_entity_types if tier_pending_counts[et] > 0
+            ]:
                 all_results[entity_type] = type_results[entity_type]
                 total_succeeded += type_results[entity_type]["completed"]
                 total_failed += type_results[entity_type]["failed"]
@@ -616,7 +657,7 @@ async def normalize_source(ctx: inngest.Context) -> Dict[str, Any]:
                     timestamp=datetime.now().isoformat(),
                 ),
             )
-        
+
         # Publish final completion status
         await realtime.publish(
             client=inngest_client,
@@ -634,7 +675,7 @@ async def normalize_source(ctx: inngest.Context) -> Dict[str, Any]:
                 timestamp=datetime.now().isoformat(),
             ),
         )
-        
+
         return {
             "status": "completed",
             "source_id": source_id,
@@ -642,12 +683,12 @@ async def normalize_source(ctx: inngest.Context) -> Dict[str, Any]:
             "entity_types": all_results,
             "total_succeeded": total_succeeded,
             "total_failed": total_failed,
-            "completed_at": datetime.now().isoformat()
+            "completed_at": datetime.now().isoformat(),
         }
-        
+
     except Exception as e:
         ctx.logger.error(f"Error in source normalization: {str(e)}")
-        
+
         if source_id:
             try:
                 channel = get_normalization_channel(source_id)
@@ -669,7 +710,7 @@ async def normalize_source(ctx: inngest.Context) -> Dict[str, Any]:
                 )
             except Exception as pub_err:
                 ctx.logger.error(f"Failed to publish error status: {pub_err}")
-        
+
         raise
 
 
@@ -684,7 +725,7 @@ async def normalize_after_sync(ctx: inngest.Context) -> Dict[str, Any]:
     Automatically processes all new raw events from a sync using soft mode.
     """
     try:
-        event_data = ctx.event.data
+        event_data: Dict[str, Any] = dict(ctx.event.data)
         source_id = event_data.get("source_id")
         total_items = event_data.get("total_items", 0)
 
@@ -701,14 +742,14 @@ async def normalize_after_sync(ctx: inngest.Context) -> Dict[str, Any]:
                 "source_id": source_id,
                 "mode": "soft",
                 "batch_size": 100,
-            }
+            },
         )
 
         return {
             "status": "completed",
             "source_id": source_id,
             "normalization_result": result,
-            "processed_at": datetime.now().isoformat()
+            "processed_at": datetime.now().isoformat(),
         }
 
     except Exception as e:
@@ -724,7 +765,7 @@ async def normalize_after_sync(ctx: inngest.Context) -> Dict[str, Any]:
 async def normalize_after_revolut_sync(ctx: inngest.Context) -> Dict[str, Any]:
     """Trigger normalization after a Revolut sync completes."""
     try:
-        event_data = ctx.event.data
+        event_data: Dict[str, Any] = dict(ctx.event.data)
         source_id = event_data.get("source_id")
         total_items = event_data.get("total_items", 0)
 
@@ -740,14 +781,14 @@ async def normalize_after_revolut_sync(ctx: inngest.Context) -> Dict[str, Any]:
                 "source_id": source_id,
                 "mode": "soft",
                 "batch_size": 100,
-            }
+            },
         )
 
         return {
             "status": "completed",
             "source_id": source_id,
             "normalization_result": result,
-            "processed_at": datetime.now().isoformat()
+            "processed_at": datetime.now().isoformat(),
         }
 
     except Exception as e:
@@ -763,7 +804,7 @@ async def normalize_after_revolut_sync(ctx: inngest.Context) -> Dict[str, Any]:
 async def normalize_after_paypal_sync(ctx: inngest.Context) -> Dict[str, Any]:
     """Trigger normalization after a PayPal sync completes."""
     try:
-        event_data = ctx.event.data
+        event_data: Dict[str, Any] = dict(ctx.event.data)
         source_id = event_data.get("source_id")
         total_items = event_data.get("total_items", 0)
 
@@ -779,14 +820,14 @@ async def normalize_after_paypal_sync(ctx: inngest.Context) -> Dict[str, Any]:
                 "source_id": source_id,
                 "mode": "soft",
                 "batch_size": 100,
-            }
+            },
         )
 
         return {
             "status": "completed",
             "source_id": source_id,
             "normalization_result": result,
-            "processed_at": datetime.now().isoformat()
+            "processed_at": datetime.now().isoformat(),
         }
 
     except Exception as e:
@@ -802,7 +843,7 @@ async def normalize_after_paypal_sync(ctx: inngest.Context) -> Dict[str, Any]:
 async def normalize_after_shopify_sync(ctx: inngest.Context) -> Dict[str, Any]:
     """Trigger normalization after a Shopify sync completes."""
     try:
-        event_data = ctx.event.data
+        event_data: Dict[str, Any] = dict(ctx.event.data)
         source_id = event_data.get("source_id")
         total_items = event_data.get("total_items", 0)
 
@@ -818,14 +859,14 @@ async def normalize_after_shopify_sync(ctx: inngest.Context) -> Dict[str, Any]:
                 "source_id": source_id,
                 "mode": "soft",
                 "batch_size": 100,
-            }
+            },
         )
 
         return {
             "status": "completed",
             "source_id": source_id,
             "normalization_result": result,
-            "processed_at": datetime.now().isoformat()
+            "processed_at": datetime.now().isoformat(),
         }
 
     except Exception as e:
@@ -841,7 +882,7 @@ async def normalize_after_shopify_sync(ctx: inngest.Context) -> Dict[str, Any]:
 async def normalize_after_zoho_calendar_sync(ctx: inngest.Context) -> Dict[str, Any]:
     """Trigger normalization after a Zoho Calendar sync completes."""
     try:
-        event_data = ctx.event.data
+        event_data: Dict[str, Any] = dict(ctx.event.data)
         source_id = event_data.get("source_id")
         total_items = event_data.get("total_items", 0)
 
@@ -857,14 +898,14 @@ async def normalize_after_zoho_calendar_sync(ctx: inngest.Context) -> Dict[str, 
                 "source_id": source_id,
                 "mode": "soft",
                 "batch_size": 100,
-            }
+            },
         )
 
         return {
             "status": "completed",
             "source_id": source_id,
             "normalization_result": result,
-            "processed_at": datetime.now().isoformat()
+            "processed_at": datetime.now().isoformat(),
         }
 
     except Exception as e:
@@ -880,25 +921,25 @@ async def reprocess_failed_events(ctx: inngest.Context) -> Dict[str, Any]:
     """Periodically retry failed normalizations."""
     try:
         ctx.logger.info("Starting reprocessing of failed events")
-        
+
         failed_events = await ctx.step.run(
-            "fetch-failed-events",
-            lambda: _fetch_failed_events(limit=100)
+            "fetch-failed-events", lambda: _fetch_failed_events(limit=100)
         )
-        
+
         if not failed_events:
             return {
                 "status": "completed",
                 "events_retried": 0,
-                "message": "No failed events to reprocess"
+                "message": "No failed events to reprocess",
             }
-        
+
         ctx.logger.info(f"Found {len(failed_events)} failed events to retry")
-        
+
         # Retry all failed events in parallel
         retry_results = await ctx.group.parallel(
             tuple(
-                lambda ev=ev: ctx.step.invoke(
+                partial(
+                    ctx.step.invoke,
                     f"retry-{ev['id'][:8]}",
                     function=normalize_raw_event,
                     data={"raw_event_id": ev["id"], "force": True},
@@ -931,35 +972,37 @@ async def reprocess_failed_events(ctx: inngest.Context) -> Dict[str, Any]:
 )
 async def reprocess_stuck_processing_events(ctx: inngest.Context) -> Dict[str, Any]:
     """Periodically reprocess events stuck in 'processing' status.
-    
+
     Sometimes raw events get stuck in 'processing' status due to crashes or timeouts.
     This cron job finds events that have been processing for more than 30 minutes
     and resets them to 'pending' so they can be reprocessed.
     """
     try:
         ctx.logger.info("Starting reprocessing of stuck events")
-        
+
         # Fetch events stuck in processing for more than 30 minutes
         stuck_events = await ctx.step.run(
             "fetch-stuck-events",
-            lambda: _fetch_stuck_processing_events(minutes_threshold=30, limit=100)
+            lambda: _fetch_stuck_processing_events(minutes_threshold=30, limit=100),
         )
-        
+
         if not stuck_events:
             return {
                 "status": "completed",
                 "events_reset": 0,
-                "message": "No stuck events found"
+                "message": "No stuck events found",
             }
-        
+
         ctx.logger.info(f"Found {len(stuck_events)} stuck events to reset")
-        
+
         # Reset all stuck events to pending in parallel, then reprocess in parallel
         await ctx.group.parallel(
             tuple(
-                lambda ev=ev: ctx.step.run(
+                partial(
+                    ctx.step.run,
                     f"reset-{ev['id'][:8]}",
-                    lambda e=ev["id"]: _reset_event_to_pending(e),
+                    _reset_event_to_pending,
+                    ev["id"],
                 )
                 for ev in stuck_events
             )
@@ -967,7 +1010,8 @@ async def reprocess_stuck_processing_events(ctx: inngest.Context) -> Dict[str, A
 
         reprocess_results = await ctx.group.parallel(
             tuple(
-                lambda ev=ev: ctx.step.invoke(
+                partial(
+                    ctx.step.invoke,
                     f"reprocess-{ev['id'][:8]}",
                     function=normalize_raw_event,
                     data={"raw_event_id": ev["id"], "force": True},
@@ -988,7 +1032,7 @@ async def reprocess_stuck_processing_events(ctx: inngest.Context) -> Dict[str, A
             **results,
             "processed_at": datetime.now().isoformat(),
         }
-        
+
     except Exception as e:
         ctx.logger.error(f"Error reprocessing stuck events: {str(e)}")
         raise
@@ -1001,34 +1045,37 @@ async def reprocess_stuck_processing_events(ctx: inngest.Context) -> Dict[str, A
 )
 async def reprocess_failed_manual(ctx: inngest.Context) -> Dict[str, Any]:
     """Manually triggered reprocessing of failed events.
-    
+
     Event data:
         - source_id: Optional filter by source
         - limit: Max events to reprocess (default 100)
     """
     try:
-        event_data = ctx.event.data
+        event_data: Dict[str, Any] = dict(ctx.event.data)
         source_id = event_data.get("source_id")
         limit = event_data.get("limit", 100)
-        
-        ctx.logger.info(f"Manual reprocessing triggered (source={source_id}, limit={limit})")
-        
+
+        ctx.logger.info(
+            f"Manual reprocessing triggered (source={source_id}, limit={limit})"
+        )
+
         failed_events = await ctx.step.run(
             "fetch-failed-events",
-            lambda: _fetch_failed_events(limit=limit, source_id=source_id)
+            lambda: _fetch_failed_events(limit=limit, source_id=source_id),
         )
-        
+
         if not failed_events:
             return {
                 "status": "completed",
                 "events_retried": 0,
-                "message": "No failed events to reprocess"
+                "message": "No failed events to reprocess",
             }
-        
+
         # Retry all failed events in parallel
         retry_results = await ctx.group.parallel(
             tuple(
-                lambda ev=ev: ctx.step.invoke(
+                partial(
+                    ctx.step.invoke,
                     f"retry-{ev['id'][:8]}",
                     function=normalize_raw_event,
                     data={"raw_event_id": ev["id"], "force": True},
@@ -1063,7 +1110,7 @@ async def reprocess_failed_manual(ctx: inngest.Context) -> Dict[str, Any]:
 async def _fetch_raw_event(raw_event_id: UUID) -> Optional[Dict[str, Any]]:
     """Fetch a raw event by ID."""
     from ..core.supabase_client import get_supabase_client
-    
+
     client = get_supabase_client()
     if client is None:
         raise RuntimeError("Supabase client not configured")
@@ -1079,7 +1126,7 @@ async def _fetch_raw_event(raw_event_id: UUID) -> Optional[Dict[str, Any]]:
 async def _get_entity_id_from_source(source_id: str) -> Optional[str]:
     """Get entity_id from source."""
     from ..core.supabase_client import get_supabase_client
-    
+
     client = get_supabase_client()
     if client is None:
         raise RuntimeError("Supabase client not configured")
@@ -1098,7 +1145,7 @@ async def _get_entity_id_from_source(source_id: str) -> Optional[str]:
 async def _get_provider_from_source(source_id: str) -> str:
     """Get provider name from source."""
     from ..core.supabase_client import get_supabase_client
-    
+
     client = get_supabase_client()
     if client is None:
         raise RuntimeError("Supabase client not configured")
@@ -1108,8 +1155,10 @@ async def _get_provider_from_source(source_id: str) -> str:
         .eq("id", source_id)
         .execute()
     )
-    if result.data:
-        return result.data[0].get("provider", "unknown")
+    rows = cast(List[Dict[str, Any]], result.data)
+    if rows:
+        provider: str = rows[0].get("provider", "unknown")
+        return provider
     return "unknown"
 
 
@@ -1119,15 +1168,15 @@ async def _normalize_event(
     external_id: str,
     payload: Dict[str, Any],
     raw_event_id: UUID,
-    entity_id: UUID
+    entity_id: UUID,
 ) -> Dict[str, Any]:
     """Normalize a single event (async for step function).
-    
+
     Returns a serializable dict instead of NormalizationResult for Inngest compatibility.
     """
     normalizer = get_normalizer(provider, entity_id)
     result = normalizer.normalize(entity_type, external_id, payload, raw_event_id)
-    
+
     # Convert to serializable dict (NormalizationResult is not JSON-serializable)
     return {
         "success": result.success,
@@ -1142,7 +1191,9 @@ async def _normalize_event(
         "warnings": result.warnings,
         "needs_review": result.needs_review,
         "review_reason": result.review_reason,
-        "processed_at": result.processed_at.isoformat() if result.processed_at else None,
+        "processed_at": (
+            result.processed_at.isoformat() if result.processed_at else None
+        ),
         # Note: canonical object is intentionally omitted as it's not serializable
         # and will be reconstructed during persistence
     }
@@ -1154,77 +1205,78 @@ async def _persist_event(
     external_id: str,
     payload: Dict[str, Any],
     raw_event_id: UUID,
-    entity_id: UUID
+    entity_id: UUID,
 ) -> Dict[str, Any]:
     """Normalize and persist an event (async for step function).
-    
+
     Returns a serializable dict with persistence results.
     """
     normalizer = get_normalizer(provider, entity_id)
     result = normalizer.normalize(entity_type, external_id, payload, raw_event_id)
-    
+
     # Persist the result
     success, canonical_id, error = await persistence_service.persist(result)
-    
+
     return {
         "success": success,
         "skipped": result.skipped,
         "canonical_id": str(canonical_id) if canonical_id else None,
-        "error": error if not result.skipped else None
+        "error": error if not result.skipped else None,
     }
 
 
 async def _fetch_pending_events(
-    entity_type: Optional[str] = None,
-    limit: int = 100,
-    source_id: Optional[str] = None
+    entity_type: Optional[str] = None, limit: int = 100, source_id: Optional[str] = None
 ) -> List[Dict[str, Any]]:
     """Fetch pending raw events."""
     from ..core.supabase_client import get_supabase_client
-    
+
     client = get_supabase_client()
     if client is None:
         raise RuntimeError("Supabase client not configured")
-    
+
     def _query():
-        query = client.table("external_raw_events") \
-            .select("*") \
+        query = (
+            client.table("external_raw_events")
+            .select("*")
             .eq("processing_status", "pending")
-        
+        )
+
         if entity_type:
             query = query.eq("entity_type", entity_type)
         if source_id:
             query = query.eq("source_id", source_id)
-        
+
         return query.order("fetched_at").limit(limit).execute()
-    
+
     result = await asyncio.to_thread(_query)
     return extract_rows(result)
 
 
 async def _count_pending_events(
-    entity_type: Optional[str] = None,
-    source_id: Optional[str] = None
+    entity_type: Optional[str] = None, source_id: Optional[str] = None
 ) -> int:
     """Count pending raw events."""
     from ..core.supabase_client import get_supabase_client
-    
+
     client = get_supabase_client()
     if client is None:
         raise RuntimeError("Supabase client not configured")
-    
+
     def _query():
-        query = client.table("external_raw_events") \
-            .select("id", count="exact") \
+        query = (
+            client.table("external_raw_events")
+            .select("id", count="exact")
             .eq("processing_status", "pending")
-        
+        )
+
         if entity_type:
             query = query.eq("entity_type", entity_type)
         if source_id:
             query = query.eq("source_id", source_id)
-        
+
         return query.execute()
-    
+
     result = await asyncio.to_thread(_query)
     return result.count or 0
 
@@ -1235,23 +1287,25 @@ async def _fetch_failed_events(
 ) -> List[Dict[str, Any]]:
     """Fetch failed raw events for retry."""
     from ..core.supabase_client import get_supabase_client
-    
+
     client = get_supabase_client()
     if client is None:
         raise RuntimeError("Supabase client not configured")
-    
+
     def _query():
-        query = client.table("external_raw_events") \
-            .select("*") \
-            .eq("processing_status", "failed") \
-            .order("fetched_at") \
+        query = (
+            client.table("external_raw_events")
+            .select("*")
+            .eq("processing_status", "failed")
+            .order("fetched_at")
             .limit(limit)
-        
+        )
+
         if source_id:
             query = query.eq("source_id", source_id)
-        
+
         return query.execute()
-    
+
     result = await asyncio.to_thread(_query)
     return extract_rows(result)
 
@@ -1261,93 +1315,103 @@ async def _fetch_stuck_processing_events(
     limit: int = 100,
 ) -> List[Dict[str, Any]]:
     """Fetch raw events stuck in 'processing' status for more than threshold minutes.
-    
+
     Args:
         minutes_threshold: How many minutes an event can be in processing before considered stuck
         limit: Maximum number of events to fetch
-        
+
     Returns:
         List of stuck raw events
     """
     from ..core.supabase_client import get_supabase_client
-    
+
     client = get_supabase_client()
     if client is None:
         raise RuntimeError("Supabase client not configured")
-    
+
     # Calculate the threshold timestamp
     threshold_time = datetime.now() - timedelta(minutes=minutes_threshold)
-    
+
     def _query():
         # Find events that are in 'processing' status and were fetched more than threshold ago
         # Using fetched_at as proxy for when processing started
-        query = client.table("external_raw_events") \
-            .select("*") \
-            .eq("processing_status", "processing") \
-            .lt("fetched_at", threshold_time.isoformat()) \
-            .order("fetched_at") \
+        query = (
+            client.table("external_raw_events")
+            .select("*")
+            .eq("processing_status", "processing")
+            .lt("fetched_at", threshold_time.isoformat())
+            .order("fetched_at")
             .limit(limit)
-        
+        )
+
         return query.execute()
-    
+
     result = await asyncio.to_thread(_query)
     return extract_rows(result)
 
 
 async def _reset_event_to_pending(raw_event_id: UUID) -> bool:
     """Reset a raw event's processing status to pending.
-    
+
     Args:
         raw_event_id: The event ID to reset
-        
+
     Returns:
         True if successful, False otherwise
     """
     from ..core.supabase_client import get_supabase_client
-    
+
     client = get_supabase_client()
     if client is None:
         raise RuntimeError("Supabase client not configured")
-    
+
     def _update():
-        return client.table("external_raw_events") \
-            .update({
-                "processing_status": "pending",
-                "processing_error": None,
-                "processed_at": None,
-            }) \
-            .eq("id", str(raw_event_id)) \
+        return (
+            client.table("external_raw_events")
+            .update(
+                {
+                    "processing_status": "pending",
+                    "processing_error": None,
+                    "processed_at": None,
+                }
+            )
+            .eq("id", str(raw_event_id))
             .execute()
-    
+        )
+
     result = await asyncio.to_thread(_update)
     return bool(result.data)
 
 
 async def _reset_processing_status(source_id: str) -> int:
     """Reset processing_status to 'pending' for all events in a source.
-    
+
     Used in hard sync mode to force reprocessing of all events.
-    
+
     Returns:
         Number of events reset
     """
     from ..core.supabase_client import get_supabase_client
-    
+
     client = get_supabase_client()
     if client is None:
         raise RuntimeError("Supabase client not configured")
-    
+
     def _update():
-        return client.table("external_raw_events") \
-            .update({
-                "processing_status": "pending",
-                "processing_error": None,
-                "processed_at": None,
-            }) \
-            .eq("source_id", source_id) \
-            .neq("processing_status", "pending") \
+        return (
+            client.table("external_raw_events")
+            .update(
+                {
+                    "processing_status": "pending",
+                    "processing_error": None,
+                    "processed_at": None,
+                }
+            )
+            .eq("source_id", source_id)
+            .neq("processing_status", "pending")
             .execute()
-    
+        )
+
     result = await asyncio.to_thread(_update)
     return len(result.data) if result.data else 0
 
@@ -1366,7 +1430,7 @@ async def trigger_normalization(raw_event_id: UUID, force: bool = False) -> bool
                 data={
                     "raw_event_id": str(raw_event_id),
                     "force": force,
-                }
+                },
             )
         )
         return True
@@ -1376,9 +1440,7 @@ async def trigger_normalization(raw_event_id: UUID, force: bool = False) -> bool
 
 
 async def trigger_batch_normalization(
-    entity_type: Optional[str] = None,
-    limit: int = 100,
-    source_id: Optional[str] = None
+    entity_type: Optional[str] = None, limit: int = 100, source_id: Optional[str] = None
 ) -> bool:
     """Trigger batch normalization."""
     try:
@@ -1389,7 +1451,7 @@ async def trigger_batch_normalization(
                     "entity_type": entity_type,
                     "limit": limit,
                     "source_id": source_id,
-                }
+                },
             )
         )
         return True
@@ -1404,12 +1466,12 @@ async def trigger_source_normalization(
     batch_size: int = 100,
 ) -> Optional[List[str]]:
     """Trigger normalization for all events in a source.
-    
+
     Args:
         source_id: External source ID
         mode: 'hard' or 'soft'
         batch_size: Events per batch
-        
+
     Returns:
         List of event IDs if successful, None on failure
     """
@@ -1421,7 +1483,7 @@ async def trigger_source_normalization(
                     "source_id": source_id,
                     "mode": mode,
                     "batch_size": batch_size,
-                }
+                },
             )
         )
         return event_ids
@@ -1442,7 +1504,7 @@ async def trigger_reprocess_failed(
                 data={
                     "source_id": source_id,
                     "limit": limit,
-                }
+                },
             )
         )
         return True

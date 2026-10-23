@@ -60,7 +60,7 @@ jobs:
             type=ref,event=pr
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
-            type=sha,prefix={{branch}}-
+            type=sha
             type=raw,value=latest,enable={{is_default_branch}}
 
       - name: Build and push Docker image
@@ -73,10 +73,11 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          # Only VITE_* values the browser bundle reads are baked in; server config
+          # (Supabase, AI_AGENT_URL) is supplied at runtime.
           build-args: |
-            VITE_API_URL=${{ secrets.VITE_API_URL || 'http://localhost:8000' }}
-            VITE_SUPABASE_URL=${{ secrets.VITE_SUPABASE_URL }}
-            VITE_SUPABASE_ANON_KEY=${{ secrets.VITE_SUPABASE_ANON_KEY }}
+            VITE_LANGGRAPH_API_URL=${{ secrets.VITE_LANGGRAPH_API_URL || 'http://localhost:2024' }}
+            VITE_LANGGRAPH_ASSISTANT_ID=${{ secrets.VITE_LANGGRAPH_ASSISTANT_ID }}
 
   build-ai-agent:
     name: Build AI Agent Docker Image
@@ -110,7 +111,7 @@ jobs:
             type=ref,event=pr
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
-            type=sha,prefix={{branch}}-
+            type=sha
             type=raw,value=latest,enable={{is_default_branch}}
 
       - name: Build and push Docker image
@@ -146,11 +147,11 @@ jobs:
 
       - name: Validate docker-compose configuration
         run: |
-          docker-compose -f docker-compose.yml config
+          docker compose -f docker-compose.yml config
 
       - name: Validate docker-compose.dev configuration
         run: |
-          docker-compose -f docker-compose.yml -f docker-compose.dev.yml config
+          docker compose -f docker-compose.yml -f docker-compose.dev.yml config
 
   security-scan:
     name: Security Scan Docker Images

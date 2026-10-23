@@ -6,12 +6,11 @@ and transforms them into canonical models.
 
 import logging
 from decimal import Decimal
-from typing import Any, Dict, List, Optional, cast
+from typing import Any, Dict, List, Optional
 from uuid import UUID
 
 from .models import (
     Address,
-    CanonicalBase,
     CanonicalCustomer,
     CanonicalInventoryItem,
     CanonicalLineItem,
@@ -41,7 +40,14 @@ class ShopifyNormalizer(BaseNormalizer):
     """
 
     provider = "shopify"
-    supported_entity_types = ["order", "product", "customer", "inventory_item", "payment_transaction", "order_transaction"]
+    supported_entity_types = [
+        "order",
+        "product",
+        "customer",
+        "inventory_item",
+        "payment_transaction",
+        "order_transaction",
+    ]
 
     # =========================================================================
     # STATUS MAPPINGS
@@ -107,7 +113,9 @@ class ShopifyNormalizer(BaseNormalizer):
             shopify_fulfillment, FulfillmentStatus.UNFULFILLED
         )
         order_status = self.ORDER_STATUS_MAP.get(
-            payload.get("cancel_reason") and "cancelled" or payload.get("status", "open"),
+            payload.get("cancel_reason")
+            and "cancelled"
+            or payload.get("status", "open"),
             OrderStatus.CONFIRMED,
         )
         # Override with fulfillment-derived status when not cancelled
@@ -148,8 +156,11 @@ class ShopifyNormalizer(BaseNormalizer):
         )
         # Shipping total from shipping_lines sum
         shipping_amount = sum(
-            Decimal(str(line.get("price", "0")))
-            for line in payload.get("shipping_lines", [])
+            (
+                Decimal(str(line.get("price", "0")))
+                for line in payload.get("shipping_lines", [])
+            ),
+            Decimal("0"),
         )
         shipping_total = Money(amount=shipping_amount, currency=currency)
 
@@ -163,7 +174,9 @@ class ShopifyNormalizer(BaseNormalizer):
 
         # Customer references
         customer_data = payload.get("customer") or {}
-        customer_external_id = str(customer_data.get("id")) if customer_data.get("id") else None
+        customer_external_id = (
+            str(customer_data.get("id")) if customer_data.get("id") else None
+        )
         customer_email = payload.get("email") or customer_data.get("email")
 
         # Metadata
@@ -176,7 +189,11 @@ class ShopifyNormalizer(BaseNormalizer):
             metadata["source_name"] = payload["source_name"]
         if payload.get("fulfillments"):
             metadata["fulfillments"] = [
-                {"id": f.get("id"), "status": f.get("status"), "tracking_number": f.get("tracking_number")}
+                {
+                    "id": f.get("id"),
+                    "status": f.get("status"),
+                    "tracking_number": f.get("tracking_number"),
+                }
                 for f in payload["fulfillments"]
             ]
 
@@ -238,8 +255,12 @@ class ShopifyNormalizer(BaseNormalizer):
 
             canonical_item = CanonicalLineItem(
                 external_id=str(item.get("id", "")),
-                product_external_id=str(item.get("product_id")) if item.get("product_id") else None,
-                variant_external_id=str(item.get("variant_id")) if item.get("variant_id") else None,
+                product_external_id=(
+                    str(item.get("product_id")) if item.get("product_id") else None
+                ),
+                variant_external_id=(
+                    str(item.get("variant_id")) if item.get("variant_id") else None
+                ),
                 sku=item.get("sku"),
                 product_name=item.get("title", "Unknown Product"),
                 quantity=quantity,
@@ -347,7 +368,9 @@ class ShopifyNormalizer(BaseNormalizer):
         if payload.get("vendor"):
             metadata["vendor"] = payload["vendor"]
         if payload.get("images"):
-            metadata["images"] = [img.get("src") for img in payload["images"] if img.get("src")]
+            metadata["images"] = [
+                img.get("src") for img in payload["images"] if img.get("src")
+            ]
         if payload.get("options"):
             metadata["options"] = payload["options"]
 
@@ -410,12 +433,14 @@ class ShopifyNormalizer(BaseNormalizer):
                 sku=variant.get("sku"),
                 price=price,
                 compare_at_price=compare_at,
-                on_sale=bool(
-                    compare_at and compare_at.amount > price.amount
-                ),
+                on_sale=bool(compare_at and compare_at.amount > price.amount),
                 quantity=variant.get("inventory_quantity", 0) or 0,
                 is_unlimited=variant.get("inventory_management") is None,
-                inventory_item_id=str(variant["inventory_item_id"]) if variant.get("inventory_item_id") else None,
+                inventory_item_id=(
+                    str(variant["inventory_item_id"])
+                    if variant.get("inventory_item_id")
+                    else None
+                ),
                 unit_cost=unit_cost,
                 attributes={
                     k: str(variant.get(f"option{i}", ""))
@@ -467,7 +492,9 @@ class ShopifyNormalizer(BaseNormalizer):
             entity_id=self.entity_id,
             variant_external_id=inventory_item_id,
             available_quantity=int(available) if available is not None else None,
-            location_external_id=str(payload["location_id"]) if payload.get("location_id") else None,
+            location_external_id=(
+                str(payload["location_id"]) if payload.get("location_id") else None
+            ),
             # available=None means unlimited/untracked in Shopify
             is_unlimited=available is None,
             unit_cost=unit_cost,
@@ -523,7 +550,9 @@ class ShopifyNormalizer(BaseNormalizer):
         fee_amount = Decimal(str(abs(float(payload.get("fee", "0")))))
         net_amount = Decimal(str(abs(float(payload.get("net", "0")))))
 
-        status = PaymentStatus.REFUNDED if txn_type == "refund" else PaymentStatus.CAPTURED
+        status = (
+            PaymentStatus.REFUNDED if txn_type == "refund" else PaymentStatus.CAPTURED
+        )
         processed_at = self._parse_datetime(payload.get("processed_at"))
 
         source_order_id = payload.get("source_order_id")
@@ -550,7 +579,9 @@ class ShopifyNormalizer(BaseNormalizer):
             net_amount=Money(amount=net_amount, currency=currency),
             status=status,
             gateway="shopify_payments",
-            external_payment_id=str(payload["source_id"]) if payload.get("source_id") else None,
+            external_payment_id=(
+                str(payload["source_id"]) if payload.get("source_id") else None
+            ),
             paid_on=processed_at,
             fees=fees,
             metadata={
@@ -633,8 +664,7 @@ class ShopifyNormalizer(BaseNormalizer):
         fees: List[CanonicalPaymentFee] = []
         try:
             capture = (
-                payload
-                .get("receipt", {})
+                payload.get("receipt", {})
                 .get("purchase_units", [{}])[0]
                 .get("payments", {})
                 .get("captures", [{}])[0]
@@ -643,10 +673,16 @@ class ShopifyNormalizer(BaseNormalizer):
             if breakdown:
                 fee_val = breakdown.get("paypal_fee", {}).get("value")
                 net_val = breakdown.get("net_amount", {}).get("value")
-                fee_currency = breakdown.get("paypal_fee", {}).get("currency_code", currency)
+                fee_currency = breakdown.get("paypal_fee", {}).get(
+                    "currency_code", currency
+                )
                 if fee_val:
                     fee_amount = Decimal(str(abs(float(fee_val))))
-                    net_amount = Decimal(str(abs(float(net_val)))) if net_val else amount - fee_amount
+                    net_amount = (
+                        Decimal(str(abs(float(net_val))))
+                        if net_val
+                        else amount - fee_amount
+                    )
                     base_fee: Optional[Decimal] = None
                     if fee_currency == "GBP":
                         base_fee = fee_amount
@@ -657,7 +693,9 @@ class ShopifyNormalizer(BaseNormalizer):
                             external_fee_id=f"{external_id}_fee",
                             gross_fee=Money(amount=fee_amount, currency=fee_currency),
                             net_fee=Money(amount=fee_amount, currency=fee_currency),
-                            refunded_fee=Money(amount=Decimal("0"), currency=fee_currency),
+                            refunded_fee=Money(
+                                amount=Decimal("0"), currency=fee_currency
+                            ),
                             base_fee_amount=base_fee,
                         )
                     ]
