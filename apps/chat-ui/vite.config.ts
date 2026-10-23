@@ -10,4 +10,11 @@ export default defineConfig({
     port: 5174,
     host: true,
   },
+  // The SDK ships a nested ESM copy of p-retry with no package.json, so a plain `.js` file with
+  // `import` statements. Node 24 sniffs that fine, but Vercel's function loader does not and the
+  // SSR render crashes ("Cannot use import statement outside a module"). Bundling it avoids the
+  // runtime resolution altogether.
+  ssr: {
+    noExternal: ['@langchain/langgraph-sdk'],
+  },
 });
