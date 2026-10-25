@@ -328,6 +328,12 @@ function formatGbp(value: number): string {
 function dateGte(date: string): string {
   return date + 'T00:00:00Z';
 }
+/** The calendar day before `date` (YYYY-MM-DD). */
+function dayBefore(date: string): string {
+  const day = new Date(`${date}T00:00:00Z`);
+  day.setUTCDate(day.getUTCDate() - 1);
+  return day.toISOString().slice(0, 10);
+}
 function dateLte(date: string): string {
   return date + 'T23:59:59.999Z';
 }
@@ -601,22 +607,8 @@ export async function getReportsData(
       .range(from, to)
   ).then(data => ({ data }));
 
-  // Fetch all data in parallel (except journals and journal_line_items which need pagination)
-  const [revenueData, accountsRes, txnsRes, orderLineItemsRes, inventoryMovementsRes] =
-    await Promise.all([
-      revenueDataPromise,
-      supabase
-        .from('chart_of_accounts')
-        .select('id, name, account_type, account_number, normal_balance, is_header')
-        .eq('status', 'active')
-        .eq('is_header', false),
-      txnsQ,
-      orderLineItemsQ,
-      inventoryMovementsQ,
-    ]);
-
   // Posted journals, all of them (paged by id: see above).
-  const allPostedJournals = await fetchAllRows<JournalHeadRow>('journals', (from, to) =>
+  const postedJournalsQ = fetchAllRows<JournalHeadRow>('journals', (from, to) =>
     supabase
       .from('journals')
       .select('id, journal_date, status, source_type, source_id')
@@ -629,22 +621,85 @@ export async function getReportsData(
   // asserting the categorisation is right — but a cash movement that already
   // has a draft needs a different fix from one with no journal at all, so the
   // cash flow report distinguishes them rather than lumping both together.
-  const { data: draftJournalRows } = await supabase
+  const draftJournalsQ = supabase
     .from('journals')
     .select('source_id')
     .eq('status', 'draft')
     .eq('source_type', 'financial_transaction');
-  const txnIdsWithDraftJournal = new Set(
-    (draftJournalRows || []).map(row => String(row.source_id || '')).filter(Boolean)
-  );
 
   // Every journal line (paged by id: see above).
-  const allLineItems = await fetchAllRows<JournalLineRow>('journal lines', (from, to) =>
+  const lineItemsQ = fetchAllRows<JournalLineRow>('journal lines', (from, to) =>
     supabase
       .from('journal_line_items')
       .select('journal_id, account_id, debit, credit, currency, gbp_equivalent')
       .order('id')
       .range(from, to)
+  );
+
+  // Bank balances at the end of the period, and the day before it starts (for opening cash).
+  const closingBalancesQ = getDerivedBankBalances(supabase, { asOf: to });
+  const openingBalancesQ = from
+    ? getDerivedBankBalances(supabase, { asOf: dayBefore(from) })
+    : Promise.resolve(null);
+
+  // Corporation tax periods for the safe-to-spend reserve. null means the tax engine was
+  // unavailable, which must not block the page.
+  const taxRowsQ = (async (): Promise<TaxPeriodRow[] | null> => {
+    try {
+      const { data: entityRow } = await supabase.from('entities').select('id').limit(1).single();
+      if (!entityRow?.id) return [];
+      const { data: taxRows } = await supabase.rpc('compute_corporation_tax', {
+        p_entity_id: entityRow.id,
+      });
+      return (taxRows || []) as TaxPeriodRow[];
+    } catch {
+      return null;
+    }
+  })();
+
+  // Supplier invoices raised but not yet settled.
+  const openBillsQ = supabase
+    .from('invoices')
+    .select('gross_amount, status, invoice_type')
+    .eq('invoice_type', 'PURCHASE')
+    .not('status', 'in', '("PAID","CANCELLED","VOID","DRAFT")');
+
+  // None of these depend on each other, and each is at least one round trip to the database,
+  // so they all go at once rather than one after another.
+  const [
+    revenueData,
+    accountsRes,
+    txnsRes,
+    orderLineItemsRes,
+    inventoryMovementsRes,
+    allPostedJournals,
+    { data: draftJournalRows },
+    allLineItems,
+    derivedBankBalances,
+    openingBalances,
+    taxRows,
+    { data: openBills },
+  ] = await Promise.all([
+    revenueDataPromise,
+    supabase
+      .from('chart_of_accounts')
+      .select('id, name, account_type, account_number, normal_balance, is_header')
+      .eq('status', 'active')
+      .eq('is_header', false),
+    txnsQ,
+    orderLineItemsQ,
+    inventoryMovementsQ,
+    postedJournalsQ,
+    draftJournalsQ,
+    lineItemsQ,
+    closingBalancesQ,
+    openingBalancesQ,
+    taxRowsQ,
+    openBillsQ,
+  ]);
+
+  const txnIdsWithDraftJournal = new Set(
+    (draftJournalRows || []).map(row => String(row.source_id || '')).filter(Boolean)
   );
   const orders = revenueData.orders;
   const accounts = (accountsRes.data || []) as unknown as AccountRow[];
@@ -1221,7 +1276,6 @@ export async function getReportsData(
   //  3. Classification comes from each transaction's journal, via the account
   //     on the other side of the entry, rather than from the payee's name.
 
-  const derivedBankBalances = await getDerivedBankBalances(supabase, { asOf: to });
   const perimeterAccountIds = new Set(derivedBankBalances.accounts.map(account => account.id));
 
   // Must mirror getDerivedBankBalances' own filter exactly (status <> 'excluded',
@@ -1408,12 +1462,7 @@ export async function getReportsData(
   // is whatever the closing balance and the period's movement imply.
   const closingBalancePerBank = derivedBankBalances.totalBalance;
   let openingBalance: number;
-  if (from) {
-    const dayBefore = new Date(`${from}T00:00:00Z`);
-    dayBefore.setUTCDate(dayBefore.getUTCDate() - 1);
-    const openingBalances = await getDerivedBankBalances(supabase, {
-      asOf: dayBefore.toISOString().slice(0, 10),
-    });
+  if (openingBalances) {
     openingBalance = openingBalances.totalBalance;
   } else {
     openingBalance = round2(closingBalancePerBank - netChange);
@@ -1599,21 +1648,13 @@ export async function getReportsData(
   // engine rather than re-deriving it, so the two pages can't disagree.
   let taxReserve = 0;
   let taxReserveDetail = 'No corporation tax accrued on the current period yet.';
-  try {
-    const { data: entityRow } = await supabase.from('entities').select('id').limit(1).single();
-    if (entityRow?.id) {
-      const { data: taxRows } = await supabase.rpc('compute_corporation_tax', {
-        p_entity_id: entityRow.id,
-      });
-      const openPeriod = ((taxRows || []) as TaxPeriodRow[]).find(
-        row => row.status === 'open' && row.ledger_basis
-      );
-      if (openPeriod?.tax_due != null) {
-        taxReserve = round2(Number(openPeriod.tax_due));
-        taxReserveDetail = `Corporation tax accrued so far on ${openPeriod.label}, at ${(Number(openPeriod.effective_rate) * 100).toFixed(0)}% of ${formatGbp(Number(openPeriod.taxable_profit))} taxable profit. Payable ${new Date(`${openPeriod.payment_due}T00:00:00Z`).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' })}.`;
-      }
+  if (taxRows) {
+    const openPeriod = taxRows.find(row => row.status === 'open' && row.ledger_basis);
+    if (openPeriod?.tax_due != null) {
+      taxReserve = round2(Number(openPeriod.tax_due));
+      taxReserveDetail = `Corporation tax accrued so far on ${openPeriod.label}, at ${(Number(openPeriod.effective_rate) * 100).toFixed(0)}% of ${formatGbp(Number(openPeriod.taxable_profit))} taxable profit. Payable ${new Date(`${openPeriod.payment_due}T00:00:00Z`).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' })}.`;
     }
-  } catch {
+  } else {
     // The tax engine is a nice-to-have here; if it is unavailable the reserve
     // stays at zero and the note below says so rather than blocking the page.
     taxReserveDetail = 'Corporation tax figure unavailable — treat safe-to-spend as optimistic.';
@@ -1621,11 +1662,6 @@ export async function getReportsData(
 
   // Supplier invoices raised but not yet settled.
   let unpaidBills = 0;
-  const { data: openBills } = await supabase
-    .from('invoices')
-    .select('gross_amount, status, invoice_type')
-    .eq('invoice_type', 'PURCHASE')
-    .not('status', 'in', '("PAID","CANCELLED","VOID","DRAFT")');
   for (const bill of openBills || []) {
     unpaidBills += Number(bill.gross_amount || 0);
   }

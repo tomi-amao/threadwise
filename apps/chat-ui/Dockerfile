@@ -5,8 +5,9 @@
 # Build from the repository root, because the pnpm workspace and lockfile live there:
 #   docker build -f apps/chat-ui/Dockerfile -t threadwise-chat-ui .
 #
-# Only VITE_* values are baked into the browser bundle (build args below). Everything
-# else (Supabase keys, AI_AGENT_URL, ...) is read from the environment at runtime, so
+# Only VITE_* values are baked into the browser bundle (build args below): the browser's
+# Supabase client reads VITE_SUPABASE_URL / VITE_SUPABASE_PUBLISHABLE_KEY, nothing else.
+# Everything else (the server's Supabase keys, AI_AGENT_URL, ...) is read at runtime, so
 # pass it with `docker run -e` / `--env-file` and never copy a .env file into the image.
 
 ARG NODE_VERSION=24
@@ -37,8 +38,14 @@ RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
 FROM build-deps AS build
 ARG VITE_LANGGRAPH_API_URL
 ARG VITE_LANGGRAPH_ASSISTANT_ID
+ARG VITE_AI_AGENT_URL
+ARG VITE_SUPABASE_URL
+ARG VITE_SUPABASE_PUBLISHABLE_KEY
 ENV VITE_LANGGRAPH_API_URL=$VITE_LANGGRAPH_API_URL \
-    VITE_LANGGRAPH_ASSISTANT_ID=$VITE_LANGGRAPH_ASSISTANT_ID
+    VITE_LANGGRAPH_ASSISTANT_ID=$VITE_LANGGRAPH_ASSISTANT_ID \
+    VITE_AI_AGENT_URL=$VITE_AI_AGENT_URL \
+    VITE_SUPABASE_URL=$VITE_SUPABASE_URL \
+    VITE_SUPABASE_PUBLISHABLE_KEY=$VITE_SUPABASE_PUBLISHABLE_KEY
 COPY apps/chat-ui apps/chat-ui
 RUN pnpm --filter threadwise-chat-ui build
 

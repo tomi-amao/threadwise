@@ -98,7 +98,9 @@ poetry run bandit -r src/ -ll
 # Docker: the chat-ui image (build context is the repo root, not apps/chat-ui)
 docker build -f apps/chat-ui/Dockerfile -t threadwise-chat-ui .
 docker run --rm -p 3000:3000 -e SUPABASE_URL=... -e SUPABASE_PUBLISHABLE_KEY=... -e AI_AGENT_URL=... threadwise-chat-ui
-# only VITE_LANGGRAPH_API_URL / VITE_LANGGRAPH_ASSISTANT_ID are build args; Supabase and agent config are runtime-only
+# build args (baked into the browser bundle): VITE_LANGGRAPH_API_URL, VITE_LANGGRAPH_ASSISTANT_ID, VITE_AI_AGENT_URL,
+# VITE_SUPABASE_URL, VITE_SUPABASE_PUBLISHABLE_KEY (the browser's Supabase client reads only the VITE_ pair).
+# The server's Supabase keys and AI_AGENT_URL are runtime-only
 
 # Root-level, cross-cutting
 pnpm lint                     # eslint . --fix (whole repo)

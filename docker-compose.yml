@@ -115,6 +115,12 @@ services:
         # container name. Changing it needs a rebuild.
         VITE_LANGGRAPH_API_URL: ${VITE_LANGGRAPH_API_URL:-http://localhost:8123}
         VITE_LANGGRAPH_ASSISTANT_ID: ${VITE_LANGGRAPH_ASSISTANT_ID:-threadwise-financial-agent}
+        # The browser's Supabase client reads only these two (the runtime SUPABASE_* below are
+        # for the server). Use the same values; both must be reachable from the browser.
+        VITE_SUPABASE_URL: ${SUPABASE_URL:-}
+        VITE_SUPABASE_PUBLISHABLE_KEY: ${SUPABASE_PUBLISHABLE_KEY:-}
+        # Browser calls to the agent's REST routes (the streaming address is above).
+        VITE_AI_AGENT_URL: ${VITE_AI_AGENT_URL:-http://localhost:8123}
     # Host port 5174 matches the default CORS_ALLOW_ORIGINS above; if you change one, change both.
     ports:
       - '5174:3000'
@@ -122,8 +128,8 @@ services:
       langgraph-api:
         condition: service_healthy
     environment:
-      # Runtime config, read by the server and handed to the browser. Must be reachable from
-      # both the container and the browser.
+      # Server-side config, read at runtime. The browser gets its own copy at build time
+      # (VITE_SUPABASE_* build args above). Must be reachable from the container.
       SUPABASE_URL: ${SUPABASE_URL:-}
       SUPABASE_PUBLISHABLE_KEY: ${SUPABASE_PUBLISHABLE_KEY:-}
       SUPABASE_SECRET_KEY: ${SUPABASE_SECRET_KEY:-}
