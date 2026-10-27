@@ -124,6 +124,17 @@ def test_every_protected_route_refuses_an_anonymous_caller(client):
     assert leaks == []
 
 
+def test_public_probes_build_no_services(client):
+    # Building the embedding service loads a model for tens of seconds; on a small instance a
+    # browser opening the service URL then starved the server until its health checks failed.
+    with patch(
+        "ai_agent.services.embedding_service.get_embedding_service",
+        side_effect=AssertionError("a probe built the embedding service"),
+    ):
+        assert client.get("/").status_code == 200
+        assert client.get("/health").status_code == 200
+
+
 def test_health_names_the_deployed_commit(client, monkeypatch):
     # The Inngest sync workflow waits on this to know the new code is serving.
     monkeypatch.setenv("RENDER_GIT_COMMIT", "abc123")
