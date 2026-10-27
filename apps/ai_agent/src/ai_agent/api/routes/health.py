@@ -10,43 +10,18 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 
 
-def get_services():
-    """Get service instances (lazy import to avoid circular deps)."""
-    try:
-        from ...services.embedding_service import get_embedding_service
-        from ...services.langgraph_service import LangGraphService
-
-        embedding_service = get_embedding_service()
-        langgraph_service = LangGraphService()
-    except ImportError:
-        embedding_service = None
-        langgraph_service = None
-
-    try:
-        from ...integrations.inngest import get_inngest_client, validate_inngest_config
-
-        inngest_client = get_inngest_client()
-    except ImportError:
-        inngest_client = None
-        validate_inngest_config = None
-
-    return embedding_service, langgraph_service, inngest_client, validate_inngest_config
-
-
 @router.get("/")
 def read_root():
-    """Welcome endpoint."""
-    embedding_service, langgraph_service, inngest_client, _ = get_services()
+    """Welcome endpoint. Builds no services, like /health below.
 
+    It used to construct them to report which were enabled, and the embedding service loads a
+    sentence-transformers model: opening the service URL in a browser starved a small instance
+    of CPU until LangGraph's own health checks timed out.
+    """
     return {
         "message": "Welcome to ThreadWise AI Agent API",
         "version": "0.1.0",
         "docs": "/docs",
-        "services": {
-            "chat": "enabled" if langgraph_service else "disabled",
-            "embeddings": "enabled" if embedding_service else "disabled",
-            "inngest": "enabled" if inngest_client else "disabled",
-        },
     }
 
 
