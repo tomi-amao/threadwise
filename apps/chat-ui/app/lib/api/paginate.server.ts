@@ -4,7 +4,7 @@
  * Supabase's API caps each response at `max_rows` (1,000 by default) and `.limit(n)` cannot
  * raise that cap, so a plain `select()` over a larger table silently returns the first 1,000
  * rows and every total computed from it is wrong. This pages through with `.range()` until a
- * page comes back empty.
+ * page comes back empty, or short once a full page has shown the cap is not below the page size.
  *
  * Two details matter for correctness:
  *  - Paging needs a stable order, otherwise rows can repeat or be skipped between pages. The
@@ -27,12 +27,18 @@ export async function fetchAllRows<T>(
   pageSize = 1000
 ): Promise<T[]> {
   const rows: T[] = [];
+  // A short page only means "no more rows" once a full page has proved `max_rows` is at least
+  // the page size; before that it might be the cap, so ask once more. Each request is a round
+  // trip to the database, which is what this saves.
+  let sawFullPage = false;
   for (let from = 0; ;) {
     const { data, error } = await page(from, from + pageSize - 1);
     if (error) throw new Error(`Failed to load ${label}: ${error.message}`);
     if (!data || data.length === 0) break;
     rows.push(...(data as T[]));
     from += data.length;
+    if (data.length >= pageSize) sawFullPage = true;
+    else if (sawFullPage) break;
   }
   return rows;
 }

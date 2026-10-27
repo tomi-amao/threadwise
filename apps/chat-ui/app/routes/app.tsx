@@ -10,6 +10,9 @@ import { useLoaderData, type LoaderFunctionArgs } from 'react-router';
 import { AppLayout } from '~/components/layout';
 import { assistantEnabled } from '~/lib/assistant-flag';
 import { parsePanel } from '~/lib/assistant-panel';
+import { shouldRevalidateLayout } from '~/lib/layout-revalidate';
+
+export const shouldRevalidate = shouldRevalidateLayout;
 
 export function loader({ request }: LoaderFunctionArgs) {
   return {

@@ -87,8 +87,9 @@ collection. Keep tests independent of a developer's `.env`; to check, move it as
 - `langgraph.json` — declares the LangGraph graph (`threadwise-financial-agent` =
   `ai_agent.agents.chat_graph:agent`) served by `langgraph dev`/LangGraph Platform,
   which also mounts `main.py`'s FastAPI app (`http.app`). It registers the auth handler
-  (`auth.path` -> `src/ai_agent/auth.py`), the CORS origins, and thread retention
-  (`checkpointer.ttl`: 90 days, in minutes).
+  (`auth.path` -> `src/ai_agent/auth.py`) and thread retention (`checkpointer.ttl`: 90 days,
+  in minutes). It sets no `http.cors` on purpose: CORS then comes from `CORS_ALLOW_ORIGINS`,
+  shared with the FastAPI app, and a `cors` block here would override it.
 
 ### Authentication and authorization (every request)
 

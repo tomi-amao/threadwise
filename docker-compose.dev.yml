@@ -1,26 +1,17 @@
-
-# Development overrides for docker-compose.yml
-# ⚠️ EXPERIMENTAL / NOT CURRENTLY FUNCTIONAL — see the warning in docker-compose.yml.
+# Debugging overrides for docker-compose.yml:
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build
+# Publishes the LangGraph server's Postgres and Redis on the host so you can inspect them, and
+# turns the agent's logging up. For hot-reload development use `pnpm dev:all` instead (see
+# CLAUDE.md); containers here run the built images.
 services:
-  react-router:
-    build:
-      target: development-dependencies-env
-    volumes:
-      - ./:/app
-      - /app/node_modules
-      - /app/apps/react-router/node_modules
-    # command: ["sh", "-c", "cd /app/apps/react-router && pnpm dev --host 0.0.0.0 --port 3000"]
+  langgraph-postgres:
     ports:
-      - "3000:3000"
-    environment:
-      - NODE_ENV=development
-      - VITE_API_URL=http://localhost:8000
+      - '5433:5432'
 
-  ai-agent:
-    volumes:
-      - ./apps/ai-agent/src:/app/src
+  langgraph-redis:
+    ports:
+      - '6379:6379'
+
+  langgraph-api:
     environment:
-      - ENVIRONMENT=development
-      - PYTHONPATH=/app/src
-      - RELOAD=true
-    command: ["python", "src/ai_agent/main.py"]
+      LOG_LEVEL: debug

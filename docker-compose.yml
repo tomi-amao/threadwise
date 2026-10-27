@@ -1,48 +1,143 @@
-# ⚠️ EXPERIMENTAL / NOT CURRENTLY FUNCTIONAL — not part of day-to-day dev workflow.
-# Known issues as of the 2026-09 codebase health pass, none fixed here:
-#   - "react-router" service builds ./apps/react-router/Dockerfile, which does not
-#     exist (the frontend app is apps/chat-ui and has no Dockerfile at all).
-#   - "ai-agent" service's build context and volume mount use apps/ai-agent /
-#     apps/ai_agent/src/ai_agent (mixed hyphen/underscore paths that don't match
-#     the real apps/ai_agent directory).
-#   - apps/ai_agent/Dockerfile is unmodified `langgraph build` output (LangGraph
-#     Platform template), still referencing /deps/ai-agent throughout.
-# Use `pnpm dev` / `poetry run uvicorn ...` (see CLAUDE.md) for local development.
-services:
-  react-router:
-    build:
-      context: .
-      dockerfile: ./apps/react-router/Dockerfile
-    ports:
-      - "3000:3000"
-    volumes:
-      - ./apps/react-router:/app/apps/react-router
-      - /app/node_modules
-      - /app/apps/react-router/node_modules
-    environment:
-      - NODE_ENV=development
-    networks:
-      - threadwise-network
+# ThreadWise, self-hosted in containers: the production shape on one machine.
+#
+#   browser ──► chat-ui (:5174) ──server-side──► langgraph-api (:8123)
+#      │                                           ├─► langgraph-postgres  (threads, checkpoints, store)
+#      └──────────── streams directly ───────────► ├─► langgraph-redis     (run queue, streaming pub/sub)
+#                                                  └─► Supabase            (business data, auth; NOT in this file)
+#   inngest (:8288) ◄──► langgraph-api /api/inngest  (background provider syncs)
+#
+# `langgraph-api` is ONE container doing two jobs: it is the LangGraph server (the chat graph)
+# and it mounts the FastAPI app (`http.app` in apps/ai_agent/langgraph.json), so the REST routes
+# and the Inngest endpoint are served from the same port. There is no separate "ai-agent" service.
+#
+# Supabase is not run here. Point SUPABASE_URL at a hosted project, or at the local CLI stack
+# (`pnpm db:start`) via http://host.docker.internal:54321 (see .env.example, "Docker Compose").
+#
+# Usage:
+#   cp .env.example .env     # then fill in the "Docker Compose" section
+#   docker compose up --build
+#   open http://localhost:5174
+#
+# Needs LANGSMITH_API_KEY: the self-hosted langgraph-api image checks a licence at start-up and
+# exits without one. Production use needs a LangSmith licence key (LANGGRAPH_CLOUD_LICENSE_KEY).
 
-  ai-agent:
+name: threadwise
+
+services:
+  # --- LangGraph server storage ------------------------------------------------------------
+  langgraph-redis:
+    image: redis:6
+    healthcheck:
+      test: redis-cli ping
+      interval: 5s
+      timeout: 2s
+      retries: 5
+
+  langgraph-postgres:
+    # pgvector because the LangGraph store can index memories for semantic search.
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_DB: postgres
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    command: ['postgres', '-c', 'shared_preload_libraries=vector']
+    volumes:
+      - langgraph-data:/var/lib/postgresql/data
+    healthcheck:
+      test: pg_isready -U postgres
+      start_period: 10s
+      interval: 5s
+      timeout: 2s
+      retries: 5
+
+  # --- The agent: LangGraph server + FastAPI routes + Inngest endpoint -----------------------
+  langgraph-api:
     build:
-      context: apps/ai_agent/src/ai_agent
+      context: ./apps/ai_agent
       dockerfile: Dockerfile
     ports:
-      - "8100:8100"
-    volumes:
-      - ./apps/ai-agent/src:/app/src
+      - '8123:8000'
+    depends_on:
+      langgraph-redis:
+        condition: service_healthy
+      langgraph-postgres:
+        condition: service_healthy
     environment:
-      - ENVIRONMENT=development
-      - PYTHONPATH=/app/src
-    networks:
-      - threadwise-network
+      # LangGraph server infrastructure
+      REDIS_URI: redis://langgraph-redis:6379
+      DATABASE_URI: postgres://postgres:postgres@langgraph-postgres:5432/postgres?sslmode=disable
+      LANGSMITH_API_KEY: ${LANGSMITH_API_KEY:-}
+      LANGGRAPH_CLOUD_LICENSE_KEY: ${LANGGRAPH_CLOUD_LICENSE_KEY:-}
+      # ThreadWise settings (apps/ai_agent/src/ai_agent/core/config.py)
+      SUPABASE_URL: ${SUPABASE_URL:-}
+      SUPABASE_KEY: ${SUPABASE_SECRET_KEY:-}
+      DATABASE_URL: ${DATABASE_URL:-}
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
+      INTERNAL_API_KEY: ${INTERNAL_API_KEY:-}
+      TRACE_HASH_SALT: ${TRACE_HASH_SALT:-}
+      CORS_ALLOW_ORIGINS: ${CORS_ALLOW_ORIGINS:-http://localhost:5174}
+      FRONTEND_URL: ${FRONTEND_URL:-http://localhost:5174}
+      ZOHO_CLIENT_ID: ${ZOHO_CLIENT_ID:-}
+      ZOHO_CLIENT_SECRET: ${ZOHO_CLIENT_SECRET:-}
+      ZOHO_REDIRECT_URI: ${ZOHO_REDIRECT_URI:-http://localhost:8123/oauth/zoho_calendar/callback}
+      # Inngest: the dev server below. For Inngest Cloud, unset INNGEST_DEV and set
+      # INNGEST_EVENT_KEY and INNGEST_SIGNING_KEY instead.
+      INNGEST_DEV: ${INNGEST_DEV:-http://inngest:8288}
+      INNGEST_EVENT_KEY: ${INNGEST_EVENT_KEY:-}
+      INNGEST_SIGNING_KEY: ${INNGEST_SIGNING_KEY:-}
+    extra_hosts:
+      # Lets the container reach a Supabase CLI stack running on the host (Linux needs this
+      # line; Docker Desktop already provides the name).
+      - 'host.docker.internal:host-gateway'
+    healthcheck:
+      test: python /api/healthcheck.py
+      interval: 30s
+      start_period: 20s
+      timeout: 5s
+      retries: 5
 
+  # --- Inngest dev server: runs the provider-sync workflows -----------------------------------
+  inngest:
+    image: inngest/inngest:latest
+    command: ['inngest', 'dev', '-u', 'http://langgraph-api:8000/api/inngest', '--host', '0.0.0.0']
+    ports:
+      - '8288:8288'
+    depends_on:
+      - langgraph-api
+
+  # --- The web app ------------------------------------------------------------------------
+  chat-ui:
+    build:
+      context: .
+      dockerfile: apps/chat-ui/Dockerfile
+      args:
+        # Baked into the browser bundle, so this is the address the BROWSER uses, not a
+        # container name. Changing it needs a rebuild.
+        VITE_LANGGRAPH_API_URL: ${VITE_LANGGRAPH_API_URL:-http://localhost:8123}
+        VITE_LANGGRAPH_ASSISTANT_ID: ${VITE_LANGGRAPH_ASSISTANT_ID:-threadwise-financial-agent}
+        # The browser's Supabase client reads only these two (the runtime SUPABASE_* below are
+        # for the server). Use the same values; both must be reachable from the browser.
+        VITE_SUPABASE_URL: ${SUPABASE_URL:-}
+        VITE_SUPABASE_PUBLISHABLE_KEY: ${SUPABASE_PUBLISHABLE_KEY:-}
+        # Browser calls to the agent's REST routes (the streaming address is above).
+        VITE_AI_AGENT_URL: ${VITE_AI_AGENT_URL:-http://localhost:8123}
+    # Host port 5174 matches the default CORS_ALLOW_ORIGINS above; if you change one, change both.
+    ports:
+      - '5174:3000'
+    depends_on:
+      langgraph-api:
+        condition: service_healthy
+    environment:
+      # Server-side config, read at runtime. The browser gets its own copy at build time
+      # (VITE_SUPABASE_* build args above). Must be reachable from the container.
+      SUPABASE_URL: ${SUPABASE_URL:-}
+      SUPABASE_PUBLISHABLE_KEY: ${SUPABASE_PUBLISHABLE_KEY:-}
+      SUPABASE_SECRET_KEY: ${SUPABASE_SECRET_KEY:-}
+      # Server-to-server: the compose network name, not localhost.
+      AI_AGENT_URL: http://langgraph-api:8000
+      ASSISTANT_ENABLED: ${ASSISTANT_ENABLED:-true}
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'
 
 volumes:
-  postgres_data:
-  redis_data:
-
-networks:
-  threadwise-network:
-    driver: bridge
+  langgraph-data:

@@ -169,6 +169,24 @@ test.describe('reports', () => {
     await expect(page.getByText('As at', { exact: false })).toBeVisible();
   });
 
+  test('switching tabs uses what is already loaded, without asking the server again', async ({
+    page,
+  }) => {
+    await page.goto('/reports');
+    await expect(page.getByRole('tabpanel')).toBeVisible();
+    // Any loader request (a `.data` fetch) here means a tab click reloads the whole ledger.
+    const loaderRequests: string[] = [];
+    page.on('request', req => {
+      if (new URL(req.url()).pathname.endsWith('.data')) loaderRequests.push(req.url());
+    });
+    for (const name of ['Profit and loss', 'Balance sheet', 'Cash', 'Revenue']) {
+      await page.getByRole('tab', { name }).click();
+      await expect(page.getByRole('tab', { name })).toHaveAttribute('aria-selected', 'true');
+    }
+    await page.waitForLoadState('networkidle');
+    expect(loaderRequests).toEqual([]);
+  });
+
   test('has no horizontal overflow on any tab', async ({ page }) => {
     for (const tab of ['revenue', 'pnl', 'balance', 'cash']) {
       await page.goto(`/reports?tab=${tab}`);

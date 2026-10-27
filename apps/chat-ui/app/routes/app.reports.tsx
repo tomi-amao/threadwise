@@ -6,7 +6,12 @@
  * figures (or putting it back), is gated on the same row being readable by the user.
  */
 
-import type { ActionFunctionArgs, LoaderFunctionArgs, MetaFunction } from 'react-router';
+import type {
+  ActionFunctionArgs,
+  LoaderFunctionArgs,
+  MetaFunction,
+  ShouldRevalidateFunctionArgs,
+} from 'react-router';
 import { useLoaderData } from 'react-router';
 import { RouteErrorBoundary } from '~/components/RouteErrorBoundary';
 import { ReportsPage } from '~/components/reports/ReportsPage';
@@ -44,6 +49,24 @@ export async function loader({ request }: LoaderFunctionArgs) {
   };
 
   return { data, fiscalYearEnd };
+}
+
+// The loader reads only `from` and `to`; the tab and the drawers (account, detail, safe) are
+// views over data already on the page. Loading it all again costs seconds, so switching between
+// them must not. A submission, or a revalidate on an unchanged URL (Refresh, the exclude
+// toggle), still reloads.
+export function shouldRevalidate({
+  currentUrl,
+  nextUrl,
+  formMethod,
+  defaultShouldRevalidate,
+}: ShouldRevalidateFunctionArgs) {
+  if (formMethod || currentUrl.href === nextUrl.href) return defaultShouldRevalidate;
+  if (currentUrl.pathname !== nextUrl.pathname) return defaultShouldRevalidate;
+  const range = (url: URL) => [url.searchParams.get('from'), url.searchParams.get('to')];
+  const [curFrom, curTo] = range(currentUrl);
+  const [nextFrom, nextTo] = range(nextUrl);
+  return curFrom !== nextFrom || curTo !== nextTo ? defaultShouldRevalidate : false;
 }
 
 function json(data: unknown, init?: ResponseInit) {

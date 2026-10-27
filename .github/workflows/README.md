@@ -1,438 +1,241 @@
-# GitHub Actions Workflows Documentation
+# GitHub Actions workflows
 
-This directory contains GitHub Actions workflows for continuous integration, deployment, and automation for the ThreadWise project.
+What runs in CI, when it runs, and what to do when it fails. The workflow files are the source of
+truth; if this page and a file disagree, the file wins (and this page needs fixing).
 
-## Table of Contents
+## At a glance
 
-- [Overview](#overview)
-- [Workflows](#workflows)
-  - [CI Pipeline](#ci-pipeline)
-  - [Docker Build & Push](#docker-build--push)
-  - [Code Quality & Security](#code-quality--security)
-  - [Release](#release)
-  - [Deploy](#deploy)
-  - [PR Automation](#pr-automation)
-- [Configuration Files](#configuration-files)
-- [Secrets Required](#secrets-required)
-- [Badge Status](#badge-status)
+| Workflow                                 | Runs on                                                              | Purpose                                                           |
+| ---------------------------------------- | -------------------------------------------------------------------- | ----------------------------------------------------------------- |
+| [`ci.yml`](ci.yml) (CI Pipeline)         | push and PR to `main`/`develop`                                      | Lint, typecheck, test and build each app that changed             |
+| [`e2e.yml`](e2e.yml)                     | PR touching `apps/chat-ui`, `supabase`, lockfile; manual             | Playwright against a throwaway local Supabase                     |
+| [`backend-data.yml`](backend-data.yml)   | PR touching backend, `supabase`, e2e seed; nightly 03:00 UTC; manual | Database-backed backend tests and the golden-set evals            |
+| [`docker.yml`](docker.yml)               | push and PR touching `apps/**` or compose files; manual              | Build images (push from `main`/`develop`), compose check, Trivy   |
+| [`code-quality.yml`](code-quality.yml)   | push and PR to `main`/`develop`; Mondays 09:00 UTC; manual           | CodeQL, dependency review, audits, secret scan, licences          |
+| [`pr-automation.yml`](pr-automation.yml) | PR events                                                            | Labels, title check, reviewer assignment, checklist comments      |
+| [`tag-release.yml`](tag-release.yml)     | after CI Pipeline succeeds on a push to `main`; manual               | Work out the next version, tag it, start the release              |
+| [`release.yml`](release.yml)             | dispatched by Tag Release; `vX.Y.Z` tag push; manual                 | Build artifacts, push versioned images, create the GitHub Release |
+| [`deploy.yml`](deploy.yml)               | manual only                                                          | **Template**: the deploy and rollback steps are not wired up yet  |
 
-## Overview
+Shared tool versions (Node 24, Python 3.13, pnpm 10.11.0) are repeated in each workflow's `env`
+block. Change them in every file, and keep them in step with `.nvmrc` and
+`apps/ai_agent/.python-version`.
 
-ThreadWise uses a comprehensive CI/CD pipeline powered by GitHub Actions to ensure code quality, security, and reliable deployments. The workflows are designed for a monorepo structure with:
+## How a change flows through
 
-- **Frontend**: React Router app (`apps/chat-ui`)
-- **Backend**: FastAPI + LangGraph AI agent (`apps/ai_agent`)
-- **Package Manager**: pnpm (frontend) + Poetry (backend)
+```
+PR opened/updated
+  ├─ ci.yml            changed-area detection, then lint/typecheck/test/build
+  ├─ e2e.yml           frontend or database changes only
+  ├─ backend-data.yml  backend or database changes only
+  ├─ docker.yml        images build (not pushed), compose check, Trivy
+  ├─ code-quality.yml  CodeQL, dependency review, secret scan
+  └─ pr-automation.yml labels, title check
 
-## Workflows
+merge to main
+  └─ ci.yml ──(success)──► tag-release.yml ──(releasable commits)──► tag vX.Y.Z
+                                                                        │
+                                              release.yml ◄─────────────┘ (dispatched)
+                                                    │
+                                   artifacts + ghcr.io images + GitHub Release
 
-### CI Pipeline
+deploy.yml  ← run by hand, against a published version (template only)
+```
 
-**File**: `ci.yml`
+## `ci.yml`: CI Pipeline
 
-**Triggers**:
+Cancels an in-progress run for the same ref when a new push arrives.
 
-- Push to `main` or `develop` branches
-- Pull requests to `main` or `develop` branches
+```
+changes ──┬─► frontend-lint ────────┐
+          ├─► frontend-typecheck ───┴─► frontend-build ────┐
+          │                                                ├─► ci-success
+          ├─► backend-lint ─────┐                          │
+          ├─► backend-typecheck ┤                          │
+          ├─► backend-security ─┼─► backend-build ─────────┘
+          └─► backend-test ─────┘
+```
 
-**Jobs**:
+- **`changes`** uses `dorny/paths-filter`. _Frontend_ is `apps/chat-ui/**`, root `package.json`,
+  `pnpm-lock.yaml`, `pnpm-workspace.yaml` or `ci.yml`. _Backend_ is `apps/ai_agent/**` or `ci.yml`.
+  The jobs for a side with no changes are skipped.
+- **Frontend**
+  - `frontend-lint`: `prettier --check` on `apps/chat-ui`, then `pnpm lint` (ESLint).
+  - `frontend-typecheck`: `pnpm typecheck:react-router`.
+  - `frontend-build`: `pnpm build:react-router`, after lint and typecheck pass. Uploads the
+    `chat-ui-build` artifact (7 days).
+- **Backend** (Poetry, run in `apps/ai_agent`; the Poetry cache is keyed on `poetry.lock`)
+  - `backend-lint`: Black, isort, flake8 (`--max-line-length=90`).
+  - `backend-typecheck`: `mypy src/`.
+  - `backend-security`: `bandit -r src/ -ll`.
+  - `backend-test`: `pytest tests/` with coverage, uploaded to Codecov (an upload error does not
+    fail the job). There is no database here, so tests that need one skip themselves; they run in
+    `backend-data.yml`.
+  - `backend-build`: `poetry build`, after the four jobs above pass. Uploads `ai-agent-dist`.
+- **`ci-success`** always runs and fails if a side that changed did not end in `success`. A skipped
+  side is fine. Use this as the single required status check in branch protection.
 
-#### Frontend Jobs
+## `e2e.yml`: Playwright
 
-- **frontend-lint**: Runs Prettier and ESLint checks
-- **frontend-typecheck**: Validates TypeScript types
-- **frontend-build**: Builds the React Router app
+Starts a local Supabase stack inside the runner (`supabase start`, minus the services the app does
+not use), writes `.env.test` (`pnpm e2e:env`) and seeds it (`pnpm e2e:seed`). It never touches a
+hosted project: the e2e tooling refuses to run unless `SUPABASE_URL` is localhost.
 
-#### Backend Jobs
+- **`e2e`**: the read-only specs, in 4 parallel shards, each with its own database. Each shard runs
+  all six projects (desktop, tablet and mobile, each in light and dark).
+- **`e2e-mutations`**: the `*-edit.spec.ts` specs that change data, in their own job and database so
+  they cannot skew a figure another test is checking.
+- Playwright browsers are cached by Playwright version. A failed job uploads its
+  `playwright-report-*` artifact (7 days); download it for traces and screenshots.
 
-- **backend-lint**: Checks Black, isort, and flake8 formatting
-- **backend-typecheck**: Runs mypy type checking
-- **backend-security**: Runs bandit security analysis
-- **backend-test**: Executes pytest with coverage reporting
-- **backend-build**: Builds Python package with Poetry
+## `backend-data.yml`: database tests and evals
 
-**Estimated Duration**: 5-8 minutes
+- **`data-tests`** (every relevant PR, so it can gate a merge): same local Supabase and seed as
+  e2e, then the database-backed pytest files (`test_scoped_sql`, `test_chat_agent`, `test_actions`,
+  `test_evals`, `test_ui_contract`) and the golden-set evals against the _oracle_, a scripted
+  perfect model that needs no API key. It tests our machinery (tools, middleware, scoring,
+  tenancy). Report: `evals-oracle` artifact (14 days).
+- **`real-model-evals`** (nightly and manual, never on a PR): the same golden set against the real
+  model, which needs the `GOOGLE_API_KEY` secret. Without the key the job passes and says it was
+  skipped. Report: `evals-real` artifact (30 days). See `apps/ai_agent/docs/evals.md`.
 
-**Caching**:
+## `docker.yml`
 
-- pnpm store cache
-- Poetry dependencies cache
+- **`build-chat-ui`**: context is the **repo root** with `apps/chat-ui/Dockerfile`. Only the
+  `VITE_LANGGRAPH_*` values are baked in as build args; Supabase and agent config are supplied at
+  runtime.
+- **`build-ai-agent`**: context `apps/ai_agent`. Its Dockerfile is unmodified `langgraph build`
+  output.
+- Images go to `ghcr.io/<owner>/<repo>/chat-ui` and `.../ai-agent`. Pull requests build but do not
+  push. Pushes to `main`/`develop` tag by branch, SHA, and `latest` on the default branch.
+- **`docker-compose-test`** (PRs): runs `docker compose config` on the compose files. The compose
+  files are known to be stale, so this checks syntax only.
+- **`security-scan`**: builds each image and runs Trivy (CRITICAL and HIGH), uploading SARIF to the
+  repository's Security tab.
+- **`docker-success`**: fails if either image build failed.
 
----
+## `code-quality.yml`
 
-### Docker Build & Push
+CodeQL (JavaScript and Python), dependency review (PRs only; fails on moderate or worse and denies
+GPL-3.0 and LGPL-3.0, with `pglast` explicitly allowed), `npm audit`, a Python security audit,
+TruffleHog (verified secrets only), a coverage report and a licence summary. The summary job fails
+only if CodeQL or secret scanning failed; the audits and licence check are informational.
 
-**File**: `docker.yml`
+## `pr-automation.yml`
 
-**Triggers**:
+- **PR title must be Conventional Commits**: `type(scope): Subject`.
+  - Types: `feat fix docs style refactor perf test build ci chore revert`.
+  - Scopes (optional): `frontend backend chat-ui ai-agent deps ci docker db`.
+  - The subject must start with a capital letter.
+  - This matters beyond style: with squash merges the title becomes the commit message, which
+    decides the release version (below).
+- Also: labels from changed paths (`.github/labeler.yml`) and PR size, reviewer assignment
+  (`.github/auto-assign.yml`), a first-time contributor greeting, a checklist comment, issue
+  linking, a `needs-tests` warning when code changes without test files, and a summary comment.
 
-- Push to `main` or `develop` branches (when Docker files change)
-- Pull requests affecting Docker files
-- Manual dispatch
+## Releases
 
-**Jobs**:
+Fully automatic. Nobody creates tags by hand.
 
-- **build-chat-ui**: Builds and pushes Chat UI Docker image
-- **build-ai-agent**: Builds and pushes AI Agent Docker image
-- **docker-compose-test**: Validates docker-compose configuration
-- **security-scan**: Runs Trivy vulnerability scanner
+1. A push to `main` runs CI Pipeline. When it succeeds, `tag-release.yml` starts (pull request runs
+   are ignored).
+2. It only acts on the **tip** of `main`. If a newer commit has landed, the newer run handles it,
+   and the release then covers every commit since the previous tag.
+3. `.github/scripts/next-version.sh` reads the Conventional Commit messages since the last
+   `vX.Y.Z` tag (merge commits are ignored):
 
-**Docker Images**:
+   | Commit                                    | Bump  |
+   | ----------------------------------------- | ----- |
+   | `type!:` or a `BREAKING CHANGE:` footer   | major |
+   | `feat`                                    | minor |
+   | `fix`, `perf`, `revert`                   | patch |
+   | `docs chore ci test refactor style build` | none  |
 
-- `ghcr.io/{owner}/threadwise/chat-ui:latest`
-- `ghcr.io/{owner}/threadwise/ai-agent:latest`
+   With no tag yet the base is `v0.0.0`, so the first release is `v0.1.0`. If nothing releasable
+   landed, no tag is created.
 
-**Features**:
+4. It pushes an annotated tag and **dispatches `release.yml` itself**, because a tag pushed with
+   `GITHUB_TOKEN` does not trigger other workflows.
+5. `release.yml` builds the frontend and the Python package into `threadwise-<version>.tar.gz`,
+   pushes both Docker images to ghcr.io (`<version>`, `<major>.<minor>`, `<major>`, `latest`),
+   generates a changelog from commits, and creates the GitHub Release. It does **not** re-run CI;
+   it relies on `tag-release.yml` only tagging green commits.
 
-- Multi-stage builds with layer caching
-- Automatic tagging (branch, PR, SHA, semver)
-- Security scanning with Trivy
-- SARIF upload to GitHub Security
-
----
-
-### Code Quality & Security
-
-**File**: `code-quality.yml`
-
-**Triggers**:
-
-- Push to `main` or `develop` branches
-- Pull requests
-- Weekly schedule (Mondays at 9am UTC)
-- Manual dispatch
-
-**Jobs**:
-
-- **codeql-analysis**: GitHub CodeQL security analysis (JavaScript & Python)
-- **dependency-review**: Reviews dependency changes in PRs
-- **npm-audit**: NPM security audit
-- **python-security-audit**: Safety + Bandit security checks
-- **secret-scanning**: TruffleHog secret detection
-- **code-coverage**: Generates and uploads coverage reports
-- **license-check**: Validates dependency licenses
-
-**Security Features**:
-
-- Extended security queries
-- License compliance (denies GPL-3.0, LGPL-3.0)
-- Secret scanning with verified-only mode
-- Codecov integration
-
----
-
-### Release
-
-**File**: `release.yml`
-
-**Triggers**:
-
-- Push tags matching `v*.*.*` (e.g., v1.2.3)
-- Manual dispatch with version input
-
-**Jobs**:
-
-1. **validate-version**: Validates semver format
-2. **build-and-test**: Runs full CI pipeline
-3. **build-release-artifacts**: Creates release archives
-4. **build-and-push-docker**: Builds and tags Docker images with version
-5. **generate-changelog**: Auto-generates changelog from commits
-6. **create-github-release**: Creates GitHub release with artifacts
-7. **notify-release**: Sends deployment summary
-
-**Release Artifacts**:
-
-- Compressed archive: `threadwise-{version}.tar.gz`
-- Docker images with version tags
-- Changelog with commit history
-
-**Example Usage**:
+Useful commands:
 
 ```bash
-# Create and push a tag
-git tag v1.0.0
-git push origin v1.0.0
-
-# Or use GitHub UI to trigger manually
+.github/scripts/next-version.sh            # preview the next version from HEAD
+.github/scripts/next-version.sh <commit>   # ... or from a specific commit
 ```
 
----
-
-### Deploy
-
-**File**: `deploy.yml`
-
-**Triggers**:
-
-- Manual dispatch with environment selection
-
-**Environments**:
-
-- `development`: Single replica, dev URL
-- `staging`: 2 replicas, staging URL
-- `production`: 3 replicas, production URL (requires approval)
-
-**Jobs**:
-
-1. **validate-deployment**: Validates inputs
-2. **pre-deployment-checks**: Verifies Docker images exist
-3. **deploy**: Executes deployment (customizable)
-4. **run-migrations**: Runs database migrations
-5. **health-check**: Validates deployment health
-6. **rollback**: Automatic rollback on failure
-
-**Deployment Targets** (Template - Customize):
-
-- SSH + Docker Compose
-- Kubernetes
-- AWS ECS
-- Google Cloud Run
-
-**Production Safeguards**:
-
-- Manual approval required
-- Health checks before completing
-- Automatic rollback on failure
-
----
-
-### PR Automation
-
-**File**: `pr-automation.yml`
-
-**Triggers**:
-
-- Pull request events (open, edit, sync, label)
-
-**Jobs**:
-
-- **auto-label**: Labels PRs based on changed files
-- **semantic-pr-title**: Validates Conventional Commits format
-- **greeting**: Welcomes first-time contributors
-- **auto-assign-reviewers**: Assigns reviewers based on files
-- **pr-checklist**: Posts PR checklist comment
-- **link-issues**: Links related issues from description
-- **require-tests**: Warns if tests are missing
-- **pr-summary**: Generates statistics comment
-
-**PR Title Format** (Conventional Commits):
-
-```
-type(scope): description
-
-Examples:
-feat(frontend): add dark mode toggle
-fix(backend): resolve authentication bug
-docs: update API documentation
-chore(deps): update dependencies
-```
-
-**Valid Types**: `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `build`, `ci`, `chore`, `revert`
-
-**Valid Scopes**: `frontend`, `backend`, `chat-ui`, `ai-agent`, `deps`, `ci`, `docker`, `db`
-
----
-
-## Configuration Files
-
-### `.github/dependabot.yml`
-
-Automated dependency updates:
-
-- **GitHub Actions**: Weekly on Monday
-- **Frontend (pnpm)**: Weekly on Tuesday
-- **Backend (Poetry)**: Weekly on Wednesday
-- **Docker**: Weekly on Thursday
-
-**Dependency Grouping**:
-
-- React ecosystem
-- AI SDK (LangChain, AI SDK)
-- UI libraries (Radix, Tailwind)
-- Backend groups (LangChain, FastAPI, testing tools)
-
-**Ignored Updates**:
-
-- Major versions for critical dependencies (React, FastAPI, LangChain)
-
-### `.github/labeler.yml`
-
-Automatic PR labeling based on file paths:
-
-- `frontend`: Changes in `apps/chat-ui/`
-- `backend`: Changes in `apps/ai_agent/`
-- `dependencies`: Package file changes
-- `docker`: Dockerfile or compose changes
-- `ci/cd`: Workflow changes
-- `documentation`: Markdown files
-- `database`: Migration files
-- `tests`: Test files
-- `security`: Auth/security related files
-
-### `.github/auto-assign.yml`
-
-Reviewer assignment configuration:
-
-- Automatically assigns reviewers based on changed files
-- Groups: frontend, backend, infrastructure, ci
-- Skips WIP/draft PRs
-
----
-
-## Secrets Required
-
-Configure these secrets in GitHub repository settings:
-
-### Required for CI/CD
-
-```
-CODECOV_TOKEN           # Codecov integration (optional)
-```
-
-### Required for Build
-
-```
-VITE_API_URL            # Frontend API URL
-VITE_SUPABASE_URL       # Supabase project URL
-VITE_SUPABASE_ANON_KEY  # Supabase anonymous key
-```
-
-### Required for Deployment
-
-```
-DATABASE_URL            # PostgreSQL connection string
-OPENAI_API_KEY          # OpenAI API key
-```
-
-### Optional
-
-```
-GITHUB_TOKEN            # Automatically provided by GitHub Actions
-```
-
----
-
-## Badge Status
-
-Add these badges to your README.md:
-
-```markdown
-[![CI Pipeline](https://github.com/{owner}/{repo}/actions/workflows/ci.yml/badge.svg)](https://github.com/{owner}/{repo}/actions/workflows/ci.yml)
-[![Docker Build](https://github.com/{owner}/{repo}/actions/workflows/docker.yml/badge.svg)](https://github.com/{owner}/{repo}/actions/workflows/docker.yml)
-[![Code Quality](https://github.com/{owner}/{repo}/actions/workflows/code-quality.yml/badge.svg)](https://github.com/{owner}/{repo}/actions/workflows/code-quality.yml)
-[![codecov](https://codecov.io/gh/{owner}/{repo}/branch/main/graph/badge.svg)](https://codecov.io/gh/{owner}/{repo})
-```
-
----
-
-## Best Practices
-
-### For Contributors
-
-1. **PR Title**: Use Conventional Commits format
-2. **Tests**: Add tests for new features
-3. **Documentation**: Update docs for public APIs
-4. **Security**: Never commit secrets or API keys
-5. **Code Style**: Pre-commit hooks will enforce style
-
-### For Maintainers
-
-1. **Version Tags**: Use semantic versioning (v1.2.3)
-2. **Release Notes**: Leverage auto-generated changelogs
-3. **Security**: Review Dependabot PRs promptly
-4. **Deployments**: Always test in staging before production
-
----
-
-## Troubleshooting
-
-### CI Failures
-
-**Frontend Lint Failures**:
-
-```bash
-pnpm lint --fix
-pnpm format
-```
-
-**Backend Lint Failures**:
-
-```bash
-cd apps/ai_agent
-poetry run black src/ tests/
-poetry run isort src/ tests/
-```
-
-**Type Check Failures**:
-
-```bash
-# Frontend
-pnpm typecheck:react-router
-
-# Backend
-cd apps/ai_agent
-poetry run mypy src/
-```
-
-### Docker Build Failures
-
-**Clear cache and rebuild**:
-
-```bash
-docker builder prune
-docker buildx prune
-```
-
-### Deployment Failures
-
-1. Check Docker image exists in registry
-2. Verify environment secrets are configured
-3. Review deployment logs in GitHub Actions
-4. Check health check endpoints
-
----
-
-## Workflow Diagram
-
-```
-┌─────────────────┐
-│   Push/PR       │
-└────────┬────────┘
-         │
-         ├─────────────────┐
-         │                 │
-    ┌────▼─────┐    ┌─────▼──────┐
-    │  CI      │    │  Code      │
-    │  Pipeline│    │  Quality   │
-    └────┬─────┘    └─────┬──────┘
-         │                │
-         └────────┬───────┘
-                  │
-            ┌─────▼──────┐
-            │   Docker   │
-            │   Build    │
-            └─────┬──────┘
-                  │
-            ┌─────▼──────┐
-            │  Release   │ (on tag)
-            └─────┬──────┘
-                  │
-            ┌─────▼──────┐
-            │   Deploy   │ (manual)
-            └────────────┘
-```
-
----
-
-## Support
-
-For issues or questions about the CI/CD pipeline:
-
-1. Check workflow logs in Actions tab
-2. Review this documentation
-3. Open an issue with the `ci/cd` label
-
----
-
-**Last Updated**: 2026-02-15
-**Maintained By**: ThreadWise Team
+- Dry run in CI: Actions → **Tag Release** → Run workflow (`dry_run` is on by default).
+- Release by hand: Actions → **Release** → Run workflow with a `vX.Y.Z` version.
+- The version lives in the git tag only. `package.json` and `pyproject.toml` are not updated.
+
+## `deploy.yml`: not functional yet
+
+Manual dispatch with an environment (`development`, `staging`, `production`) and an optional
+version. It validates the input, checks the images exist, waits for manual approval on production,
+runs migrations, health-checks and has a rollback job. The **deploy, rollback and parts of the
+health-check steps are placeholders** (`TODO: Customize this section`), so running it does not
+deploy anything real. Wire it to the real hosting target before relying on it.
+
+## Dependabot
+
+`.github/dependabot.yml`, weekly: GitHub Actions on Monday, npm (root and `apps/chat-ui`) on
+Tuesday, pip (`apps/ai_agent`) on Wednesday, Docker (`apps/ai_agent`) on Thursday. Related packages
+are grouped, and major bumps of critical dependencies are ignored.
+
+## Secrets and variables
+
+Nothing here is required for a pull request to pass. The default `GITHUB_TOKEN` covers labelling,
+ghcr.io pushes and releases.
+
+| Secret                                                        | Used by                                 | If missing                                        |
+| ------------------------------------------------------------- | --------------------------------------- | ------------------------------------------------- |
+| `VITE_API_URL`, `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY` | `ci.yml` build, `release.yml` artifacts | The build runs with empty values                  |
+| `VITE_LANGGRAPH_API_URL`, `VITE_LANGGRAPH_ASSISTANT_ID`       | `docker.yml` chat-ui image              | URL defaults to `http://localhost:2024`; ID empty |
+| `GOOGLE_API_KEY`                                              | `backend-data.yml` real-model evals     | Evals are skipped, not failed                     |
+| `CODECOV_TOKEN`                                               | coverage uploads                        | Upload may fail; it never fails the job           |
+| `DATABASE_URL`                                                | `deploy.yml` migrations                 | Deploy only                                       |
+
+Never put real secrets in a tracked file. See "Known issues" in the root `CLAUDE.md` for the
+exposed-credential history note.
+
+## Reproduce a CI failure locally
+
+Run from the repo root unless noted. Mirror the workflow file, not `package.json`, when in doubt.
+
+| Failing job        | Command                                                                                                                                                       |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Frontend lint      | `pnpm exec prettier --check "apps/chat-ui/**/*.{ts,tsx,js,jsx,json,css,md}"` and `pnpm lint`                                                                  |
+| Frontend typecheck | `pnpm typecheck:react-router`                                                                                                                                 |
+| Frontend build     | `pnpm build:react-router`                                                                                                                                     |
+| Backend lint       | `cd apps/ai_agent && poetry run black --check src/ tests/ && poetry run isort --check-only src/ tests/ && poetry run flake8 src/ tests/ --max-line-length=90` |
+| Backend typecheck  | `cd apps/ai_agent && poetry run mypy src/`                                                                                                                    |
+| Backend security   | `cd apps/ai_agent && poetry run bandit -r src/ -ll`                                                                                                           |
+| Backend tests      | `cd apps/ai_agent && poetry run pytest tests/ -v`                                                                                                             |
+| E2E                | `pnpm db:start && pnpm db:fresh && pnpm e2e:quick` (needs Docker and the Supabase CLI)                                                                        |
+| Backend data tests | `pnpm db:fresh`, then `cd apps/ai_agent && poetry run pytest tests/test_scoped_sql.py tests/test_chat_agent.py tests/test_actions.py`                         |
+| Docker (chat-ui)   | `docker build -f apps/chat-ui/Dockerfile -t threadwise-chat-ui .`                                                                                             |
+
+Tips:
+
+- Run Prettier from the **repo root** (`pnpm exec prettier ...`). The copy inside `apps/chat-ui`
+  can resolve an older version after a partial install and format differently; `pnpm install` fixes
+  a mismatch.
+- Run the backend tests without a `.env`, as CI does. `tests/conftest.py` sets `INNGEST_DEV=1`;
+  without it every module that imports the app fails at collection.
+- `pnpm e2e:quick -- --last-failed` re-runs only the failures.
+- An e2e failure that only happens in CI: download the `playwright-report-*` artifact from the run.
+
+## Known gaps
+
+- `docker-compose*.yml` is stale, so the compose check only validates syntax. Don't treat a green
+  result as proof the stack starts.
+- `deploy.yml` is a template (above).
+- Frontend lint in CI runs `pnpm lint`, which is `eslint . --fix`. It passes on a clean tree, but it
+  can rewrite files on the runner instead of reporting fixable problems.
+- Frontend unit tests do not exist; the frontend is covered by Playwright only.
+- Several third-party actions are not pinned to a version (`trufflehog@main`,
+  `trivy-action@master`).

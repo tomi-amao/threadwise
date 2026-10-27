@@ -1,6 +1,7 @@
 """Health check endpoints for ThreadWise AI Agent."""
 
 import logging
+import os
 from datetime import datetime
 
 from fastapi import APIRouter
@@ -51,22 +52,19 @@ def read_root():
 
 @router.get("/health")
 def health_check():
-    """Health check endpoint."""
-    embedding_service, langgraph_service, inngest_client, validate_inngest_config = (
-        get_services()
-    )
+    """Liveness probe: answers at once and builds no services.
 
-    inngest_status = (
-        "enabled" if inngest_client and validate_inngest_config else "disabled"
-    )
-
+    It used to construct the embedding service, which loads a sentence-transformers model
+    (tens of seconds) and fails without a Pinecone key, so a probe could time out or
+    report an optional dependency as the whole service being down.
+    """
     return {
         "status": "ok",
         "timestamp": datetime.now().isoformat(),
         "service": "ai-agent",
-        "chat_service": "enabled" if langgraph_service else "disabled",
-        "embedding_service": "enabled" if embedding_service else "disabled",
-        "inngest_service": inngest_status,
+        # The deployed commit, which Render sets. The Inngest sync workflow waits for it to
+        # match the pushed commit, so it only syncs once the new code is serving.
+        "commit": os.environ.get("RENDER_GIT_COMMIT"),
     }
 
 

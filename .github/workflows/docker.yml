@@ -73,11 +73,14 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
-          # Only VITE_* values the browser bundle reads are baked in; server config
-          # (Supabase, AI_AGENT_URL) is supplied at runtime.
+          # Only VITE_* values the browser bundle reads are baked in; the server's Supabase
+          # keys and AI_AGENT_URL are supplied at runtime.
           build-args: |
             VITE_LANGGRAPH_API_URL=${{ secrets.VITE_LANGGRAPH_API_URL || 'http://localhost:2024' }}
             VITE_LANGGRAPH_ASSISTANT_ID=${{ secrets.VITE_LANGGRAPH_ASSISTANT_ID }}
+            VITE_AI_AGENT_URL=${{ secrets.VITE_AI_AGENT_URL }}
+            VITE_SUPABASE_URL=${{ secrets.VITE_SUPABASE_URL }}
+            VITE_SUPABASE_PUBLISHABLE_KEY=${{ secrets.VITE_SUPABASE_PUBLISHABLE_KEY }}
 
   build-ai-agent:
     name: Build AI Agent Docker Image

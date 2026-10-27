@@ -7,7 +7,10 @@ import '@fontsource-variable/geist-mono';
 import { AuthProvider } from '~/providers/AuthProvider';
 import { ThemeProvider, useTheme } from '~/providers/ThemeProvider';
 import { DEFAULT_THEME, parseTheme } from '~/lib/theme';
+import { shouldRevalidateLayout } from '~/lib/layout-revalidate';
 import './globals.css';
+
+export const shouldRevalidate = shouldRevalidateLayout;
 
 export function loader({ request }: LoaderFunctionArgs) {
   return { theme: parseTheme(request.headers.get('cookie')) };
