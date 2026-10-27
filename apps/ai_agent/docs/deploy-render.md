@@ -14,10 +14,24 @@ browser ──> Vercel (chat-ui, fra1) ──> Render: threadwise-ai-agent (fran
 
 ## What it costs to run
 
-Check Render's pricing page for current figures. `render.yaml` uses the smallest paid web
-instance (`0.5c-512mb`; the server idles at about 240 MB), the smallest paid Postgres (a free
-one is deleted after 30 days) and a free Key Value (it keeps nothing across a restart, so runs in
-flight at that moment are lost). Change the `plan:` lines to trade cost against that.
+Nothing: `render.yaml` uses Render's free plans for all three, so no payment method is needed.
+That suits testing, with these costs instead (Render's free plan page has the details):
+
+- **The web service sleeps** after 15 minutes without traffic and takes about a minute to wake,
+  on top of the app's own ~7 s start-up. The first assistant question after a quiet spell is
+  slow and may time out in the browser; ask again once it is up. The workspace gets 750 free
+  instance hours a month (a sleeping service uses none), and builds count against the free
+  build minutes.
+- **The Postgres expires 30 days after creation.** After a 14-day grace period Render deletes
+  it, and every chat thread with it. To keep going, upgrade it, or delete it and sync the
+  Blueprint again to get a new one (the service picks up the new `DATABASE_URI` from
+  `fromDatabase`). One free Postgres per workspace; 1 GB; no backups.
+- **The Key Value keeps nothing across a restart**, so runs in flight at that moment are lost.
+  One free Key Value per workspace.
+
+For always-on, change the `plan:` lines in `render.yaml`: `0.5c-512mb` for the web service (the
+server idles at about 240 MB) and `0.1c-256mb` for Postgres. Paid plans need a payment method on
+the Render workspace; check Render's pricing page for the figures.
 
 ## One-time setup
 
@@ -113,9 +127,8 @@ one-off deployment URL is refused by CORS unless it is added.
 
 ## Limits worth knowing
 
-- 512 MB is enough for the chat agent and the pipeline. The embedding routes load a
-  sentence-transformers model (about 1 GB) and would not fit; move to `1c-2g` before using them.
-- The free Key Value loses its contents on restart, and the run limiter in `auth.py` is per
-  process, so both assume a single instance.
-- Render's free web plan (not used here) sleeps after 15 minutes idle and takes about a minute to
-  wake, which the assistant's first request would feel.
+- The embedding routes load a sentence-transformers model (about 1 GB), which no instance below
+  `1c-2g` can hold; the chat agent and the pipeline fit in the free instance.
+- The run limiter in `auth.py` is per process, which is fine while there is one instance (free
+  services cannot scale beyond one).
+- Render may restart free services at any time; a restart loses the Key Value's contents.
