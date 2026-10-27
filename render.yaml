@@ -13,10 +13,11 @@ services:
     name: threadwise-ai-agent
     runtime: docker
     region: frankfurt
-    # 512 MB. The server idles at about 240 MB. The embedding routes load a sentence-transformers
-    # model (about 1 GB) and would not fit; use 1c-2g if they are needed here. `free` sleeps after
-    # 15 minutes idle and takes about a minute to wake.
-    plan: 0.5c-512mb
+    # Free, for testing (no payment method needed). It sleeps after 15 minutes without traffic and
+    # takes about a minute to wake, and the workspace gets 750 free hours a month. The server idles
+    # at about 240 MB. For always-on, use 0.5c-512mb; the embedding routes load a
+    # sentence-transformers model (about 1 GB) and need 1c-2g.
+    plan: free
     branch: main
     # Deploy a commit to main only after its GitHub checks (CI) pass.
     autoDeployTrigger: checksPass
@@ -102,8 +103,10 @@ databases:
   # LangGraph's own state only. Separate from Supabase, which holds the business data.
   - name: threadwise-langgraph-db
     region: frankfurt
-    # The smallest paid plan: a free database is deleted 30 days after creation.
-    plan: 0.1c-256mb
+    # Free, for testing: it expires 30 days after creation (then 14 days' grace to upgrade before
+    # Render deletes it, taking every chat thread with it), 1 GB, no backups, one per workspace.
+    # The smallest paid plan, 0.1c-256mb, does not expire.
+    plan: free
     databaseName: langgraph
     user: langgraph
     postgresMajorVersion: '17'
