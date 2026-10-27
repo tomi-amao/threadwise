@@ -49,6 +49,12 @@ real dependencies, a production-build-breaking route naming issue). What's left:
   `./apps/react-router/Dockerfile`, which does not exist; the `ai-agent` paths mix `ai-agent` and
   `ai_agent`). Compose is not part of the day-to-day workflow; don't fix it as a side effect of an
   unrelated task. CI builds both images in `.github/workflows/docker.yml`.
+- Hosting: the frontend is on Vercel (`apps/chat-ui/vercel.json`, functions in `fra1`); the backend
+  deploys to Render from `render.yaml` (LangGraph server + its Postgres and Redis, Frankfurt) on
+  each push to `main` whose CI passed, and `.github/workflows/inngest-sync.yml` then re-syncs
+  Inngest Cloud. Render builds `apps/ai_agent/Dockerfile`, which is generated from
+  `langgraph.json`: regenerate it when that file changes. Guide:
+  `apps/ai_agent/docs/deploy-render.md`.
 - Frontend tests are Playwright end-to-end tests (see "Frontend tests" below); there is no
   unit-test runner. Backend has 11 test files under `apps/ai_agent/tests/` (see "Backend tests"
   below); the services behind `journal_service`, `account_mapping` and the integrations are mostly

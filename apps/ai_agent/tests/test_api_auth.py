@@ -124,6 +124,14 @@ def test_every_protected_route_refuses_an_anonymous_caller(client):
     assert leaks == []
 
 
+def test_health_names_the_deployed_commit(client, monkeypatch):
+    # The Inngest sync workflow waits on this to know the new code is serving.
+    monkeypatch.setenv("RENDER_GIT_COMMIT", "abc123")
+    assert client.get("/health").json()["commit"] == "abc123"
+    monkeypatch.delenv("RENDER_GIT_COMMIT")
+    assert client.get("/health").json()["commit"] is None
+
+
 def test_a_user_token_does_not_open_internal_routes(client):
     for path in ("/inngest/health", "/embeddings/stats", "/normalization/stats"):
         assert client.get(path, headers=_bearer()).status_code == 403

@@ -1,0 +1,111 @@
+# Render Blueprint for the AI agent backend: the LangGraph server, which also mounts the FastAPI
+# app (langgraph.json `http.app`), plus the Postgres and Redis the LangGraph server needs.
+# The frontend is on Vercel and the business data stays in Supabase.
+#
+# Setup, secrets, Inngest Cloud and the Vercel side: apps/ai_agent/docs/deploy-render.md.
+# Spec: https://render.com/docs/blueprint-spec
+#
+# Everything is in Frankfurt, next to the Supabase project (eu-central-1) and the Vercel
+# functions (fra1); the region cannot be changed after creation.
+
+services:
+  - type: web
+    name: threadwise-ai-agent
+    runtime: docker
+    region: frankfurt
+    # 512 MB. The server idles at about 240 MB. The embedding routes load a sentence-transformers
+    # model (about 1 GB) and would not fit; use 1c-2g if they are needed here. `free` sleeps after
+    # 15 minutes idle and takes about a minute to wake.
+    plan: 0.5c-512mb
+    branch: main
+    # Deploy a commit to main only after its GitHub checks (CI) pass.
+    autoDeployTrigger: checksPass
+    # Generated from langgraph.json by `langgraph dockerfile`; regenerate it when that changes.
+    dockerfilePath: ./apps/ai_agent/Dockerfile
+    dockerContext: ./apps/ai_agent
+    # Only backend changes rebuild it.
+    buildFilter:
+      paths:
+        - apps/ai_agent/**
+    # The LangGraph server's own probe. Render sets PORT, which the image's entrypoint honours.
+    healthCheckPath: /ok
+    envVars:
+      # LangGraph server storage (threads, runs, checkpoints, the run queue).
+      - key: DATABASE_URI
+        fromDatabase:
+          name: threadwise-langgraph-db
+          property: connectionString
+      - key: REDIS_URI
+        fromService:
+          type: keyvalue
+          name: threadwise-langgraph-redis
+          property: connectionString
+      # Starts the server without a licence key: allowed for testing, not for production use.
+      - key: LANGSMITH_API_KEY
+        sync: false
+
+      # Supabase (business data). DATABASE_URL must be a role that can SET ROLE authenticated.
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_KEY
+        sync: false
+      - key: DATABASE_URL
+        sync: false
+
+      - key: GOOGLE_API_KEY
+        sync: false
+
+      # Who may call the agent. The browser origin(s), comma-separated, exact match.
+      - key: CORS_ALLOW_ORIGINS
+        sync: false
+      - key: FRONTEND_URL
+        sync: false
+      # For machine callers of the internal routes; the browser never uses it.
+      - key: INTERNAL_API_KEY
+        generateValue: true
+      # Keyed hash for ids in traces. Generated once; changing it re-keys every pseudonym.
+      - key: TRACE_HASH_SALT
+        generateValue: true
+
+      # Inngest Cloud. INNGEST_DEV must stay unset here: with it the SDK skips signature checks.
+      - key: INNGEST_SIGNING_KEY
+        sync: false
+      - key: INNGEST_EVENT_KEY
+        sync: false
+      # This service's public https URL (behind Render's proxy the SDK cannot see it).
+      - key: INNGEST_SERVE_ORIGIN
+        sync: false
+
+      # Optional: Zoho Calendar. The redirect URI is this service's URL plus
+      # /oauth/zoho_calendar/callback, registered in Zoho's API Console too.
+      - key: ZOHO_CLIENT_ID
+        sync: false
+      - key: ZOHO_CLIENT_SECRET
+        sync: false
+      - key: ZOHO_REDIRECT_URI
+        sync: false
+      # accounts.zoho.com or accounts.zoho.eu: the data centre the Zoho account is on.
+      - key: ZOHO_ACCOUNTS_DOMAIN
+        sync: false
+
+  # Pub/sub for streaming and the LangGraph run queue. Reachable only on Render's private network.
+  - type: keyvalue
+    name: threadwise-langgraph-redis
+    region: frankfurt
+    # Free instances keep nothing across a restart (in-flight runs are lost); fine for testing.
+    plan: free
+    # Queued runs must not be evicted to make room.
+    maxmemoryPolicy: noeviction
+    ipAllowList: []
+
+databases:
+  # LangGraph's own state only. Separate from Supabase, which holds the business data.
+  - name: threadwise-langgraph-db
+    region: frankfurt
+    # The smallest paid plan: a free database is deleted 30 days after creation.
+    plan: 0.1c-256mb
+    databaseName: langgraph
+    user: langgraph
+    postgresMajorVersion: '17'
+    # Private network only; add your IP here to connect with psql.
+    ipAllowList: []

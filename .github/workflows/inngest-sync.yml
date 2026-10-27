@@ -1,0 +1,59 @@
+name: Inngest Sync
+
+# Tells Inngest Cloud about the AI agent's current functions after Render deploys main.
+# Render deploys a commit once its checks pass (render.yaml: autoDeployTrigger: checksPass), so
+# this starts at the same point and waits for the new code to be serving before it syncs
+# (.github/scripts/inngest-sync.sh).
+#
+# Needs the repository variable AI_AGENT_URL and the secret INNGEST_API_KEY; until both are set
+# it skips. Setup: apps/ai_agent/docs/deploy-render.md.
+
+on:
+  workflow_run:
+    workflows: ['CI Pipeline']
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A newer push supersedes a sync still waiting for an older deploy.
+concurrency:
+  group: inngest-sync
+  cancel-in-progress: true
+
+jobs:
+  sync:
+    name: Sync with Inngest Cloud
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    # Only a push to main whose CI passed (never a pull request run), or a manual run.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push')
+    env:
+      TARGET_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+      AI_AGENT_URL: ${{ vars.AI_AGENT_URL }}
+      INNGEST_APP_ID: ${{ vars.INNGEST_APP_ID }}
+      INNGEST_API_KEY: ${{ secrets.INNGEST_API_KEY }}
+    steps:
+      - name: Skip until configured
+        id: config
+        run: |
+          if [[ -z "$AI_AGENT_URL" || -z "$INNGEST_API_KEY" ]]; then
+            echo "AI_AGENT_URL or INNGEST_API_KEY is not set; nothing to sync." >> "$GITHUB_STEP_SUMMARY"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout (full history, to compare with the deployed commit)
+        if: steps.config.outputs.skip != 'true'
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_SHA }}
+          fetch-depth: 0
+
+      - name: Wait for the deploy, then sync
+        if: steps.config.outputs.skip != 'true'
+        run: .github/scripts/inngest-sync.sh "$TARGET_SHA"

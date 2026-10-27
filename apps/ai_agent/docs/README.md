@@ -18,6 +18,7 @@ These pages are for developers working on this service. Start with
 | [evals.md](evals.md)                 | The golden set, the oracle, thresholds, the nightly real-model run and the review queue.  |
 | [operations.md](operations.md)       | The rollout flag, settings, limits and cost, logs and tracing, retention and privacy.     |
 | [development.md](development.md)     | Setup, running locally, configuration, tests, lint and CI.                                |
+| [deploy-render.md](deploy-render.md) | Deploying to Render from `render.yaml`, Inngest Cloud, and the Vercel side.               |
 
 Related documents elsewhere in the repo:
 
