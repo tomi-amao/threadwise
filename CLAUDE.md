@@ -51,8 +51,9 @@ real dependencies, a production-build-breaking route naming issue). What's left:
   unrelated task. CI builds both images in `.github/workflows/docker.yml`.
 - Hosting: the frontend is on Vercel (`apps/chat-ui/vercel.json`, functions in `fra1`); the backend
   deploys to Render from `render.yaml` (LangGraph server + its Postgres and Redis, Frankfurt) on
-  each push to `main` whose CI passed, and `.github/workflows/inngest-sync.yml` then re-syncs
-  Inngest Cloud. Render builds `apps/ai_agent/Dockerfile`, which is generated from
+  each push to `main` whose checks all passed (any failing check blocks the deploy, security scans
+  included), and `.github/workflows/inngest-sync.yml` re-syncs Inngest Cloud when Render reports
+  the deploy finished (`deployment_status`; started from CI it deadlocked with Render). Render builds `apps/ai_agent/Dockerfile`, which is generated from
   `langgraph.json`: regenerate it when that file changes. Guide:
   `apps/ai_agent/docs/deploy-render.md`.
 - Frontend tests are Playwright end-to-end tests (see "Frontend tests" below); there is no
