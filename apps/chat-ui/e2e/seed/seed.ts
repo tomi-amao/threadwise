@@ -734,6 +734,44 @@ async function main() {
     .upload(documentPath, pdf, { contentType: 'application/pdf', upsert: true });
   if (uploadError) throw new Error(`invoice document: ${uploadError.message}`);
 
+  // A receipt on one bank transaction, as the Revolut receipts sync stores it (the bucket comes
+  // from its migration). Transaction 3 is the newest Royal Mail payment, which has a journal.
+  const RECEIPT_TXN = 3;
+  const receipt = {
+    id: '00000000-0000-4000-8000-0000e2e00001',
+    fileName: 'Receipt 00000000.pdf',
+    path: `${entityId}/revolut/e2e-txn-${RECEIPT_TXN + 1}/receipt.pdf`,
+  };
+  const { error: receiptUploadError } = await supabase.storage
+    .from('transaction-attachments')
+    .upload(receipt.path, pdf, { contentType: 'application/pdf', upsert: true });
+  if (receiptUploadError) throw new Error(`receipt: ${receiptUploadError.message}`);
+  const receiptRow = (await must(
+    'transaction_attachments',
+    supabase
+      .from('transaction_attachments')
+      .insert({
+        entity_id: entityId,
+        source: 'revolut',
+        external_transaction_id: `e2e-txn-${RECEIPT_TXN + 1}`,
+        external_id: receipt.id,
+        external_parent_id: 'e2e-expense-1',
+        file_path: receipt.path,
+        file_name: receipt.fileName,
+        content_type: 'application/pdf',
+        size_bytes: pdf.byteLength,
+      })
+      .select('id')
+      .single()
+  )) as { id: string };
+  const attachments = {
+    count: 1,
+    transactionId: txnInserted[RECEIPT_TXN].id,
+    attachmentId: receiptRow.id,
+    fileName: receipt.fileName,
+    sizeBytes: pdf.byteLength,
+  };
+
   type InvLine = [description: string, qty: number, unit: number, vat: number, account?: string];
   interface SeedInvoice {
     number: string;
@@ -1193,6 +1231,29 @@ async function main() {
       }))
     )
   );
+  // The rival's own receipt: the first business must not be able to read or open it.
+  const rivalReceiptPath = `${rid}/revolut/rival-txn-1/receipt.pdf`;
+  const { error: rivalReceiptError } = await supabase.storage
+    .from('transaction-attachments')
+    .upload(rivalReceiptPath, pdf, { contentType: 'application/pdf', upsert: true });
+  if (rivalReceiptError) throw new Error(`rival receipt: ${rivalReceiptError.message}`);
+  const rivalAttachment = (await must(
+    'rival transaction_attachments',
+    supabase
+      .from('transaction_attachments')
+      .insert({
+        entity_id: rid,
+        source: 'revolut',
+        external_transaction_id: 'rival-txn-1',
+        external_id: '00000000-0000-4000-8000-0000e2e0000f',
+        file_path: rivalReceiptPath,
+        file_name: 'Rival receipt.pdf',
+        content_type: 'application/pdf',
+        size_bytes: pdf.byteLength,
+      })
+      .select('id')
+      .single()
+  )) as { id: string };
   const rivalItem = (await must(
     'rival inventory item',
     supabase
@@ -1273,6 +1334,7 @@ async function main() {
     invoiceNumber: 'RIVAL-INV-1',
     bankName: 'Rival Current',
     bankBalance: 9_375,
+    attachmentId: rivalAttachment.id,
   };
 
   // 6g. The books: accounting periods, tax rates and journals (see ledger.ts for the figures).
@@ -1667,6 +1729,7 @@ async function main() {
     productCount: products.length,
     bankAccountCount: banks.length,
     transactionCount: TXN_COUNT,
+    attachments,
     expectedBankBalance,
     inventory,
     invoices,

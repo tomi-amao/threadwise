@@ -10,8 +10,10 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { getServerSupabaseClient } from '~/lib/supabase';
 import type {
   FinancialTransaction,
+  TransactionAttachment,
   JournalLineItemWithAccount,
   ListTransactionsResponse,
   TransactionDetailResponse,
@@ -89,9 +91,15 @@ interface LineItemDbRow extends Omit<
   } | null;
 }
 
+const ATTACHMENT_COLUMNS = 'id, source, file_name, content_type, size_bytes, created_at';
+
+/** Where attachment files live (supabase/migrations/20261028000000_transaction_attachments.sql). */
+const ATTACHMENT_BUCKET = 'transaction-attachments';
+
 /**
- * One transaction with its current journal (the newest one not reversed) and that journal's
- * lines, or null if the transaction is not this business's.
+ * One transaction with its current journal (the newest one not reversed), that journal's lines
+ * and the files attached to it, or null if the transaction is not this business's. Attachments
+ * name their transaction by the provider's id, as the sync stores them.
  */
 export async function getTransactionDetail(
   supabase: SupabaseClient,
@@ -118,6 +126,16 @@ export async function getTransactionDetail(
   if (txn.error) throw new Error(`Failed to load transaction: ${txn.error.message}`);
   if (journals.error) throw new Error(`Failed to load its journal: ${journals.error.message}`);
   if (!txn.data) return null;
+  const transaction = txn.data as FinancialTransaction;
+
+  const files = await supabase
+    .from('transaction_attachments')
+    .select(ATTACHMENT_COLUMNS)
+    .eq('entity_id', entityId)
+    .eq('source', transaction.source)
+    .eq('external_transaction_id', transaction.external_transaction_id)
+    .order('created_at');
+  if (files.error) throw new Error(`Failed to load its attachments: ${files.error.message}`);
 
   const journal = (journals.data?.[0] ?? null) as TransactionJournal | null;
   if (journal) {
@@ -140,5 +158,35 @@ export async function getTransactionDetail(
     );
   }
 
-  return { transaction: txn.data as FinancialTransaction, journal };
+  return {
+    transaction,
+    journal,
+    attachments: (files.data ?? []) as unknown as TransactionAttachment[],
+  };
+}
+
+/**
+ * A link to one attachment's file that works for a few minutes, or null if the attachment is not
+ * this business's. The row is read as the user, so row-level security decides; only then does
+ * the service role sign the link (the bucket has no policies of its own).
+ */
+export async function getAttachmentUrl(
+  supabase: SupabaseClient,
+  entityId: string,
+  attachmentId: string,
+  expiresIn = 300
+): Promise<string | null> {
+  const { data, error } = await supabase
+    .from('transaction_attachments')
+    .select('file_path, file_name')
+    .eq('id', attachmentId)
+    .eq('entity_id', entityId)
+    .maybeSingle();
+  if (error) throw new Error(`Failed to load the attachment: ${error.message}`);
+  if (!data) return null;
+  const signed = await getServerSupabaseClient()
+    .storage.from(ATTACHMENT_BUCKET)
+    .createSignedUrl(data.file_path, expiresIn);
+  if (signed.error) throw new Error(`Failed to open the attachment: ${signed.error.message}`);
+  return signed.data.signedUrl;
 }

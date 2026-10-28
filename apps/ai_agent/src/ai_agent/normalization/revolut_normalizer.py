@@ -23,7 +23,6 @@ from .models import (
     CanonicalBankAccount,
     CanonicalBase,
     CanonicalFinancialTransaction,
-    ExpenseEnrichment,
     TxnDirection,
     TxnSource,
     TxnStatus,
@@ -43,7 +42,7 @@ class RevolutNormalizer(FinancialNormalizer):
     """
 
     provider = "revolut"
-    supported_entity_types = ["bank_account", "financial_transaction", "expense"]
+    supported_entity_types = ["bank_account", "financial_transaction"]
 
     # =========================================================================
     # TYPE MAPPINGS
@@ -107,6 +106,8 @@ class RevolutNormalizer(FinancialNormalizer):
         "instagram": ("6010", "marketing"),
         "tiktok": ("6010", "marketing"),
         "mailchimp": ("6010", "marketing"),
+        # Revolut's merchant name for Mailchimp card payments; the match is a prefix.
+        "intuit mailchimp": ("6010", "marketing"),
         "klaviyo": ("6010", "marketing"),
         "royal mail": ("6020", "outbound_shipping"),
         "evri": ("6020", "outbound_shipping"),
@@ -617,231 +618,3 @@ class RevolutNormalizer(FinancialNormalizer):
             raw_event_id=raw_event_id,
             warnings=warnings if warnings else None,
         )
-
-    # =========================================================================
-    # EXPENSE NORMALIZATION
-    # =========================================================================
-
-    def normalize_expense(
-        self,
-        external_id: str,
-        payload: Dict[str, Any],
-        raw_event_id: UUID,
-    ) -> NormalizationResult:
-        """Normalize Revolut Expenses API payload into ExpenseEnrichment.
-
-        The Expenses API provides richer categorization than the Transactions API.
-        Instead of creating a new transaction, this enriches the existing transaction
-        record (identified by transaction_id) with expense category and account code.
-
-        This prevents overwriting transaction data while adding valuable categorization.
-
-        Revolut Expenses API structure:
-        - id: Expense UUID
-        - transaction_id: Links to existing transaction
-        - category: Expense category from Revolut
-        - merchant: Merchant information
-
-        Args:
-            external_id: Revolut expense ID
-            payload: Raw expense payload from Revolut API
-            raw_event_id: UUID of the raw event record
-
-        Returns:
-            NormalizationResult with ExpenseEnrichment canonical
-        """
-        try:
-            warnings: List[str] = []
-
-            # Use transaction_id to locate the existing transaction
-            transaction_id = payload.get("transaction_id")
-            if not transaction_id:
-                return NormalizationResult.failure_result(
-                    entity_type="expense_enrichment",
-                    external_id=external_id,
-                    raw_event_id=raw_event_id,
-                    error_message="Missing transaction_id - cannot enrich without link to transaction",
-                )
-
-            dedup_id = str(transaction_id)
-            if external_id != dedup_id:
-                warnings.append(
-                    f"Enriching transaction {dedup_id} (expense_id={external_id})"
-                )
-
-            # Categorization from Revolut Expenses API
-            # merchant is a plain string in the Expenses API (not a dict like in Transactions)
-            merchant_raw = payload.get("merchant")
-            if isinstance(merchant_raw, str):
-                merchant_name = merchant_raw
-                mcc_code: Optional[str] = None
-            elif isinstance(merchant_raw, dict):
-                merchant_name = merchant_raw.get("name", "")
-                mcc_code = merchant_raw.get("category_code")
-            else:
-                merchant_name = ""
-                mcc_code = None
-
-            # Extract category from splits — use the split with the largest amount.
-            # The Expenses API has no top-level 'category' field; splits are the
-            # canonical source of categorization.
-            splits = payload.get("splits") or []
-            split_category_name: Optional[str] = None
-            if splits and isinstance(splits, list):
-                dominant_split = max(
-                    (s for s in splits if isinstance(s, dict)),
-                    key=lambda s: float((s.get("amount") or {}).get("amount", 0)),
-                    default=None,
-                )
-                if dominant_split:
-                    split_cat = dominant_split.get("category")
-                    if isinstance(split_cat, dict):
-                        split_category_name = split_cat.get("name")
-
-            # Skip enrichment for generic/unhelpful categories
-            _SKIP_CATEGORY_NAMES = {"general expenses", "general expense"}
-            if (
-                split_category_name
-                and split_category_name.lower() in _SKIP_CATEGORY_NAMES
-            ):
-                logger.info(
-                    f"Skipping expense enrichment for {external_id} "
-                    f"- splits category '{split_category_name}' is not useful"
-                )
-                return NormalizationResult.skip_result(
-                    entity_type="expense_enrichment",
-                    external_id=dedup_id,
-                    raw_event_id=raw_event_id,
-                    skip_reason=f"splits category '{split_category_name}' is not useful for COA mapping",
-                )
-
-            # Use split category name; no top-level 'category' exists in this API
-            revolut_category = split_category_name
-
-            # Map Revolut category to our account codes
-            # This is the primary benefit of using the Expenses API - better categorization
-            account_code, expense_category = self._map_revolut_expense_category(
-                revolut_category, merchant_name, mcc_code
-            )
-
-            # Skip enrichment if mapping failed (fell back to miscellaneous)
-            if account_code == "6999":
-                logger.info(
-                    f"Skipping expense enrichment for {external_id} "
-                    f"- category '{revolut_category}' mapped to miscellaneous (6999)"
-                )
-                return NormalizationResult.skip_result(
-                    entity_type="expense_enrichment",
-                    external_id=dedup_id,
-                    raw_event_id=raw_event_id,
-                    skip_reason="Category mapped to miscellaneous (6999) - not useful for COA mapping",
-                )
-
-            # Create enrichment data (only category/account fields)
-            enrichment = ExpenseEnrichment(
-                entity_id=self.entity_id,
-                source=TxnSource.REVOLUT,
-                external_transaction_id=dedup_id,
-                expense_category=expense_category,
-                account_code=account_code,
-                raw_event_id=raw_event_id,
-            )
-
-            return NormalizationResult.success_result(
-                canonical=enrichment,
-                entity_type="expense_enrichment",
-                external_id=dedup_id,
-                raw_event_id=raw_event_id,
-                warnings=warnings if warnings else None,
-            )
-
-        except Exception as e:
-            logger.exception(f"Error normalizing Revolut expense {external_id}")
-            return NormalizationResult.failure_result(
-                entity_type="expense_enrichment",
-                external_id=external_id,
-                raw_event_id=raw_event_id,
-                error_message=f"Failed to normalize expense: {str(e)}",
-            )
-
-    def _map_revolut_expense_category(
-        self,
-        revolut_category: Optional[str],
-        merchant_name: str,
-        mcc_code: Optional[str],
-    ) -> Tuple[Optional[str], Optional[str]]:
-        """Map Revolut expense category to account code.
-
-        Priority:
-        1. Merchant name overrides
-        2. Revolut category mapping
-        3. MCC code fallback
-        4. Default to miscellaneous
-
-        Args:
-            revolut_category: Category from Revolut Expenses API
-            merchant_name: Merchant name
-            mcc_code: MCC code if available
-
-        Returns:
-            (account_code, expense_category)
-        """
-        # 1. Check merchant name overrides (highest confidence)
-        if merchant_name:
-            name_lower = merchant_name.lower()
-            for prefix, (acct, cat) in self.MERCHANT_NAME_OVERRIDES.items():
-                if name_lower.startswith(prefix):
-                    return acct, cat
-
-        # 2. Map Revolut categories to account codes
-        # Based on Revolut's expense categories (names come from splits[].category.name)
-        # The normalizer lowercases and replaces spaces/& with _ before matching.
-        category_map = {
-            "marketing": ("6010", "marketing"),
-            "advertising": ("6012", "marketing"),
-            "shipping": ("6020", "outbound_shipping"),
-            "postage_&_shipping": ("6020", "outbound_shipping"),
-            "software": ("7070", "software"),
-            "subscriptions": ("7070", "software"),
-            "saas": ("7070", "software"),
-            "rent": ("7030", "rent"),
-            "utilities": ("7040", "utilities"),
-            "salaries": ("7014", "payroll"),
-            "contractors": ("7060", "contractors"),
-            "legal": ("7062", "professional_services"),
-            "accounting": ("7061", "professional_services"),
-            "professional_services": ("7060", "professional_services"),
-            "insurance": ("7050", "insurance"),
-            "office_supplies": ("7090", "office_supplies"),
-            "office": ("7090", "office_supplies"),
-            "printing_&_stationery": ("7090", "office_supplies"),
-            "stationery": ("7090", "office_supplies"),
-            "travel": ("7100", "travel"),
-            "meals": ("7100", "meals"),
-            "food_&_drink": ("7100", "meals"),
-            "groceries": ("7100", "meals"),
-            "entertainment": ("7100", "entertainment"),
-            "bank_fees": ("8020", "bank_charges"),
-            "bank_charges": ("8020", "bank_charges"),
-            "materials": ("5010", "materials"),
-            "inventory": ("5010", "product_purchase"),
-            "accounts_payable": ("2010", "accounts_payable"),
-        }
-
-        if revolut_category:
-            cat_lower = revolut_category.lower().replace(" ", "_")
-            if cat_lower in category_map:
-                return category_map[cat_lower]
-
-        # 3. Try MCC code as fallback
-        if mcc_code:
-            try:
-                mcc_int = int(mcc_code)
-                for (lo, hi), (acct, cat) in self.MCC_ACCOUNT_MAP.items():
-                    if lo <= mcc_int <= hi:
-                        return acct, cat
-            except (ValueError, TypeError):
-                pass
-
-        # 4. Default — leave uncategorised for journal service to handle
-        return None, None

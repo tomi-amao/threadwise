@@ -21,8 +21,11 @@ REVOLUT_BASE_URL = os.environ.get("REVOLUT_API_URL", "https://b2b.revolut.com")
 ENDPOINTS = {
     "transactions": f"{REVOLUT_BASE_URL}/api/1.0/transactions",
     "accounts": f"{REVOLUT_BASE_URL}/api/1.0/accounts",
-    "expenses": f"{REVOLUT_BASE_URL}/api/1.0/expenses",
 }
+
+# Not a synced endpoint: expenses are read only to find the receipts attached to transactions
+# (see integrations/inngest/revolut_sync_functions.py, revolut_sync_receipts).
+EXPENSES_URL = f"{REVOLUT_BASE_URL}/api/1.0/expenses"
 
 
 class RevolutAdapter:
@@ -95,7 +98,6 @@ class RevolutAdapter:
         mapping = {
             "transactions": "financial_transaction",
             "accounts": "bank_account",
-            "expenses": "expense",
         }
         return mapping.get(endpoint, endpoint)
 
@@ -132,7 +134,6 @@ class RevolutAdapter:
         """Extract the occurred_at timestamp from an item.
 
         For transactions, prefers completed_at then falls back to created_at.
-        For expenses, uses expense_date or created_at.
         For accounts, tries created_at and updated_at.
 
         Args:
@@ -144,8 +145,6 @@ class RevolutAdapter:
         """
         if entity_type == "financial_transaction":
             timestamp_fields = ["completed_at", "created_at"]
-        elif entity_type == "expense":
-            timestamp_fields = ["expense_date", "created_at", "completed_at"]
         else:
             timestamp_fields = ["created_at", "updated_at"]
 
@@ -166,7 +165,7 @@ class RevolutAdapter:
     ) -> PaginatedResult:
         """Fetch a single page of data from an endpoint.
 
-        For transactions and expenses, Revolut uses date-based pagination:
+        For transactions, Revolut uses date-based pagination:
         the cursor is an ISO-8601 timestamp used as the ``to`` parameter on
         the next request. Results are ordered by ``created_at`` descending so
         the last item's ``created_at`` becomes the cursor for the following page.
@@ -174,8 +173,8 @@ class RevolutAdapter:
         For accounts, all records are returned in a single call (no pagination).
 
         Args:
-            endpoint: Endpoint name (``transactions``, ``accounts``, or ``expenses``)
-            cursor: Pagination cursor (ISO-8601 timestamp for transactions/expenses)
+            endpoint: Endpoint name (``transactions`` or ``accounts``)
+            cursor: Pagination cursor (ISO-8601 timestamp for transactions)
             since: Only fetch records at-or-after this time (Revolut's
                 ``from`` parameter, inclusive). Sent on every page, not just
                 the first — unlike Shopify's opaque cursor, Revolut's `to`
@@ -191,7 +190,7 @@ class RevolutAdapter:
 
         params: Dict[str, Any] = {}
 
-        if endpoint in ("transactions", "expenses"):
+        if endpoint == "transactions":
             params["count"] = self.page_size
             if cursor:
                 # cursor is an ISO-8601 timestamp used as the upper bound
@@ -209,26 +208,15 @@ class RevolutAdapter:
         # Revolut returns a JSON array for both endpoints
         items: List[Dict[str, Any]] = response if isinstance(response, list) else []
 
-        # Determine pagination for transactions and expenses
+        # Determine pagination for transactions
         has_more = False
         next_cursor: Optional[str] = None
 
-        if endpoint in ("transactions", "expenses") and items:
-            # Results are ordered by timestamp descending. If we received a
+        if endpoint == "transactions" and items:
+            # Results are ordered by created_at descending. If we received a
             # full page, there are likely more results available.
             if len(items) >= self.page_size:
-                last_item = items[-1]
-
-                # Use the appropriate timestamp field for cursor
-                if endpoint == "expenses":
-                    # Expenses are ordered by expense_date
-                    next_cursor = last_item.get("expense_date") or last_item.get(
-                        "created_at"
-                    )
-                else:
-                    # Transactions are ordered by created_at
-                    next_cursor = last_item.get("created_at")
-
+                next_cursor = items[-1].get("created_at")
                 has_more = next_cursor is not None
 
         # accounts endpoint is never paginated
@@ -336,6 +324,46 @@ class RevolutAdapter:
                 logger.error(f"Error streaming {endpoint}: {e}")
                 # Continue with other endpoints
                 continue
+
+    async def list_expenses(
+        self, since: Optional[datetime] = None
+    ) -> AsyncIterator[Dict[str, Any]]:
+        """Yield every expense at or after ``since`` (all of them if None), newest first.
+
+        Pages backwards like transactions: each page's last ``expense_date`` is the ``to`` of
+        the next request. The Expenses API must be enabled for the business by Revolut; when
+        it is not, the request fails with 403.
+        """
+        cursor: Optional[str] = None
+        while True:
+            params: Dict[str, Any] = {"count": self.page_size}
+            if cursor:
+                params["to"] = cursor
+            if since is not None:
+                params["from"] = since.isoformat()
+            response = await self._make_request(EXPENSES_URL, params)
+            items: List[Dict[str, Any]] = response if isinstance(response, list) else []
+            for item in items:
+                yield item
+            if len(items) < self.page_size:
+                break
+            next_cursor = items[-1].get("expense_date") or items[-1].get("created_at")
+            if not next_cursor or next_cursor == cursor:
+                break
+            cursor = next_cursor
+
+    async def download_receipt(
+        self, expense_id: str, receipt_id: str
+    ) -> tuple[bytes, str]:
+        """One receipt file: its bytes and content type."""
+        url = f"{EXPENSES_URL}/{expense_id}/receipts/{receipt_id}/content"
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            response = await client.get(url, headers=self._headers)
+            response.raise_for_status()
+            content_type = response.headers.get(
+                "content-type", "application/octet-stream"
+            )
+            return response.content, content_type.split(";")[0].strip()
 
     async def test_connection(self) -> bool:
         """Test the API connection by fetching accounts.

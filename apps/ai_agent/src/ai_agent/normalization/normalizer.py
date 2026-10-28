@@ -14,15 +14,15 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, TypeVar, Union
 from uuid import UUID
 
-from .models import CanonicalBase, ExpenseEnrichment, ProcessingStatus
+from .models import CanonicalBase, ProcessingStatus
 
 logger = logging.getLogger(__name__)
 
 # Type variable for canonical models
 T = TypeVar("T", bound=CanonicalBase)
 
-# What a normalizer can produce: canonical model(s), or enrichment for an existing row
-CanonicalResult = Union[CanonicalBase, List[CanonicalBase], ExpenseEnrichment]
+# What a normalizer can produce: one canonical model or several
+CanonicalResult = Union[CanonicalBase, List[CanonicalBase]]
 
 
 class NormalizationError(Exception):
@@ -343,7 +343,6 @@ class FinancialNormalizer(BaseNormalizer):
     supported_entity_types: List[str] = [
         "bank_account",
         "financial_transaction",
-        "expense",
     ]
 
     # =========================================================================
@@ -412,20 +411,4 @@ class FinancialNormalizer(BaseNormalizer):
         raw_event_id: UUID,
     ) -> NormalizationResult:
         """Normalize a bank account payload."""
-        pass
-
-    @abstractmethod
-    def normalize_expense(
-        self,
-        external_id: str,
-        payload: Dict[str, Any],
-        raw_event_id: UUID,
-    ) -> NormalizationResult:
-        """Normalize an expense payload.
-
-        For providers that have a separate expenses API (e.g., Revolut),
-        this method handles expense-specific data with richer categorization.
-        Implementations should handle deduplication if expenses can also
-        appear in the transactions API.
-        """
         pass

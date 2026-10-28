@@ -95,28 +95,6 @@ class PayPalNormalizer(FinancialNormalizer):
         )
 
     # =========================================================================
-    # EXPENSE NORMALIZATION (not supported)
-    # =========================================================================
-
-    def normalize_expense(
-        self,
-        external_id: str,
-        payload: Dict[str, Any],
-        raw_event_id: UUID,
-    ) -> NormalizationResult:
-        """PayPal Transaction Search API does not provide separate expenses.
-
-        Always returns a failure result. Expenses appear as regular
-        transactions in PayPal's API.
-        """
-        return NormalizationResult.failure_result(
-            entity_type="expense",
-            external_id=external_id,
-            raw_event_id=raw_event_id,
-            error_message="PayPal normalizer does not support separate expenses",
-        )
-
-    # =========================================================================
     # FINANCIAL TRANSACTION NORMALIZATION
     # =========================================================================
 
