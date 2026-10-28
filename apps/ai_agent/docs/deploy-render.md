@@ -108,11 +108,15 @@ one-off deployment URL is refused by CORS unless it is added.
 
 ## Day to day
 
-- **Push to `main`.** CI runs; when it passes, Render builds and deploys the backend (only when
-  something under `apps/ai_agent/` changed: `buildFilter`), and the **Inngest Sync** workflow
-  waits until `/health` reports the new commit, then re-syncs the functions with Inngest. A
-  failed deploy shows in Render's dashboard and leaves the previous version serving; the sync
-  workflow then fails after 30 minutes with the commit it last saw.
+- **Push to `main`.** Checks run; when **all** of them pass (CI, the security scans, the Docker
+  build), Render builds and deploys the backend (only when something under `apps/ai_agent/`
+  changed: `buildFilter`). A single failing check means no deploy, with nothing in Render's
+  event log to say so: fix the check, or use **Manual Deploy** in Render's dashboard.
+- **After a deploy.** Render reports it to GitHub as a deployment, and that starts the **Inngest
+  Sync** workflow, which checks `/health` is serving the new backend (waking the free instance)
+  and re-syncs the functions with Inngest. It must not start from CI: its own run is a check on
+  the commit, so Render would wait for it while it waited for Render. A failed deploy shows in
+  Render's dashboard, leaves the previous version serving, and starts no sync.
 - **Changing `langgraph.json`.** The `Dockerfile` is generated from it, and Render builds the
   `Dockerfile`, so regenerate it in the same commit:
   `cd apps/ai_agent && poetry run langgraph dockerfile Dockerfile`.

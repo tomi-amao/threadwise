@@ -1,24 +1,25 @@
 name: Inngest Sync
 
-# Tells Inngest Cloud about the AI agent's current functions after Render deploys main.
-# Render deploys a commit once its checks pass (render.yaml: autoDeployTrigger: checksPass), so
-# this starts at the same point and waits for the new code to be serving before it syncs
-# (.github/scripts/inngest-sync.sh).
+# Tells Inngest Cloud about the AI agent's current functions after Render deploys it.
+#
+# It starts from Render's own report of a finished deploy (Render records each deploy as a GitHub
+# deployment, environment "main - threadwise-ai-agent"), not from CI. Render deploys a commit only
+# once every check on it has passed (render.yaml: autoDeployTrigger: checksPass), and a run of
+# this workflow is itself a check on the commit: started after CI, it waited for a deploy that
+# was waiting for it, failed after its 30 minutes, and so blocked the deploy for good.
+# A redeploy after a settings change also lands here; syncing again is harmless.
 #
 # Needs the repository variable AI_AGENT_URL and the secret INNGEST_API_KEY; until both are set
 # it skips. Setup: apps/ai_agent/docs/deploy-render.md.
 
 on:
-  workflow_run:
-    workflows: ['CI Pipeline']
-    types: [completed]
-    branches: [main]
+  deployment_status:
   workflow_dispatch:
 
 permissions:
   contents: read
 
-# A newer push supersedes a sync still waiting for an older deploy.
+# A newer deploy supersedes a sync still running for an older one.
 concurrency:
   group: inngest-sync
   cancel-in-progress: true
@@ -27,17 +28,23 @@ jobs:
   sync:
     name: Sync with Inngest Cloud
     runs-on: ubuntu-latest
-    timeout-minutes: 40
-    # Only a push to main whose CI passed (never a pull request run), or a manual run.
+    timeout-minutes: 15
+    # Only a successful deploy of the agent (not its database, not a failed deploy), or a manual
+    # run. Render names the deployment "<branch> - <service>"; if the service is renamed, set the
+    # repository variable RENDER_DEPLOY_ENVIRONMENT.
     if: >-
       github.event_name == 'workflow_dispatch' ||
-      (github.event.workflow_run.conclusion == 'success' &&
-       github.event.workflow_run.event == 'push')
+      (github.event.deployment_status.state == 'success' &&
+       github.event.deployment.environment ==
+         (vars.RENDER_DEPLOY_ENVIRONMENT || 'main - threadwise-ai-agent'))
     env:
-      TARGET_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+      TARGET_SHA: ${{ github.event.deployment.sha || github.sha }}
       AI_AGENT_URL: ${{ vars.AI_AGENT_URL }}
       INNGEST_APP_ID: ${{ vars.INNGEST_APP_ID }}
       INNGEST_API_KEY: ${{ secrets.INNGEST_API_KEY }}
+      # The deploy has finished, so this is only for a free instance waking up and the new
+      # version replacing the old one.
+      WAIT_MINUTES: 10
     steps:
       - name: Skip until configured
         id: config
@@ -54,6 +61,6 @@ jobs:
           ref: ${{ env.TARGET_SHA }}
           fetch-depth: 0
 
-      - name: Wait for the deploy, then sync
+      - name: Check the deploy is serving, then sync
         if: steps.config.outputs.skip != 'true'
         run: .github/scripts/inngest-sync.sh "$TARGET_SHA"
