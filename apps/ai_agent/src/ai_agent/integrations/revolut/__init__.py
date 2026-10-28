@@ -23,6 +23,10 @@ ENDPOINTS = {
     "accounts": f"{REVOLUT_BASE_URL}/api/1.0/accounts",
 }
 
+# Not a synced endpoint: expenses are read only to find the receipts attached to transactions
+# (see integrations/inngest/revolut_sync_functions.py, revolut_sync_receipts).
+EXPENSES_URL = f"{REVOLUT_BASE_URL}/api/1.0/expenses"
+
 
 class RevolutAdapter:
     """Adapter for Revolut Business API.
@@ -320,6 +324,46 @@ class RevolutAdapter:
                 logger.error(f"Error streaming {endpoint}: {e}")
                 # Continue with other endpoints
                 continue
+
+    async def list_expenses(
+        self, since: Optional[datetime] = None
+    ) -> AsyncIterator[Dict[str, Any]]:
+        """Yield every expense at or after ``since`` (all of them if None), newest first.
+
+        Pages backwards like transactions: each page's last ``expense_date`` is the ``to`` of
+        the next request. The Expenses API must be enabled for the business by Revolut; when
+        it is not, the request fails with 403.
+        """
+        cursor: Optional[str] = None
+        while True:
+            params: Dict[str, Any] = {"count": self.page_size}
+            if cursor:
+                params["to"] = cursor
+            if since is not None:
+                params["from"] = since.isoformat()
+            response = await self._make_request(EXPENSES_URL, params)
+            items: List[Dict[str, Any]] = response if isinstance(response, list) else []
+            for item in items:
+                yield item
+            if len(items) < self.page_size:
+                break
+            next_cursor = items[-1].get("expense_date") or items[-1].get("created_at")
+            if not next_cursor or next_cursor == cursor:
+                break
+            cursor = next_cursor
+
+    async def download_receipt(
+        self, expense_id: str, receipt_id: str
+    ) -> tuple[bytes, str]:
+        """One receipt file: its bytes and content type."""
+        url = f"{EXPENSES_URL}/{expense_id}/receipts/{receipt_id}/content"
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            response = await client.get(url, headers=self._headers)
+            response.raise_for_status()
+            content_type = response.headers.get(
+                "content-type", "application/octet-stream"
+            )
+            return response.content, content_type.split(";")[0].strip()
 
     async def test_connection(self) -> bool:
         """Test the API connection by fetching accounts.

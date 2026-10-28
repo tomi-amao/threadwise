@@ -1,13 +1,18 @@
 /**
  * GET /api/transactions: one page of transactions for the list (filters as query parameters,
- * named as the agent's /accounting/transactions named them), or with ?id=<transaction> that one
- * transaction and its journal, for the drawer. Read with the signed-in user's session, so
- * row-level security applies; edits still go to the agent.
+ * named as the agent's /accounting/transactions named them); with ?id=<transaction> that one
+ * transaction, its journal and its attachments, for the drawer; with ?attachment=<id> a redirect
+ * to that attachment's file. Read with the signed-in user's session, so row-level security
+ * applies; edits still go to the agent.
  */
 
 import type { LoaderFunctionArgs } from 'react-router';
 import { getUserEntity } from '~/lib/api/entity.server';
-import { getTransactionDetail, listTransactions } from '~/lib/api/transactions.server';
+import {
+  getAttachmentUrl,
+  getTransactionDetail,
+  listTransactions,
+} from '~/lib/api/transactions.server';
 import { getRequestSupabaseClient, requireUser } from '~/lib/supabase-server';
 
 const MAX_PAGE_SIZE = 200;
@@ -21,9 +26,16 @@ export async function loader({ request }: LoaderFunctionArgs) {
   await requireUser(request);
   const params = new URL(request.url).searchParams;
   const id = params.get('id');
+  const attachment = params.get('attachment');
   try {
     const entity = await getUserEntity(request);
     const supabase = getRequestSupabaseClient(request);
+
+    if (attachment) {
+      const url = entity && (await getAttachmentUrl(supabase, entity.id, attachment));
+      if (!url) return Response.json({ error: 'Attachment not found' }, { status: 404 });
+      return Response.redirect(url, 302);
+    }
 
     if (id) {
       const detail = entity && (await getTransactionDetail(supabase, entity.id, id));
@@ -58,9 +70,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
     );
   } catch (error) {
     console.error('Transactions loader error:', error);
-    return Response.json(
-      { error: id ? 'Could not load the transaction' : 'Could not load transactions' },
-      { status: 500 }
-    );
+    const what = attachment ? 'the attachment' : id ? 'the transaction' : 'transactions';
+    return Response.json({ error: `Could not load ${what}` }, { status: 500 });
   }
 }

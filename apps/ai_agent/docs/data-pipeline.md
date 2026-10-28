@@ -42,12 +42,13 @@ one channel per source), which the frontend subscribes to with a token from
 
 ## Inngest functions
 
-All are registered on `/api/inngest` (28 in total).
+All are registered on `/api/inngest` (29 in total).
 
 | Group         | Function                                                                                | Trigger                                                                    |
 | ------------- | --------------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
 | Shopify       | `shopify_sync_all`, `shopify_sync_endpoint`, `shopify_sync_order_transactions`          | `shopify/sync.requested`, `.endpoint`, `.order_transactions.requested`     |
 | Revolut       | `revolut_sync_all`, `revolut_sync_endpoint`                                             | `revolut/sync.requested`, `revolut/sync.endpoint`                          |
+|               | `revolut_sync_receipts` (invoked by `revolut_sync_all`)                                 | `revolut/sync.receipts`                                                    |
 | PayPal        | `paypal_sync_all`, `paypal_sync_endpoint`                                               | `paypal/sync.requested`, `paypal/sync.endpoint`                            |
 | Squarespace   | `squarespace_sync_all`, `squarespace_sync_endpoint`, `squarespace_sync_single_endpoint` | `squarespace/sync.requested`, ...                                          |
 | Zoho Calendar | `zoho_calendar_sync_all`, `zoho_calendar_sync_endpoint`                                 | `zoho_calendar/sync.requested`, `.endpoint`                                |
@@ -59,6 +60,25 @@ All are registered on `/api/inngest` (28 in total).
 |               | `reprocess_failed_manual`                                                               | `normalization/reprocess.requested`                                        |
 | Accounting    | `generate_all_journals`                                                                 | `accounting/journals.generate.requested`                                   |
 | Other         | `process_chat_message`, `process_document_embedding`, `cleanup_old_threads`             | `chat/message.received`, `documents/embedding.completed`, cron `0 2 * * *` |
+
+## Attachments (Revolut receipts)
+
+Revolut keeps receipts on expenses, not transactions: an expense names its `transaction_id` and
+lists `receipt_ids`. That covers card receipts, bills attached to transfers, and Revolut's own
+invoices for its fees. After the Revolut endpoints, `revolut_sync_all` invokes
+`revolut_sync_receipts` (`integrations/revolut/receipts.py`), which:
+
+- lists expenses since its own `receipts` watermark less 90 days (a receipt is often attached
+  weeks after the payment), skipping receipts already stored;
+- downloads each new file and copies it into the private `transaction-attachments` bucket, and
+  records it in `transaction_attachments`, keyed by the provider's transaction id, so it does not
+  depend on the transaction being normalised first and re-normalising never drops it.
+
+Expenses are not stored as raw events and are not normalised. The Expenses API must be enabled
+for the business by Revolut; without it (401/403) the step stops and the sync of transactions
+carries on. The Transactions drawer lists the files and opens one through
+`/api/transactions?attachment=<id>`, which reads the row as the user and redirects to a
+five-minute signed link.
 
 ## Raw events and their state
 

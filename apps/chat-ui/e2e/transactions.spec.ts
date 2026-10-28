@@ -83,6 +83,38 @@ test.describe('transactions from the database', () => {
     expect(second.filter(id => first.includes(id))).toEqual([]);
   });
 
+  test('the drawer lists a receipt, and its link opens the file', async ({ page }) => {
+    const { attachments } = readManifest();
+    await page.goto(`/transactions?transactionId=${attachments.transactionId}`);
+    const drawer = page.getByRole('dialog');
+    const link = drawer.getByRole('link', { name: new RegExp(attachments.fileName) });
+    await expect(link).toBeVisible();
+    await expect(link).toHaveAttribute('target', '_blank');
+    const scan = await new AxeBuilder({ page })
+      .include('[role="dialog"]')
+      .withTags(['wcag2a', 'wcag2aa'])
+      .analyze();
+    expect(scan.violations.map(v => `${v.id}: ${v.help}`)).toEqual([]);
+    await drawer.screenshot({
+      path: process.env.ATTACHMENT_SHOT ?? test.info().outputPath('attachment-drawer.png'),
+    });
+
+    // The route checks the attachment is this business's, then redirects to a signed link.
+    const file = await page.request.get((await link.getAttribute('href'))!);
+    expect(file.status()).toBe(200);
+    expect(file.headers()['content-type']).toContain('application/pdf');
+    expect((await file.body()).byteLength).toBe(attachments.sizeBytes);
+  });
+
+  test("another business's attachment does not open", async ({ page }) => {
+    const { rival } = readManifest();
+    await page.goto('/transactions');
+    const response = await page.request.get(`/api/transactions?attachment=${rival.attachmentId}`, {
+      maxRedirects: 0,
+    });
+    expect(response.status()).toBe(404);
+  });
+
   test('the drawer shows a seeded transaction with its balanced journal', async ({ page }) => {
     await page.goto('/transactions');
     // The newest seeded transactions all have a posted journal.

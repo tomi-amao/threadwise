@@ -13,6 +13,13 @@ export function money(amount: number, currency = 'GBP', digits = 2): string {
 
 export const int = (n: number): string => new Intl.NumberFormat('en-GB').format(n);
 
+/** A file size for people: 820 B, 14 KB, 2.3 MB. */
+export function fileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
 /** The transaction's amount in the trading currency (GBP), falling back to its own currency. */
 export const baseAmount = (t: FinancialTransaction): number => Number(t.base_amount ?? t.amount);
 

@@ -104,9 +104,21 @@ export interface ListTransactionsResponse {
   total_pages: number;
 }
 
+/** A file kept with a transaction, such as a Revolut receipt. Opened via attachmentUrl(). */
+export interface TransactionAttachment {
+  id: string;
+  source: string;
+  file_name: string;
+  content_type: string;
+  size_bytes: number;
+  created_at: string;
+}
+
 export interface TransactionDetailResponse {
   transaction: FinancialTransaction;
   journal: TransactionJournal | null;
+  /** Absent from responses that predate attachments (the e2e stand-in); treat as none. */
+  attachments?: TransactionAttachment[];
 }
 
 export interface UpdateTransactionPayload {
@@ -160,6 +172,10 @@ export async function listTransactions(
   if (!response.ok) throw await failure(response, 'list transactions');
   return response.json();
 }
+
+/** Opens the file: the route checks it is the user's, then redirects to a short-lived link. */
+export const attachmentUrl = (attachmentId: string): string =>
+  `/api/transactions?${new URLSearchParams({ attachment: attachmentId })}`;
 
 export async function getTransaction(transactionId: string): Promise<TransactionDetailResponse> {
   const query = new URLSearchParams({ id: transactionId });

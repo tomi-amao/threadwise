@@ -123,6 +123,16 @@ export interface SeedManifest {
     invoiceNumber: string;
     bankName: string;
     bankBalance: number;
+    /** A transaction attachment of the rival's, which the first business must not open. */
+    attachmentId: string;
+  };
+  /** The one file attached to a seeded transaction (a Revolut receipt, as the sync stores it). */
+  attachments: {
+    count: number;
+    transactionId: string;
+    attachmentId: string;
+    fileName: string;
+    sizeBytes: number;
   };
   /** What the seed put into products: line-item revenue, by the rules the Products page uses. */
   products: {

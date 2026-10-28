@@ -8,7 +8,15 @@
  */
 
 import { useCallback, useEffect, useState } from 'react';
-import { CaretDown, CaretUp, CircleNotch } from 'phosphor-react';
+import {
+  ArrowSquareOut,
+  CaretDown,
+  CaretUp,
+  CircleNotch,
+  FileImage,
+  FilePdf,
+  Paperclip,
+} from 'phosphor-react';
 import { toast } from 'sonner';
 import { Button } from '~/components/ui/button';
 import { Chip, type ChipTone } from '~/components/ui/chip';
@@ -20,9 +28,11 @@ import { Input } from '~/components/ui/input';
 import { SearchableSelect } from '~/components/ui/searchable-select';
 import type { ChartOfAccountEntry } from '~/lib/api/accounting';
 import {
+  attachmentUrl,
   getTransaction,
   updateTransaction,
   type FinancialTransaction,
+  type TransactionAttachment,
   type JournalLineItemWithAccount,
   type TransactionJournal,
   type UpdateTransactionPayload,
@@ -33,6 +43,7 @@ import {
   SOURCE_LABEL,
   baseAmount,
   dateTime,
+  fileSize,
   filingOf,
   money,
   shortDate,
@@ -51,6 +62,45 @@ function Detail({ label, children }: { label: string; children: React.ReactNode 
       <dt className="shrink-0 text-text-2">{label}</dt>
       <dd className="min-w-0 break-words text-right">{children}</dd>
     </div>
+  );
+}
+
+function AttachmentList({ attachments }: { attachments: TransactionAttachment[] }) {
+  return (
+    <ul className="mt-3 divide-y rounded-xl border">
+      {attachments.map(file => {
+        const Icon = file.content_type.startsWith('image/')
+          ? FileImage
+          : file.content_type === 'application/pdf'
+            ? FilePdf
+            : Paperclip;
+        return (
+          <li key={file.id}>
+            <a
+              href={attachmentUrl(file.id)}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-3 px-4 py-3 transition-colors hover:bg-accent focus-visible:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+            >
+              <Icon size={18} weight="light" className="shrink-0 text-text-2" aria-hidden />
+              <span className="min-w-0 flex-1">
+                <span className="block truncate">{file.file_name}</span>
+                <span className="block text-[13px] text-muted-foreground">
+                  {SOURCE_LABEL[file.source] ?? file.source} · {fileSize(file.size_bytes)}
+                </span>
+              </span>
+              <ArrowSquareOut
+                size={14}
+                weight="light"
+                className="shrink-0 text-text-2"
+                aria-hidden
+              />
+              <span className="sr-only">(opens in a new tab)</span>
+            </a>
+          </li>
+        );
+      })}
+    </ul>
   );
 }
 
@@ -231,6 +281,7 @@ export function TransactionDrawer({
   onTransactionUpdated,
 }: TransactionDrawerProps) {
   const [txn, setTxn] = useState<FinancialTransaction | null>(null);
+  const [attachments, setAttachments] = useState<TransactionAttachment[]>([]);
   const [journal, setJournal] = useState<TransactionJournal | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
@@ -240,6 +291,7 @@ export function TransactionDrawer({
     if (!transactionId) {
       setTxn(null);
       setJournal(null);
+      setAttachments([]);
       return;
     }
     let current = true;
@@ -250,6 +302,7 @@ export function TransactionDrawer({
         if (!current) return;
         setTxn(data.transaction);
         setJournal(data.journal);
+        setAttachments(data.attachments ?? []);
       })
       .catch(err => toast.error(`Failed to load transaction: ${err.message}`))
       .finally(() => current && setIsLoading(false));
@@ -368,6 +421,13 @@ export function TransactionDrawer({
             )}
             {txn.excluded_reason && <Detail label="Excluded because">{txn.excluded_reason}</Detail>}
           </dl>
+
+          {attachments.length > 0 && (
+            <div>
+              <Eyebrow>Attachments</Eyebrow>
+              <AttachmentList attachments={attachments} />
+            </div>
+          )}
 
           <div>
             <Eyebrow>{journal ? 'Associated journal' : 'Journal'}</Eyebrow>
