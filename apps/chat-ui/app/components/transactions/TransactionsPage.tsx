@@ -2,7 +2,7 @@
  * TransactionsPage
  *
  * Search, filter and inspect financial transactions. Filtering and paging happen on the server
- * (the FastAPI accounting API); the filters live in the URL. Clicking a row opens the drawer
+ * (/api/transactions, which reads Supabase as the signed-in user); the filters live in the URL. Clicking a row opens the drawer
  * (?transactionId=).
  *
  * The API returns rows and a total count, but no money totals and no way to filter by filing
@@ -191,12 +191,11 @@ export function TransactionsPage() {
   }, [entityId]);
 
   // The list. A newer request supersedes an older one, so a slow response can't overwrite it.
+  // The route works out the business from the session, so this need not wait for useAuth().
   useEffect(() => {
-    if (!entityId) return;
     const id = ++requestId.current;
     setLoad(l => ({ status: 'loading', data: l.data, error: null }));
     listTransactions({
-      entityId,
       page,
       pageSize: PAGE_SIZE,
       search: filters.q || undefined,
@@ -217,7 +216,7 @@ export function TransactionsPage() {
         setLoad(l => ({ status: 'error', data: l.data, error: message }));
       });
     // `filters` is represented by filterKey.
-  }, [entityId, page, filterKey, reloadKey]);
+  }, [page, filterKey, reloadKey]);
 
   // Search: type freely, apply after a short pause.
   const [searchText, setSearchText] = useState(filters.q);
