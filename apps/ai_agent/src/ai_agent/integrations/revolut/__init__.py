@@ -21,7 +21,6 @@ REVOLUT_BASE_URL = os.environ.get("REVOLUT_API_URL", "https://b2b.revolut.com")
 ENDPOINTS = {
     "transactions": f"{REVOLUT_BASE_URL}/api/1.0/transactions",
     "accounts": f"{REVOLUT_BASE_URL}/api/1.0/accounts",
-    "expenses": f"{REVOLUT_BASE_URL}/api/1.0/expenses",
 }
 
 
@@ -95,7 +94,6 @@ class RevolutAdapter:
         mapping = {
             "transactions": "financial_transaction",
             "accounts": "bank_account",
-            "expenses": "expense",
         }
         return mapping.get(endpoint, endpoint)
 
@@ -132,7 +130,6 @@ class RevolutAdapter:
         """Extract the occurred_at timestamp from an item.
 
         For transactions, prefers completed_at then falls back to created_at.
-        For expenses, uses expense_date or created_at.
         For accounts, tries created_at and updated_at.
 
         Args:
@@ -144,8 +141,6 @@ class RevolutAdapter:
         """
         if entity_type == "financial_transaction":
             timestamp_fields = ["completed_at", "created_at"]
-        elif entity_type == "expense":
-            timestamp_fields = ["expense_date", "created_at", "completed_at"]
         else:
             timestamp_fields = ["created_at", "updated_at"]
 
@@ -166,7 +161,7 @@ class RevolutAdapter:
     ) -> PaginatedResult:
         """Fetch a single page of data from an endpoint.
 
-        For transactions and expenses, Revolut uses date-based pagination:
+        For transactions, Revolut uses date-based pagination:
         the cursor is an ISO-8601 timestamp used as the ``to`` parameter on
         the next request. Results are ordered by ``created_at`` descending so
         the last item's ``created_at`` becomes the cursor for the following page.
@@ -174,8 +169,8 @@ class RevolutAdapter:
         For accounts, all records are returned in a single call (no pagination).
 
         Args:
-            endpoint: Endpoint name (``transactions``, ``accounts``, or ``expenses``)
-            cursor: Pagination cursor (ISO-8601 timestamp for transactions/expenses)
+            endpoint: Endpoint name (``transactions`` or ``accounts``)
+            cursor: Pagination cursor (ISO-8601 timestamp for transactions)
             since: Only fetch records at-or-after this time (Revolut's
                 ``from`` parameter, inclusive). Sent on every page, not just
                 the first — unlike Shopify's opaque cursor, Revolut's `to`
@@ -191,7 +186,7 @@ class RevolutAdapter:
 
         params: Dict[str, Any] = {}
 
-        if endpoint in ("transactions", "expenses"):
+        if endpoint == "transactions":
             params["count"] = self.page_size
             if cursor:
                 # cursor is an ISO-8601 timestamp used as the upper bound
@@ -209,26 +204,15 @@ class RevolutAdapter:
         # Revolut returns a JSON array for both endpoints
         items: List[Dict[str, Any]] = response if isinstance(response, list) else []
 
-        # Determine pagination for transactions and expenses
+        # Determine pagination for transactions
         has_more = False
         next_cursor: Optional[str] = None
 
-        if endpoint in ("transactions", "expenses") and items:
-            # Results are ordered by timestamp descending. If we received a
+        if endpoint == "transactions" and items:
+            # Results are ordered by created_at descending. If we received a
             # full page, there are likely more results available.
             if len(items) >= self.page_size:
-                last_item = items[-1]
-
-                # Use the appropriate timestamp field for cursor
-                if endpoint == "expenses":
-                    # Expenses are ordered by expense_date
-                    next_cursor = last_item.get("expense_date") or last_item.get(
-                        "created_at"
-                    )
-                else:
-                    # Transactions are ordered by created_at
-                    next_cursor = last_item.get("created_at")
-
+                next_cursor = items[-1].get("created_at")
                 has_more = next_cursor is not None
 
         # accounts endpoint is never paginated

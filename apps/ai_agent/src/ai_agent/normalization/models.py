@@ -678,35 +678,6 @@ class CanonicalFinancialTransaction(CanonicalBase):
     )
 
 
-class ExpenseEnrichment(BaseModel):
-    """Enrichment data for existing financial transactions from expense APIs.
-
-    When an expense record arrives separately from the transaction record
-    (e.g., Revolut Expenses API vs Transactions API), this model merges
-    enrichment data into the transaction's ``metadata`` JSONB column.
-    """
-
-    model_config = ConfigDict(frozen=True)
-
-    # Identity fields to locate existing transaction
-    entity_id: UUID = Field(description="Parent entity ID")
-    source: TxnSource = Field(description="Source provider")
-    external_transaction_id: str = Field(
-        description="Transaction ID from provider (same as existing transaction)"
-    )
-
-    # Enrichment data (merged into metadata)
-    expense_category: Optional[str] = Field(
-        default=None, description="Expense category from provider's expense API"
-    )
-    account_code: Optional[str] = Field(
-        default=None, description="Chart of accounts code derived from expense category"
-    )
-
-    # Metadata
-    raw_event_id: UUID = Field(description="Raw event that triggered this enrichment")
-
-
 # =============================================================================
 # CALENDAR DOMAIN
 # =============================================================================

@@ -25,7 +25,6 @@ import {
   Database,
   Bank,
   CurrencyCircleDollar,
-  Receipt,
 } from 'phosphor-react';
 import { useRealtime } from 'inngest/react';
 import { cn } from '~/lib/utils';
@@ -87,7 +86,6 @@ const entityTypeIcons: Record<string, React.ReactNode> = {
   transaction: <CurrencyCircleDollar size={16} weight="duotone" />,
   bank_account: <Bank size={16} weight="duotone" />,
   financial_transaction: <CurrencyCircleDollar size={16} weight="duotone" />,
-  expense: <Receipt size={16} weight="duotone" />,
 };
 
 // Friendly entity type labels
@@ -99,7 +97,6 @@ const entityTypeLabels: Record<string, string> = {
   transaction: 'Transactions',
   bank_account: 'Bank Accounts',
   financial_transaction: 'Financial Transactions',
-  expense: 'Expenses',
 };
 
 // =============================================================================

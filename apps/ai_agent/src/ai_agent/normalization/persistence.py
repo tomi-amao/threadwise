@@ -19,7 +19,7 @@ import logging
 import os
 from datetime import datetime, timezone
 from decimal import Decimal
-from typing import Any, Dict, List, Optional, Tuple, cast
+from typing import Any, Dict, List, Optional, Tuple
 from uuid import UUID
 
 from ..core.supabase_client import get_supabase_client
@@ -35,7 +35,6 @@ from .models import (
     CanonicalPayment,
     CanonicalPaymentFee,
     CanonicalProduct,
-    ExpenseEnrichment,
     FulfillmentStatus,
     InventoryMovementType,
     OrderStatus,
@@ -164,14 +163,6 @@ class PersistenceService:
                         canonical_id = await self.persist_financial_transaction(item)
                     elif isinstance(item, CanonicalCalendarEvent):
                         canonical_id = await self.persist_calendar_event(item)
-                    elif isinstance(item, ExpenseEnrichment):
-                        canonical_id = await self.enrich_financial_transaction(
-                            source=item.source,
-                            external_transaction_id=item.external_transaction_id,
-                            entity_id=item.entity_id,
-                            expense_category=item.expense_category,
-                            account_code=item.account_code,
-                        )
                     else:
                         raise PersistenceError(
                             f"Unknown canonical model type in list: {type(item).__name__}",
@@ -199,14 +190,6 @@ class PersistenceService:
                 canonical_id = await self.persist_financial_transaction(canonical)
             elif isinstance(canonical, CanonicalCalendarEvent):
                 canonical_id = await self.persist_calendar_event(canonical)
-            elif isinstance(canonical, ExpenseEnrichment):
-                canonical_id = await self.enrich_financial_transaction(
-                    source=canonical.source,
-                    external_transaction_id=canonical.external_transaction_id,
-                    entity_id=canonical.entity_id,
-                    expense_category=canonical.expense_category,
-                    account_code=canonical.account_code,
-                )
             else:
                 raise PersistenceError(
                     f"Unknown canonical model type: {type(canonical).__name__}",
@@ -1588,88 +1571,6 @@ class PersistenceService:
             )
 
         return _extract_id(result)
-
-    async def enrich_financial_transaction(
-        self,
-        source: Any,
-        external_transaction_id: str,
-        entity_id: UUID,
-        expense_category: Optional[str] = None,
-        account_code: Optional[str] = None,
-    ) -> Optional[UUID]:
-        """Enrich an existing financial transaction with expense categorization.
-
-        Merges expense_category and account_code into the transaction's metadata
-        JSONB column (these are no longer top-level columns).
-
-        Args:
-            source: Transaction source (TxnSource enum or string)
-            external_transaction_id: External transaction ID
-            entity_id: Entity UUID
-            expense_category: Expense category to set
-            account_code: Account code to set
-
-        Returns:
-            Transaction UUID if found and updated, None otherwise
-        """
-        source_value = source.value if hasattr(source, "value") else source
-
-        # Find the existing transaction
-        find_result = await asyncio.to_thread(
-            lambda: self.client.table("financial_transactions")
-            .select("id, metadata")
-            .eq("source", source_value)
-            .eq("external_transaction_id", external_transaction_id)
-            .eq("entity_id", str(entity_id))
-            .execute()
-        )
-
-        if not find_result.data:
-            logger.warning(
-                "No existing transaction found to enrich: " "source=%s, external_id=%s",
-                source_value,
-                external_transaction_id,
-            )
-            return None
-
-        row = cast(Dict[str, Any], find_result.data[0])
-        transaction_id: str = row["id"]
-        existing_metadata: Dict[str, Any] = row.get("metadata") or {}
-
-        # Merge enrichment data into metadata
-        updated_metadata: Dict[str, Any] = {**existing_metadata}
-        if expense_category is not None:
-            updated_metadata["expense_category"] = expense_category
-        if account_code is not None:
-            updated_metadata["account_code"] = account_code
-
-        if updated_metadata == existing_metadata:
-            logger.info("No new enrichment data for transaction %s", transaction_id)
-            return UUID(transaction_id)
-
-        update_result = await asyncio.to_thread(
-            lambda: self.client.table("financial_transactions")
-            .update({"metadata": updated_metadata})
-            .eq("id", transaction_id)
-            .execute()
-        )
-
-        if not update_result.data:
-            raise PersistenceError(
-                "Failed to enrich financial transaction",
-                entity_type="financial_transaction",
-                external_id=external_transaction_id,
-            )
-
-        logger.info(
-            "Enriched transaction %s metadata with expense data: "
-            "category=%s, code=%s",
-            transaction_id,
-            expense_category,
-            account_code,
-        )
-
-        return UUID(transaction_id)
 
     async def _get_bank_account_id(
         self,

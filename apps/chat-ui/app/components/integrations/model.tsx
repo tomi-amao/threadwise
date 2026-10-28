@@ -67,8 +67,8 @@ export const PROVIDERS: Record<ProviderKey, Provider> = {
   revolut: {
     name: 'Revolut',
     icon: <Bank {...ICON} />,
-    description: 'Transactions, accounts and expenses from Revolut Business.',
-    endpoints: ['transactions', 'accounts', 'expenses'],
+    description: 'Transactions and accounts from Revolut Business.',
+    endpoints: ['transactions', 'accounts'],
     credential: 'key',
     accountLabel: 'Business ID',
     accountPlaceholder: 'Your Revolut business ID',
@@ -100,7 +100,6 @@ export const ENDPOINT_ICON: Record<string, React.ReactNode> = {
   transactions: <Coins {...E} />,
   balance_transactions: <Coins {...E} />,
   accounts: <Buildings {...E} />,
-  expenses: <Coins {...E} />,
   calendar_events: <CalendarBlank {...E} />,
   tax_deadlines: <CalendarBlank {...E} />,
   collection_launches: <CalendarBlank {...E} />,

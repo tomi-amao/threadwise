@@ -73,7 +73,6 @@ ENTITY_TYPE_ORDER = [
     "transaction",
     "bank_account",
     "financial_transaction",
-    "expense",
     "payment_transaction",
     "order_transaction",
     "calendar_event",
@@ -90,7 +89,6 @@ ENTITY_TYPE_TIERS: List[List[str]] = [
         "payment_transaction",
         "order_transaction",
     ],  # Tier 2 — depends on order/bank_account
-    ["expense"],  # Tier 3 — depends on financial_transaction
 ]
 
 
