@@ -106,6 +106,8 @@ class RevolutNormalizer(FinancialNormalizer):
         "instagram": ("6010", "marketing"),
         "tiktok": ("6010", "marketing"),
         "mailchimp": ("6010", "marketing"),
+        # Revolut's merchant name for Mailchimp card payments; the match is a prefix.
+        "intuit mailchimp": ("6010", "marketing"),
         "klaviyo": ("6010", "marketing"),
         "royal mail": ("6020", "outbound_shipping"),
         "evri": ("6020", "outbound_shipping"),

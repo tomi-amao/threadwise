@@ -23,6 +23,7 @@ from ai_agent.normalization.models import (
     ProcessingStatus,
 )
 from ai_agent.normalization.normalizer import NormalizationResult
+from ai_agent.normalization.revolut_normalizer import RevolutNormalizer
 from ai_agent.normalization.squarespace_normalizer import SquarespaceNormalizer
 
 # =============================================================================
@@ -554,3 +555,54 @@ class TestIdempotency:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+class TestRevolutNormalizer:
+    """Revolut transactions: categorisation from the transaction feed alone."""
+
+    @staticmethod
+    def card_payment(merchant_name: str) -> dict:
+        return {
+            "id": "txn-1",
+            "type": "card_payment",
+            "state": "completed",
+            "created_at": "2026-09-03T10:00:00Z",
+            "completed_at": "2026-09-03T10:00:05Z",
+            "legs": [
+                {
+                    "account_id": "acc-1",
+                    "amount": -97.73,
+                    "currency": "GBP",
+                    "description": merchant_name,
+                }
+            ],
+            "merchant": {"name": merchant_name, "category_code": "5045"},
+        }
+
+    def test_intuit_mailchimp_is_marketing(self, entity_id, raw_event_id):
+        """Revolut names Mailchimp "Intuit Mailchimp", which the "mailchimp" prefix
+        misses; without its own entry its MCC filed it as a product purchase (5010)."""
+        normalizer = RevolutNormalizer(entity_id)
+        result = normalizer.normalize(
+            "financial_transaction",
+            "txn-1",
+            self.card_payment("Intuit Mailchimp"),
+            raw_event_id,
+        )
+
+        assert result.success
+        canonical = result.canonical
+        assert canonical is not None and not isinstance(canonical, list)
+        assert canonical.metadata["expense_category"] == "marketing"
+        assert canonical.metadata["account_code"] == "6010"
+
+    def test_expense_records_are_not_normalized(self, entity_id, raw_event_id):
+        """The Expenses API is no longer synced; any stored expense record is refused
+        rather than written onto a transaction."""
+        normalizer = RevolutNormalizer(entity_id)
+        result = normalizer.normalize(
+            "expense", "exp-1", {"transaction_id": "txn-1"}, raw_event_id
+        )
+
+        assert not result.success
+        assert "expense" not in normalizer.supported_entity_types
