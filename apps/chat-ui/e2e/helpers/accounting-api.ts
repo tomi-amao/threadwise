@@ -1,12 +1,15 @@
 /**
- * In-memory stand-in for the FastAPI accounting endpoints the Transactions page calls from the
- * browser. It intercepts every request under /accounting/ with `page.route`, so tests are
- * deterministic and need no Python backend.
+ * In-memory stand-in for what the Transactions page calls from the browser: the FastAPI
+ * accounting endpoints (every request under /accounting/: the chart of accounts and saving an
+ * edit) and the app's own /api/transactions read route (the list and the drawer). Intercepted
+ * with `page.route`, so tests can use transactions the seed does not have (foreign currency,
+ * excluded, pending) and an edit shows up in later reads without touching the database.
+ * transactions.spec.ts also reads the real route against the seeded business.
  *
- * It mirrors the real behaviour that the page depends on (see
- * apps/ai_agent/src/ai_agent/api/routes/accounting.py): the list's filter semantics and ordering,
- * and the journal outcome of an update (excluding reverses, changing the account on a journalised
- * transaction reverses and recreates, un-excluding asks for a new journal).
+ * It mirrors the real behaviour that the page depends on (see app/lib/api/transactions.server.ts
+ * and apps/ai_agent/src/ai_agent/api/routes/accounting.py): the list's filter semantics and
+ * ordering, and the journal outcome of an update (excluding reverses, changing the account on a
+ * journalised transaction reverses and recreates, un-excluding asks for a new journal).
  */
 
 import type { Page, Route } from '@playwright/test';
@@ -342,58 +345,66 @@ export async function mockAccountingApi(
     }
 
     const detail = path.match(/\/accounting\/transactions\/([^/]+)$/);
-    if (detail) {
+    if (detail && request.method() === 'PATCH') {
       const txn = stub.transactions.find(t => t.id === detail[1]);
       if (!txn) return json(route, { detail: 'not found' }, 404);
+      const body = request.postDataJSON() as Record<string, unknown>;
+      stub.patches.push({ id: txn.id, body });
+      const wasJournalled = !!txn.journalised_at;
+      const wasExcluded = !!txn.excluded_reason;
+      const previousAccount = String(txn.metadata?.account_code ?? '');
 
-      if (request.method() === 'PATCH') {
-        const body = request.postDataJSON() as Record<string, unknown>;
-        stub.patches.push({ id: txn.id, body });
-        const wasJournalled = !!txn.journalised_at;
-        const wasExcluded = !!txn.excluded_reason;
-        const previousAccount = String(txn.metadata?.account_code ?? '');
+      if (typeof body.description === 'string') txn.description = body.description;
+      if (typeof body.counterparty_name === 'string')
+        txn.counterparty_name = body.counterparty_name;
+      txn.metadata = { ...(txn.metadata ?? {}) };
+      if (typeof body.account_code === 'string') txn.metadata.account_code = body.account_code;
+      if (typeof body.expense_category === 'string')
+        txn.metadata.expense_category = body.expense_category;
+      if (typeof body.excluded_reason === 'string')
+        txn.excluded_reason = body.excluded_reason || null;
 
-        if (typeof body.description === 'string') txn.description = body.description;
-        if (typeof body.counterparty_name === 'string')
-          txn.counterparty_name = body.counterparty_name;
-        txn.metadata = { ...(txn.metadata ?? {}) };
-        if (typeof body.account_code === 'string') txn.metadata.account_code = body.account_code;
-        if (typeof body.expense_category === 'string')
-          txn.metadata.expense_category = body.expense_category;
-        if (typeof body.excluded_reason === 'string')
-          txn.excluded_reason = body.excluded_reason || null;
-
-        let action: 'none' | 'reversed' | 'reversed_and_recreated' | 'reversed_only' = 'none';
-        let reJournalNeeded = false;
-        let newJournal: TransactionJournal | null = null;
-        if (txn.excluded_reason) {
-          if (wasJournalled) action = 'reversed';
-          txn.journalised_at = null;
-        } else if (wasExcluded) {
-          reJournalNeeded = true;
-        } else if (wasJournalled && String(txn.metadata.account_code) !== previousAccount) {
-          action = 'reversed_and_recreated';
-          newJournal = journalFor(txn, String(txn.metadata.account_code));
-        }
-        return json(route, {
-          transaction: txn,
-          journal_action: action,
-          new_journal: newJournal,
-          re_journal_needed: reJournalNeeded,
-        });
+      let action: 'none' | 'reversed' | 'reversed_and_recreated' | 'reversed_only' = 'none';
+      let reJournalNeeded = false;
+      let newJournal: TransactionJournal | null = null;
+      if (txn.excluded_reason) {
+        if (wasJournalled) action = 'reversed';
+        txn.journalised_at = null;
+      } else if (wasExcluded) {
+        reJournalNeeded = true;
+      } else if (wasJournalled && String(txn.metadata.account_code) !== previousAccount) {
+        action = 'reversed_and_recreated';
+        newJournal = journalFor(txn, String(txn.metadata.account_code));
       }
-
-      const journal =
-        txn.journalised_at && !txn.excluded_reason
-          ? journalFor(txn, String(txn.metadata?.account_code ?? '6000'))
-          : null;
-      return json(route, { transaction: txn, journal });
+      return json(route, {
+        transaction: txn,
+        journal_action: action,
+        new_journal: newJournal,
+        re_journal_needed: reJournalNeeded,
+      });
     }
 
-    if (path.endsWith('/accounting/transactions')) {
-      const q = url.searchParams;
+    return json(route, { detail: `unstubbed: ${path}` }, 404);
+  });
+
+  // The app's read route (same origin, so no CORS; the server checks the session).
+  await page.route(
+    url => url.pathname === '/api/transactions',
+    async route => {
+      const q = new URL(route.request().url()).searchParams;
+      const id = q.get('id');
+      if (id) {
+        const txn = stub.transactions.find(t => t.id === id);
+        if (!txn) return json(route, { error: 'Transaction not found' }, 404);
+        const journal =
+          txn.journalised_at && !txn.excluded_reason
+            ? journalFor(txn, String(txn.metadata?.account_code ?? '6000'))
+            : null;
+        return json(route, { transaction: txn, journal });
+      }
+
       stub.listRequests.push(q);
-      if (failing_) return json(route, { detail: 'boom' }, 500);
+      if (failing_) return json(route, { error: 'Could not load transactions' }, 500);
       const search = q.get('search')?.toLowerCase();
       const from = q.get('date_from');
       const to = q.get('date_to');
@@ -423,9 +434,7 @@ export async function mockAccountingApi(
         total_pages: Math.max(1, Math.ceil(rows.length / size)),
       });
     }
-
-    return json(route, { detail: `unstubbed: ${path}` }, 404);
-  });
+  );
 
   return stub;
 }

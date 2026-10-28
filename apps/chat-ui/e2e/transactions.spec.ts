@@ -1,9 +1,100 @@
 import AxeBuilder from '@axe-core/playwright';
-import { test, expect, expectNoHorizontalOverflow } from './fixtures';
+import type { Page } from '@playwright/test';
+import { test, expect, expectNoHorizontalOverflow, readManifest } from './fixtures';
 import { makeTransactions, mockAccountingApi } from './helpers/accounting-api';
+import type { ListTransactionsResponse } from '../app/lib/api/transactions';
 
 const TXNS = makeTransactions(130);
 const PAGE_SIZE = 50;
+
+/**
+ * The next list response from the app's read route whose query has `params` (not a drawer
+ * read), parsed. Matching the query matters: in development React runs effects twice, so the
+ * previous list request can still be answering when the next one starts.
+ */
+const nextList = (page: Page, params: Record<string, string> = {}) =>
+  page
+    .waitForResponse(r => {
+      const url = new URL(r.url());
+      return (
+        url.pathname === '/api/transactions' &&
+        !url.searchParams.has('id') &&
+        Object.entries(params).every(([k, v]) => url.searchParams.get(k) === v)
+      );
+    })
+    .then(r => r.json() as Promise<ListTransactionsResponse>);
+
+// No stand-in here: the page reads the seeded business through /api/transactions, as the user.
+test.describe('transactions from the database', () => {
+  test('lists the seeded business without calling the agent', async ({ page }) => {
+    const { transactionCount } = readManifest();
+    const agentReads: string[] = [];
+    page.on('request', r => {
+      if (new URL(r.url()).pathname.includes('/accounting/transactions')) agentReads.push(r.url());
+    });
+    const list = nextList(page);
+    await page.goto('/transactions');
+
+    // Only this business's rows: the rival's transactions are not counted.
+    expect((await list).total_count).toBe(transactionCount);
+    await expect(page.getByRole('list').locator('li > button')).toHaveCount(PAGE_SIZE);
+    await expect(page.getByRole('navigation', { name: 'Pagination' })).toContainText(
+      `1–50 OF ${transactionCount.toLocaleString('en-GB')}`
+    );
+    expect(agentReads).toEqual([]);
+  });
+
+  test('filters and search run in the database', async ({ page }) => {
+    const { transactionCount } = readManifest();
+    await page.goto('/transactions');
+    await expect(page.getByRole('list').locator('li > button')).toHaveCount(PAGE_SIZE);
+    const direction = page.getByRole('group', { name: 'Direction' });
+
+    let list = nextList(page, { direction: 'in' });
+    await direction.getByRole('button', { name: 'In' }).click();
+    const inbound = (await list).total_count;
+    list = nextList(page, { direction: 'out' });
+    await direction.getByRole('button', { name: 'Out' }).click();
+    const outbound = (await list).total_count;
+    expect(inbound).toBeGreaterThan(0);
+    expect(outbound).toBeGreaterThan(0);
+    expect(inbound + outbound).toBe(transactionCount);
+
+    list = nextList(page, { direction: 'out', search: 'Porto' });
+    await page.getByRole('searchbox', { name: 'Search transactions' }).fill('Porto');
+    const found = await list;
+    expect(found.total_count).toBeGreaterThan(0);
+    expect(found.total_count).toBeLessThan(outbound);
+    for (const t of found.transactions) expect(t.counterparty_name).toContain('Porto');
+  });
+
+  test('pages without repeating a row, though many share a timestamp', async ({ page }) => {
+    let list = nextList(page);
+    await page.goto('/transactions');
+    const first = (await list).transactions.map(t => t.id);
+    list = nextList(page, { page: '2' });
+    await page
+      .getByRole('navigation', { name: 'Pagination' })
+      .getByRole('button', { name: 'Next' })
+      .click();
+    const second = (await list).transactions.map(t => t.id);
+    expect(first).toHaveLength(PAGE_SIZE);
+    expect(second).toHaveLength(PAGE_SIZE);
+    expect(second.filter(id => first.includes(id))).toEqual([]);
+  });
+
+  test('the drawer shows a seeded transaction with its balanced journal', async ({ page }) => {
+    await page.goto('/transactions');
+    // The newest seeded transactions all have a posted journal.
+    await page.getByRole('list').locator('li > button').first().click();
+    const drawer = page.getByRole('dialog');
+    const journal = drawer.getByRole('region', { name: 'Journal lines' });
+    await expect(journal).toBeVisible();
+    await expect(drawer).toContainText('Posted');
+    const total = journal.locator('tfoot td');
+    await expect(total.nth(1)).toHaveText(await total.nth(2).innerText());
+  });
+});
 
 test.describe('transactions', () => {
   test('lists the first page, grouped by day, with the true total', async ({ page }) => {

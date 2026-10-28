@@ -245,7 +245,7 @@ export function TransactionDrawer({
     let current = true;
     setIsLoading(true);
     setEditOpen(false);
-    getTransaction(entityId, transactionId)
+    getTransaction(transactionId)
       .then(data => {
         if (!current) return;
         setTxn(data.transaction);
@@ -256,7 +256,7 @@ export function TransactionDrawer({
     return () => {
       current = false;
     };
-  }, [transactionId, entityId]);
+  }, [transactionId]);
 
   const handleSave = useCallback(
     async (payload: UpdateTransactionPayload) => {
@@ -272,7 +272,7 @@ export function TransactionDrawer({
           result.journal_action === 'reversed_and_recreated'
         ) {
           // The journal changed state: refetch so the table shows what is now true.
-          const fresh = await getTransaction(entityId, transactionId);
+          const fresh = await getTransaction(transactionId);
           setJournal(fresh.journal);
         }
         onTransactionUpdated?.(result.transaction);

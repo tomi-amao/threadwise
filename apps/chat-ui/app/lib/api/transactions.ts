@@ -2,7 +2,9 @@
  * Transactions API Client
  *
  * Client-side service for financial transaction search, detail fetch, and update.
- * All requests go to the AI Agent backend (FastAPI).
+ * Reads go to this app's /api/transactions route, which reads Supabase as the signed-in user
+ * (transactions.server.ts). An update can reverse or recreate a journal, so it goes to the
+ * AI Agent backend (FastAPI).
  */
 
 import { getApiBaseUrl } from './base-url';
@@ -82,7 +84,6 @@ export interface TransactionJournal {
 }
 
 export interface ListTransactionsParams {
-  entityId: string;
   search?: string;
   source?: string;
   direction?: string;
@@ -128,11 +129,22 @@ export interface UpdateTransactionResponse {
 // API Functions
 // ============================================================================
 
+/** The route's error message, or the response text if the body is not its JSON. */
+async function failure(response: Response, what: string): Promise<Error> {
+  const text = await response.text();
+  let message = text;
+  try {
+    message = (JSON.parse(text) as { error?: string }).error ?? text;
+  } catch {
+    /* not JSON: keep the text */
+  }
+  return new Error(`Failed to ${what}: ${message}`);
+}
+
 export async function listTransactions(
   params: ListTransactionsParams
 ): Promise<ListTransactionsResponse> {
-  const baseUrl = getApiBaseUrl();
-  const query = new URLSearchParams({ entity_id: params.entityId });
+  const query = new URLSearchParams();
 
   if (params.search) query.set('search', params.search);
   if (params.source) query.set('source', params.source);
@@ -144,25 +156,15 @@ export async function listTransactions(
   if (params.page) query.set('page', String(params.page));
   if (params.pageSize) query.set('page_size', String(params.pageSize));
 
-  const response = await agentFetch(`${baseUrl}/accounting/transactions?${query}`);
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(`Failed to list transactions: ${text}`);
-  }
+  const response = await fetch(`/api/transactions?${query}`);
+  if (!response.ok) throw await failure(response, 'list transactions');
   return response.json();
 }
 
-export async function getTransaction(
-  entityId: string,
-  transactionId: string
-): Promise<TransactionDetailResponse> {
-  const baseUrl = getApiBaseUrl();
-  const query = new URLSearchParams({ entity_id: entityId });
-  const response = await agentFetch(`${baseUrl}/accounting/transactions/${transactionId}?${query}`);
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(`Failed to fetch transaction: ${text}`);
-  }
+export async function getTransaction(transactionId: string): Promise<TransactionDetailResponse> {
+  const query = new URLSearchParams({ id: transactionId });
+  const response = await fetch(`/api/transactions?${query}`);
+  if (!response.ok) throw await failure(response, 'fetch transaction');
   return response.json();
 }
 

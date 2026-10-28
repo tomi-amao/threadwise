@@ -50,6 +50,7 @@ export default [
   // API routes
   route('api/invoices', 'routes/api.invoices.tsx'),
   route('api/orders', 'routes/api.orders.tsx'),
+  route('api/transactions', 'routes/api.transactions.tsx'),
   route('api/customers', 'routes/api.customers.tsx'),
   route('api/products', 'routes/api.products.tsx'),
   route('api/inventory', 'routes/api.inventory.tsx'),
