@@ -151,12 +151,13 @@ jobs:
         with:
           fetch-depth: 0
 
+      # No base/head: the action picks the range from the event (a push scans the pushed
+      # commits, a pull request its own, a scheduled run the whole history). A fixed base of
+      # main equals HEAD on a push to main, and the action then refuses to scan.
       - name: TruffleHog Secret Scan
         uses: trufflesecurity/trufflehog@main
         with:
           path: ./
-          base: ${{ github.event.repository.default_branch }}
-          head: HEAD
           extra_args: --debug --only-verified
 
   code-coverage:

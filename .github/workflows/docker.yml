@@ -161,6 +161,11 @@ jobs:
     runs-on: ubuntu-latest
     needs: [build-chat-ui, build-ai-agent]
     if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
+    # Uploading the SARIF results to the Security tab needs security-events: write.
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
 
     strategy:
       matrix:
