@@ -87,6 +87,8 @@ In the repo's **Settings → Secrets and variables → Actions**:
 - variable `AI_AGENT_URL` = `https://threadwise-ai-agent.onrender.com`
 - secret `INNGEST_API_KEY` = the API key from step 1
 - (optional) variable `INNGEST_APP_ID`, only if the app is not called `threadwise-ai-agent`
+- (optional) variable `INNGEST_ENV`, only if the app is synced to an Inngest environment other
+  than `production` (the sync API requires the environment, sent as `X-Inngest-Env`)
 
 Until both are set, the **Inngest Sync** workflow skips itself.
 
