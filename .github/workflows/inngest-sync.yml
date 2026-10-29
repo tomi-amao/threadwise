@@ -41,6 +41,7 @@ jobs:
       TARGET_SHA: ${{ github.event.deployment.sha || github.sha }}
       AI_AGENT_URL: ${{ vars.AI_AGENT_URL }}
       INNGEST_APP_ID: ${{ vars.INNGEST_APP_ID }}
+      INNGEST_ENV: ${{ vars.INNGEST_ENV }}
       INNGEST_API_KEY: ${{ secrets.INNGEST_API_KEY }}
       # The deploy has finished, so this is only for a free instance waking up and the new
       # version replacing the old one.
