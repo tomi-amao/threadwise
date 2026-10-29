@@ -5,7 +5,8 @@ Handles the full invoice ingestion pipeline:
 2. Contact upsert (supplier or customer)
 3. Invoice record creation
 4. Invoice line items creation
-5. Journal generation via journal rule engine
+
+Invoices never post to the ledger: the transaction that pays one is what gets journaled.
 """
 
 import asyncio
@@ -23,14 +24,15 @@ from ..core.supabase_client import get_supabase_client
 from ..normalization.persistence import persistence_service
 from ..normalization.utils import extract_row, extract_rows
 from .invoice_rules import (
-    FINALISED,
-    SETTLED,
+    PAYABLE,
     InvoiceRuleError,
     check_deletable,
+    check_editable,
     check_transition,
     normalise_status,
+    status_from_payments,
 )
-from .journal_service import JournalError, journal_service
+from .journal_service import journal_service
 
 logger = logging.getLogger(__name__)
 
@@ -170,7 +172,7 @@ class ExtractedInvoice(BaseModel):
 
 
 class InvoiceService:
-    """Orchestrates invoice ingestion: AI extraction → DB persistence → journals."""
+    """Orchestrates invoice ingestion: AI extraction → DB persistence."""
 
     def __init__(self):
         self._client = None
@@ -642,7 +644,6 @@ class InvoiceService:
         mime_type: str,
         file_name: str = "invoice",
         file_path: str = "",
-        create_journal: bool = False,
         invoice_type_override: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Full invoice ingestion pipeline.
@@ -653,7 +654,6 @@ class InvoiceService:
             2. Contact upsert (counterparty only, never our own entity)
             3. Invoice creation (source = AI-detected platform or 'manual')
             4. Line item creation (with GL account resolution from CoA)
-            5. Journal creation (purchase or sale)
 
         Args:
             entity_id: Business entity UUID
@@ -661,10 +661,9 @@ class InvoiceService:
             mime_type: MIME type
             file_name: Original filename for context
             file_path: Supabase storage path (e.g. "entity_id/timestamp-name.pdf")
-            create_journal: Whether to auto-create the accounting journal
 
         Returns:
-            { invoice, contact, line_items, journal, journal_error, extraction }
+            { invoice, contact, line_items, extraction }
         """
         # Step 0: Fetch entity + CoA for AI context
         entity = await self._fetch_entity(entity_id)
@@ -742,41 +741,10 @@ class InvoiceService:
         # stock records, while non-product items (R&D, marketing, giveaways)
         # remain pure expenses with no inventory footprint.
 
-        # Step 5: Optionally journal immediately.
-        #
-        # Off by default. Ingest creates the invoice as DRAFT, and a DRAFT is a
-        # document rather than an obligation — posting it would capitalise stock
-        # and recognise a payable for something not yet reviewed, before anyone
-        # has confirmed the extracted line items or their GL coding. The journal
-        # belongs at finalisation instead; see set_invoice_status().
-        journal = None
-        journal_error = None
-        if create_journal:
-            try:
-                invoice_type = extracted.invoice_type
-                inv_uuid = UUID(invoice["id"])
-                if invoice_type == "PURCHASE":
-                    journal = await journal_service.create_purchase_journal(
-                        entity_id, inv_uuid
-                    )
-                else:
-                    journal = await journal_service.create_sale_journal(
-                        entity_id, inv_uuid
-                    )
-                logger.info(f"Journal created: {journal['id']}")
-            except JournalError as exc:
-                logger.warning(f"Journal creation skipped: {exc}")
-                journal_error = str(exc)
-            except Exception as exc:
-                logger.error(f"Journal creation failed: {exc}")
-                journal_error = str(exc)
-
         return {
             "invoice": invoice,
             "contact": contact,
             "line_items": line_items,
-            "journal": journal,
-            "journal_error": journal_error,
             "extraction": {
                 "invoice_type": extracted.invoice_type,
                 "payment_source": extracted.payment_source,
@@ -971,12 +939,8 @@ class InvoiceService:
     async def update_invoice_status(
         self, invoice_id: UUID, status: str
     ) -> Optional[Dict[str, Any]]:
-        """Update invoice status without touching the ledger.
-
-        Low-level setter. Prefer :meth:`set_invoice_status`, which posts the
-        journals a status change implies — using this directly moves an invoice
-        through its lifecycle with no accounting consequence.
-        """
+        """Write the status as given. Prefer :meth:`set_invoice_status`, which checks the
+        move is allowed."""
         result = await asyncio.to_thread(
             lambda: self.client.table("invoices")
             .update({"status": status})
@@ -984,40 +948,6 @@ class InvoiceService:
             .execute()
         )
         return extract_row(result)
-
-    # Purchase journals are dated at the invoice's own invoice_date, not at the
-    # moment of finalisation. 2026 was restated against a fixed 31 Dec 2025
-    # opening inventory balance, so finalising a 2024-dated invoice would post a
-    # 2024 journal, move that opening balance, and silently break the
-    # restatement's roll-forward. The 34 legacy DRAFT invoices dated 2023-2025
-    # were deliberately left un-journaled: their cost was already expensed as
-    # incurred at the time, so capitalising them now would double-count it.
-    #
-    # Crossing this line has to be a deliberate decision, not the side effect of
-    # someone clicking a status dropdown.
-    LEDGER_PERIOD_CUTOFF = "2026-01-01"
-
-    def _assert_postable_period(
-        self, invoice: Dict[str, Any], allow_prior_period: bool
-    ) -> None:
-        """Refuse to post a journal dated before the restated-period cutoff."""
-        if allow_prior_period:
-            return
-
-        invoice_date = invoice.get("invoice_date")
-        if not invoice_date or str(invoice_date)[:10] >= self.LEDGER_PERIOD_CUTOFF:
-            return
-
-        raise JournalError(
-            f"Invoice {invoice.get('invoice_number') or invoice.get('id')} is dated "
-            f"{str(invoice_date)[:10]}, before the {self.LEDGER_PERIOD_CUTOFF} "
-            "accounting cutoff. Finalising it would post a prior-year journal and "
-            "change the 31 Dec 2025 opening inventory balance that the 2026 "
-            "restatement depends on. Its cost was already expensed when it was "
-            "paid, so capitalising it now would "
-            "double-count. Mark it CANCELLED or VOID to clear it from the list, or pass "
-            "allow_prior_period=true if you intend to restate prior years."
-        )
 
     async def _get_owned_invoice(
         self, entity_id: UUID, invoice_id: UUID
@@ -1028,164 +958,177 @@ class InvoiceService:
             raise ValueError(f"Invoice not found: {invoice_id}")
         return invoice
 
-    async def _invoice_journals(
-        self, entity_id: UUID, invoice_id: UUID, *, posted_only: bool = True
-    ) -> List[Dict[str, Any]]:
-        """Journals sourced from this invoice (purchase/sale accrual and payment)."""
-
-        def _query():
-            q = (
-                self.client.table("journals")
-                .select("id, journal_type, status")
-                .eq("entity_id", str(entity_id))
-                .eq("source_type", "invoice")
-                .eq("source_id", str(invoice_id))
-            )
-            if posted_only:
-                q = q.eq("status", "posted")
-            return q.execute()
-
-        return extract_rows(await asyncio.to_thread(_query))
-
-    async def _reverse_invoice_journals(
-        self,
-        entity_id: UUID,
-        invoice_id: UUID,
-        journal_types: Optional[frozenset] = None,
-    ) -> List[Dict[str, Any]]:
-        """Void the invoice's posted journals (optionally only some types).
-
-        Voiding an invoice has to take its effect off the books. Without this the
-        ledger kept the payable (or receivable) of an invoice that no longer exists.
-        """
-        voided = []
-        for journal in await self._invoice_journals(entity_id, invoice_id):
-            if journal_types and journal.get("journal_type") not in journal_types:
-                continue
-            voided.append(
-                await journal_service.reverse_journal(entity_id, UUID(journal["id"]))
-            )
-        return voided
-
     async def set_invoice_status(
         self,
         entity_id: UUID,
         invoice_id: UUID,
         status: str,
-        allow_prior_period: bool = False,
     ) -> Dict[str, Any]:
-        """Move an invoice through its lifecycle, posting and undoing journals as it goes.
+        """Move an invoice through its lifecycle.
 
         The allowed moves are in :mod:`invoice_rules`; anything else raises
-        :class:`InvoiceRuleError`. A DRAFT invoice has no accounting consequence, which
-        is why nothing is posted at ingest. The transitions that do:
-
-        * Leaving DRAFT capitalises a purchase (each line debited to its own GL
-          account, Accounts Payable credited for the gross) or recognises a sale
-          (receivable). Stock lands on the balance sheet, not the P&L, so its cost
-          reaches profit only when it sells.
-        * PAID clears the payable/receivable against cash.
-        * PAID → OPEN voids the payment journal (a mistaken "paid").
-        * CANCELLED / VOID void every journal the invoice posted.
-
-        Posting journals are idempotent (they return an existing journal rather than a
-        second one), so replaying a transition is safe. Journals are written *before*
-        the status moves: if posting fails the invoice stays where it was, rather than
-        advancing with nothing in the ledger behind it. That failure mode once left 35
-        invoices with no accounting entries.
-
-        Invoices dated before :attr:`LEDGER_PERIOD_CUTOFF` are refused unless
-        ``allow_prior_period`` is set. Moving to CANCELLED or VOID is never blocked by
-        that rule, so legacy drafts can always be cleared away.
-
-        Returns the updated invoice plus whichever journals were posted or voided.
+        :class:`InvoiceRuleError`. A status is a label on a document: nothing is posted
+        or reversed, because the payment behind an invoice is journaled from its
+        transaction. Repeating the current status is a no-op. A synced invoice's status
+        is not the app's to set, and a draft with linked payments is finalised to the
+        status those payments imply.
         """
         invoice = await self._get_owned_invoice(entity_id, invoice_id)
+        check_editable(invoice.get("origin"), "status")
 
         current = normalise_status(invoice.get("status"))
         target = normalise_status(status)
         check_transition(current, target)
-        invoice_type = (invoice.get("invoice_type") or "PURCHASE").upper()
 
-        purchase_journal: Optional[Dict[str, Any]] = None
-        payment_journal: Optional[Dict[str, Any]] = None
-        voided: List[Dict[str, Any]] = []
-        warnings: List[str] = []
-
-        if current == target:
-            return {
-                "invoice": invoice,
-                "previous_status": current,
-                "purchase_journal": None,
-                "payment_journal": None,
-                "voided_journals": [],
-                "warnings": warnings,
-            }
-
-        if target in FINALISED and current not in FINALISED:
-            self._assert_postable_period(invoice, allow_prior_period)
-            if invoice_type == "SALE":
-                purchase_journal = await journal_service.create_sale_journal(
-                    entity_id, invoice_id
-                )
-            else:
-                purchase_journal = await journal_service.create_purchase_journal(
-                    entity_id, invoice_id
-                )
-            logger.info(
-                "Invoice %s finalised (%s → %s): journal %s",
-                invoice_id,
-                current,
+        # A draft that already has its payment linked is finalised straight to what the
+        # links say, not to OPEN.
+        if current == "DRAFT" and target == "OPEN":
+            target = status_from_payments(
                 target,
-                (purchase_journal or {}).get("id"),
+                invoice.get("gross_amount"),
+                invoice.get("currency"),
+                self._amounts(await self.list_payments(invoice_id)),
             )
 
-        if target in SETTLED:
-            try:
-                payment_journal = await journal_service.create_invoice_payment_journal(
-                    entity_id, invoice_id
-                )
-            except JournalError as exc:
-                # The payable is recognised even when we cannot yet identify the cash
-                # side (no matched bank transaction). Surface it instead of failing the
-                # transition: the AP balance is still correct.
-                warnings.append(f"Payment journal not posted: {exc}")
-                logger.warning(
-                    "Invoice %s marked PAID but no payment journal: %s", invoice_id, exc
-                )
+        updated = (
+            invoice
+            if current == target
+            else await self.update_invoice_status(invoice_id, target)
+        )
+        return {"invoice": updated, "previous_status": current}
 
-        if current in SETTLED and target not in SETTLED:
-            # Un-paying: take the cash side back out, keep the payable.
-            if target in {"CANCELLED", "VOID"}:
-                voided = await self._reverse_invoice_journals(entity_id, invoice_id)
-            else:
-                voided = await self._reverse_invoice_journals(
-                    entity_id, invoice_id, frozenset({"payment"})
+    # =========================================================================
+    # PAYMENT LINKS (which transactions settled an invoice)
+    # =========================================================================
+
+    @staticmethod
+    def _amounts(payments: List[Dict[str, Any]]) -> List[Tuple[Any, Any]]:
+        return [(p.get("amount"), p.get("currency_code")) for p in payments]
+
+    async def list_payments(self, invoice_id: UUID) -> List[Dict[str, Any]]:
+        """The invoice's payment links, oldest first."""
+        result = await asyncio.to_thread(
+            lambda: self.client.table("invoice_payments")
+            .select("id, financial_transaction_id, amount, currency_code, matched_by")
+            .eq("invoice_id", str(invoice_id))
+            .order("created_at")
+            .execute()
+        )
+        return extract_rows(result)
+
+    async def _settle_from_payments(self, invoice: Dict[str, Any]) -> Dict[str, Any]:
+        """Write the status the invoice's links imply, if it differs."""
+        payments = await self.list_payments(UUID(invoice["id"]))
+        current = normalise_status(invoice.get("status"))
+        target = status_from_payments(
+            current,
+            invoice.get("gross_amount"),
+            invoice.get("currency"),
+            self._amounts(payments),
+        )
+        if target == current:
+            return invoice
+        return await self.update_invoice_status(UUID(invoice["id"]), target) or invoice
+
+    async def link_payment(
+        self,
+        entity_id: UUID,
+        invoice_id: UUID,
+        transaction_id: UUID,
+        matched_by: Literal["user", "reconciliation", "sync"] = "user",
+    ) -> Dict[str, Any]:
+        """Record that a transaction paid this invoice, then set the status it implies.
+
+        The transaction must be the business's own, counted in the books, in the direction
+        that pays the invoice (money in for a sale, out for a purchase) and not already
+        paying another invoice. Linking the same pair again is a no-op. Nothing is posted:
+        the transaction is journaled on its own.
+        """
+        invoice = await self._get_owned_invoice(entity_id, invoice_id)
+        status = normalise_status(invoice.get("status"))
+        if status not in PAYABLE and status != "DRAFT":
+            raise InvoiceRuleError(
+                f"A {status.lower()} invoice is not owed, so it takes no payment."
+            )
+
+        txn = extract_row(
+            await asyncio.to_thread(
+                lambda: self.client.table("financial_transactions")
+                .select(
+                    "id, entity_id, direction, excluded_reason, amount, currency_code"
                 )
-        elif target in {"CANCELLED", "VOID"}:
-            voided = await self._reverse_invoice_journals(entity_id, invoice_id)
+                .eq("id", str(transaction_id))
+                .execute()
+            )
+        )
+        if not txn or str(txn.get("entity_id")) != str(entity_id):
+            raise ValueError(f"Transaction not found: {transaction_id}")
+        if txn.get("excluded_reason"):
+            raise InvoiceRuleError("That transaction is left out of your books.")
+        is_sale = (invoice.get("invoice_type") or "").upper() == "SALE"
+        if txn.get("direction") != ("in" if is_sale else "out"):
+            raise InvoiceRuleError(
+                "A sale is paid by money coming in."
+                if is_sale
+                else "A purchase is paid by money going out."
+            )
 
-        updated = await self.update_invoice_status(invoice_id, target)
+        existing = extract_rows(
+            await asyncio.to_thread(
+                lambda: self.client.table("invoice_payments")
+                .select("invoice_id")
+                .eq("financial_transaction_id", str(transaction_id))
+                .execute()
+            )
+        )
+        if existing and existing[0]["invoice_id"] != str(invoice_id):
+            raise InvoiceRuleError(
+                "That transaction is already matched to another invoice."
+            )
+        if not existing:
+            await asyncio.to_thread(
+                lambda: self.client.table("invoice_payments")
+                .insert(
+                    {
+                        "entity_id": str(entity_id),
+                        "invoice_id": str(invoice_id),
+                        "financial_transaction_id": str(transaction_id),
+                        "amount": abs(float(txn["amount"])),
+                        "currency_code": txn["currency_code"],
+                        "matched_by": matched_by,
+                    }
+                )
+                .execute()
+            )
+        return await self._settle_from_payments(invoice)
 
-        return {
-            "invoice": updated,
-            "previous_status": current,
-            "purchase_journal": purchase_journal,
-            "payment_journal": payment_journal,
-            "voided_journals": voided,
-            "warnings": warnings,
-        }
+    async def unlink_payment(
+        self, entity_id: UUID, invoice_id: UUID, transaction_id: UUID
+    ) -> Dict[str, Any]:
+        """Remove a transaction's link to this invoice, then set the status left."""
+        invoice = await self._get_owned_invoice(entity_id, invoice_id)
+        removed = extract_rows(
+            await asyncio.to_thread(
+                lambda: self.client.table("invoice_payments")
+                .delete()
+                .eq("invoice_id", str(invoice_id))
+                .eq("financial_transaction_id", str(transaction_id))
+                .execute()
+            )
+        )
+        if not removed:
+            raise InvoiceRuleError("That transaction is not matched to this invoice.")
+        return await self._settle_from_payments(invoice)
 
     async def delete_invoice(self, entity_id: UUID, invoice_id: UUID) -> Dict[str, Any]:
         """Delete an invoice and its line items, and its stored document.
 
-        Only a DRAFT, CANCELLED or VOID invoice with no posted journals can go; anything
-        else would leave journals pointing at a record that no longer exists. Line items
-        cascade with the invoice.
+        Only a DRAFT, CANCELLED or VOID invoice can go; a live one is voided instead, so
+        the record stays. Line items cascade with the invoice.
         """
         invoice = await self._get_owned_invoice(entity_id, invoice_id)
-        journals = await self._invoice_journals(entity_id, invoice_id)
-        check_deletable(invoice.get("status") or "", bool(journals))
+        check_editable(invoice.get("origin"), "delete")
+        check_deletable(invoice.get("status") or "")
 
         result = await asyncio.to_thread(
             lambda: self.client.table("invoices")
@@ -1227,13 +1170,13 @@ class InvoiceService:
         """Update editable invoice fields and optionally line item GL accounts.
 
         Only ``invoice_type`` and ``notes`` are editable at invoice level, and the type
-        only while the invoice is a DRAFT: changing it after the journal is posted would
-        leave a purchase journal on a sale. Amounts are never editable here.
+        only while the invoice is a DRAFT: once it is finalised, which side owes whom is
+        settled. Amounts are never editable here.
 
         ``line_item_gl_updates`` maps ``{line_item_id: gl_account_id_or_null}``. Every
         line must belong to this invoice (an id from another invoice is rejected rather
-        than silently re-coded). On a posted PURCHASE the journal is regenerated so its
-        lines follow the new accounts.
+        than silently re-coded). The accounts describe what each line was for; nothing
+        is posted from them.
         """
         invoice = await self._get_owned_invoice(entity_id, invoice_id)
         status = normalise_status(invoice.get("status"))
@@ -1242,10 +1185,12 @@ class InvoiceService:
             k: v for k, v in updates.items() if k in {"invoice_type", "notes"}
         }
         new_type = safe_updates.get("invoice_type")
-        if new_type and new_type != invoice.get("invoice_type") and status != "DRAFT":
-            raise InvoiceRuleError(
-                "The direction of an invoice can only be changed while it is a draft."
-            )
+        if new_type and new_type != invoice.get("invoice_type"):
+            check_editable(invoice.get("origin"), "direction")
+            if status != "DRAFT":
+                raise InvoiceRuleError(
+                    "The direction of an invoice can only be changed while it is a draft."
+                )
 
         if line_item_gl_updates:
             own_lines = {li["id"] for li in invoice.get("invoice_line_items") or []}
@@ -1272,25 +1217,7 @@ class InvoiceService:
                 .execute()
             )
 
-        refreshed = await self.get_invoice(invoice_id) or invoice
-
-        if (
-            line_item_gl_updates
-            and refreshed.get("invoice_type") == "PURCHASE"
-            and status in FINALISED
-        ):
-            try:
-                await journal_service.create_purchase_journal(
-                    entity_id, invoice_id, force=True
-                )
-            except Exception as exc:
-                logger.warning(
-                    "Could not sync journal after GL account update on invoice %s: %s",
-                    invoice_id,
-                    exc,
-                )
-
-        return refreshed
+        return await self.get_invoice(invoice_id) or invoice
 
     # =========================================================================
     # PRODUCT CREATION FROM LINE ITEMS

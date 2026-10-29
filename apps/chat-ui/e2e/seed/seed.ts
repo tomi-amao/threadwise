@@ -960,6 +960,35 @@ async function main() {
   );
   await insertChunked('invoice_line_items', 'invoice_line_items', invoiceLineRows, 'id');
 
+  // The two matched payments, as the agent records them: one link row per transaction. (The
+  // invoice number in their metadata above is the PayPal enrichment's own reference.)
+  const matchedTxns = (await must(
+    'matched transactions',
+    supabase
+      .from('financial_transactions')
+      .select('id, external_transaction_id, amount, currency_code')
+      .eq('entity_id', entityId)
+      .in(
+        'external_transaction_id',
+        Object.keys(MATCHED_PAYMENTS).map(i => `e2e-txn-${Number(i) + 1}`)
+      )
+  )) as { id: string; external_transaction_id: string; amount: number; currency_code: string }[];
+  await must(
+    'invoice payments',
+    supabase.from('invoice_payments').insert(
+      matchedTxns.map(t => ({
+        entity_id: entityId,
+        invoice_id: invoiceId.get(
+          MATCHED_PAYMENTS[Number(t.external_transaction_id.replace('e2e-txn-', '')) - 1]
+        ),
+        financial_transaction_id: t.id,
+        amount: Math.abs(Number(t.amount)),
+        currency_code: t.currency_code,
+        matched_by: 'user',
+      }))
+    )
+  );
+
   const base = invoiceSpecs.filter(s => !s.number.startsWith('INV-BULK'));
   const unpaid = (s: SeedInvoice) => ['OPEN', 'PARTIALLY_PAID'].includes(s.status);
   const late = (s: SeedInvoice) => unpaid(s) && s.due !== null && s.due < 0;
@@ -978,10 +1007,11 @@ async function main() {
     otherCurrency: base.filter(s => unpaid(s) && (s.currency ?? 'GBP') !== 'GBP').length,
     openCount: base.filter(unpaid).length,
     paidCount: invoiceSpecs.filter(s => s.status === 'PAID').length,
+    paymentLinks: Object.keys(MATCHED_PAYMENTS).length,
     // Numbers of particular invoices, for tests that open them.
     draftPurchase: 'INV-ML-1001',
     draftSale: 'INV-OUT-2001',
-    priorPeriodDraft: 'INV-ML-0800', // dated before the 2026 accounting cutoff
+    priorPeriodDraft: 'INV-ML-0800', // an old draft, dated before 2026
     openSale: 'INV-OUT-2002',
     overdueSale: 'INV-OUT-2003',
     overduePurchase: 'INV-PP-3001', // no matched payment
@@ -1306,21 +1336,43 @@ async function main() {
       .select('id')
       .single()
   )) as { id: string };
-  await must(
+  const rivalInvoice = (await must(
     'rival invoice',
-    supabase.from('invoices').insert({
+    supabase
+      .from('invoices')
+      .insert({
+        entity_id: rid,
+        invoice_number: 'RIVAL-INV-1',
+        invoice_type: 'SALE',
+        status: 'OPEN',
+        counterparty_id: rivalContact.id,
+        currency: 'GBP',
+        net_amount: 500,
+        tax_amount: 100,
+        gross_amount: 600,
+        invoice_date: daysAgo(20),
+        due_date: daysAgo(-10),
+        source: 'manual',
+      })
+      .select('id')
+      .single()
+  )) as { id: string };
+  // Paid in part by the rival's first transaction: the first business must not see the link.
+  const { data: rivalTxn } = await supabase
+    .from('financial_transactions')
+    .select('id')
+    .eq('entity_id', rid)
+    .eq('external_transaction_id', 'rival-txn-1')
+    .single();
+  await must(
+    'rival invoice payment',
+    supabase.from('invoice_payments').insert({
       entity_id: rid,
-      invoice_number: 'RIVAL-INV-1',
-      invoice_type: 'SALE',
-      status: 'OPEN',
-      counterparty_id: rivalContact.id,
-      currency: 'GBP',
-      net_amount: 500,
-      tax_amount: 100,
-      gross_amount: 600,
-      invoice_date: daysAgo(20),
-      due_date: daysAgo(-10),
-      source: 'manual',
+      invoice_id: rivalInvoice.id,
+      financial_transaction_id: rivalTxn!.id,
+      amount: 250,
+      currency_code: 'GBP',
+      matched_by: 'user',
     })
   );
   const rival = {

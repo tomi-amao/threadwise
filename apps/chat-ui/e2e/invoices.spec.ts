@@ -216,12 +216,12 @@ test.describe('invoices', () => {
     await expect(drawer.getByRole('button', { name: /^Delete/ })).toHaveCount(0);
   });
 
-  test('a void invoice says it has no effect and can be deleted; a live one cannot', async ({
+  test('a void invoice says it stays on record and can be deleted; a live one cannot', async ({
     page,
   }) => {
     const drawer = await openInvoice(page, inv.voided, 'all');
     await expect(drawer.getByRole('region', { name: 'Next step' })).toContainText(
-      'no effect on your books'
+      'It stays on record'
     );
     await expect(drawer.getByRole('button', { name: 'Delete invoice' })).toBeVisible();
     await page.keyboard.press('Escape');

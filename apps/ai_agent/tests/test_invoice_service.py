@@ -1,24 +1,21 @@
 """Tests for the invoice service's lifecycle, deletion, editing and stock decisions.
 
 The service talks to Supabase and the journal service; both are replaced here with fakes
-so the tests pin down the *decisions* the service makes: what it posts, voids, refuses and
-validates.
+so the tests pin down the *decisions* the service makes: what it writes, refuses and
+validates. Invoices are documents, so no test here expects a journal to be posted.
 """
 
 import asyncio
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 
 from ai_agent.services import invoice_service as module
 from ai_agent.services.invoice_rules import InvoiceRuleError
 from ai_agent.services.invoice_service import InvoiceService
-from ai_agent.services.journal_service import JournalError
 
 ENTITY = uuid4()
 INVOICE = uuid4()
-J_PURCHASE = str(uuid4())
-J_PAYMENT = str(uuid4())
 
 
 def run(coro):
@@ -26,29 +23,17 @@ def run(coro):
 
 
 class FakeJournals:
-    """Stands in for journal_service, recording what the invoice service asks of it."""
+    """Stands in for journal_service and records anything the invoice service calls."""
 
     def __init__(self):
         self.calls = []
-        self.payment_error = None
 
-    async def create_purchase_journal(self, entity_id, invoice_id, force=False, **_):
-        self.calls.append(("purchase", force))
-        return {"id": "j-purchase"}
+    def __getattr__(self, name):
+        async def call(*args, **kwargs):
+            self.calls.append(name)
+            return {}
 
-    async def create_sale_journal(self, entity_id, invoice_id, **_):
-        self.calls.append(("sale",))
-        return {"id": "j-sale"}
-
-    async def create_invoice_payment_journal(self, entity_id, invoice_id):
-        self.calls.append(("payment",))
-        if self.payment_error:
-            raise JournalError(self.payment_error)
-        return {"id": "j-payment"}
-
-    async def reverse_journal(self, entity_id, journal_id):
-        self.calls.append(("reverse", str(journal_id)))
-        return {"id": str(journal_id), "status": "reversed"}
+        return call
 
 
 @pytest.fixture
@@ -65,8 +50,6 @@ def make_service(
     invoice_type="PURCHASE",
     lines=None,
     entity=ENTITY,
-    posted=(),
-    invoice_date="2026-03-01",
     file_path=None,
 ):
     """An InvoiceService whose storage calls are replaced by in-memory fakes."""
@@ -76,7 +59,6 @@ def make_service(
         "entity_id": str(entity),
         "status": status,
         "invoice_type": invoice_type,
-        "invoice_date": invoice_date,
         "file_path": file_path,
         "invoice_line_items": (
             lines
@@ -103,95 +85,48 @@ def make_service(
         state["invoice"] = {**state["invoice"], "status": target}
         return state["invoice"]
 
-    async def invoice_journals(entity_id, invoice_id, *, posted_only=True):
-        return list(posted)
+    async def list_payments(_id):
+        return []
 
     monkeypatch.setattr(service, "get_invoice", get_invoice)
     monkeypatch.setattr(service, "update_invoice_status", update_invoice_status)
-    monkeypatch.setattr(service, "_invoice_journals", invoice_journals)
+    monkeypatch.setattr(service, "list_payments", list_payments)
     return service, state
 
 
 class TestSetStatus:
-    def test_finalising_a_draft_purchase_posts_the_purchase_journal_first(
-        self, monkeypatch, journals
+    @pytest.mark.parametrize(
+        "current,target,invoice_type",
+        [
+            ("DRAFT", "OPEN", "PURCHASE"),
+            ("DRAFT", "OPEN", "SALE"),
+            ("OPEN", "PAID", "PURCHASE"),
+            ("PAID", "OPEN", "SALE"),
+            ("PAID", "VOID", "PURCHASE"),
+        ],
+    )
+    def test_a_move_writes_the_status_and_posts_nothing(
+        self, monkeypatch, journals, current, target, invoice_type
     ):
-        service, state = make_service(monkeypatch)
-        result = run(service.set_invoice_status(ENTITY, INVOICE, "OPEN"))
-        assert journals.calls == [("purchase", False)]
-        assert state["status_writes"] == ["OPEN"]
-        assert result["purchase_journal"] == {"id": "j-purchase"}
-
-    def test_a_sale_posts_the_sale_journal(self, monkeypatch, journals):
-        service, _ = make_service(monkeypatch, invoice_type="SALE")
-        run(service.set_invoice_status(ENTITY, INVOICE, "OPEN"))
-        assert journals.calls == [("sale",)]
-
-    def test_if_posting_fails_the_status_does_not_move(self, monkeypatch, journals):
-        service, state = make_service(monkeypatch)
-
-        async def boom(*a, **k):
-            raise JournalError("no AP account")
-
-        journals.create_purchase_journal = boom
-        with pytest.raises(JournalError):
-            run(service.set_invoice_status(ENTITY, INVOICE, "OPEN"))
-        assert state["status_writes"] == []
-
-    def test_marking_paid_posts_payment_and_warns_when_cash_side_is_unknown(
-        self, monkeypatch, journals
-    ):
-        journals.payment_error = "no matching bank transaction"
-        service, state = make_service(monkeypatch, status="OPEN")
-        result = run(service.set_invoice_status(ENTITY, INVOICE, "PAID"))
-        assert ("payment",) in journals.calls
-        assert state["status_writes"] == ["PAID"]
-        assert "no matching bank transaction" in result["warnings"][0]
+        service, state = make_service(
+            monkeypatch, status=current, invoice_type=invoice_type
+        )
+        result = run(service.set_invoice_status(ENTITY, INVOICE, target))
+        assert state["status_writes"] == [target]
+        assert journals.calls == []
+        assert result["previous_status"] == current
+        assert result["invoice"]["status"] == target
 
     def test_an_invalid_move_is_refused_and_writes_nothing(self, monkeypatch, journals):
         service, state = make_service(monkeypatch, status="OPEN")
         with pytest.raises(InvoiceRuleError):
             run(service.set_invoice_status(ENTITY, INVOICE, "DRAFT"))
-        assert journals.calls == [] and state["status_writes"] == []
+        assert state["status_writes"] == []
 
     def test_repeating_the_current_status_is_a_noop(self, monkeypatch, journals):
         service, state = make_service(monkeypatch, status="OPEN")
         run(service.set_invoice_status(ENTITY, INVOICE, "OPEN"))
-        assert journals.calls == [] and state["status_writes"] == []
-
-    def test_voiding_reverses_every_posted_journal(self, monkeypatch, journals):
-        posted = [
-            {"id": J_PURCHASE, "journal_type": "purchase", "status": "posted"},
-            {"id": J_PAYMENT, "journal_type": "payment", "status": "posted"},
-        ]
-        service, state = make_service(monkeypatch, status="PAID", posted=posted)
-        result = run(service.set_invoice_status(ENTITY, INVOICE, "VOID"))
-        assert [c for c in journals.calls if c[0] == "reverse"] == [
-            ("reverse", J_PURCHASE),
-            ("reverse", J_PAYMENT),
-        ]
-        assert len(result["voided_journals"]) == 2
-        assert state["status_writes"] == ["VOID"]
-
-    def test_unpaying_voids_only_the_payment_journal(self, monkeypatch, journals):
-        posted = [
-            {"id": J_PURCHASE, "journal_type": "purchase", "status": "posted"},
-            {"id": J_PAYMENT, "journal_type": "payment", "status": "posted"},
-        ]
-        service, _ = make_service(monkeypatch, status="PAID", posted=posted)
-        run(service.set_invoice_status(ENTITY, INVOICE, "OPEN"))
-        assert [c for c in journals.calls if c[0] == "reverse"] == [
-            ("reverse", J_PAYMENT)
-        ]
-
-    def test_a_prior_period_invoice_cannot_be_finalised_but_can_be_voided(
-        self, monkeypatch, journals
-    ):
-        service, state = make_service(monkeypatch, invoice_date="2024-06-01")
-        with pytest.raises(JournalError, match="accounting cutoff"):
-            run(service.set_invoice_status(ENTITY, INVOICE, "OPEN"))
-        run(service.set_invoice_status(ENTITY, INVOICE, "VOID"))
-        assert state["status_writes"] == ["VOID"]
+        assert state["status_writes"] == []
 
     def test_another_entitys_invoice_is_not_found(self, monkeypatch, journals):
         service, _ = make_service(monkeypatch, entity=uuid4())
@@ -247,15 +182,10 @@ class TestDelete:
             run(service.delete_invoice(ENTITY, INVOICE))
         assert not state["deleted"]
 
-    def test_posted_journals_block_deleting_even_a_voided_draft(
-        self, monkeypatch, journals
-    ):
-        service, state = self._deleting(
-            monkeypatch, status="VOID", posted=[{"id": "j", "journal_type": "purchase"}]
-        )
-        with pytest.raises(InvoiceRuleError, match="posted journals"):
-            run(service.delete_invoice(ENTITY, INVOICE))
-        assert not state["deleted"]
+    def test_a_voided_invoice_can_be_deleted(self, monkeypatch, journals):
+        service, state = self._deleting(monkeypatch, status="VOID")
+        run(service.delete_invoice(ENTITY, INVOICE))
+        assert state["deleted"] and journals.calls == []
 
 
 class TestUpdate:
@@ -316,25 +246,15 @@ class TestUpdate:
             )
         assert state["line_updates"] == []
 
-    def test_a_draft_does_not_get_a_journal_just_for_being_recoded(
-        self, monkeypatch, journals
-    ):
-        service, _ = self._updating(monkeypatch, status="DRAFT")
+    @pytest.mark.parametrize("status", ["DRAFT", "OPEN", "PAID"])
+    def test_recoding_a_line_posts_nothing(self, monkeypatch, journals, status):
+        service, _ = self._updating(monkeypatch, status=status)
         run(
             service.update_invoice(
                 ENTITY, INVOICE, {}, line_item_gl_updates={"l1": "gl"}
             )
         )
         assert journals.calls == []
-
-    def test_a_finalised_purchase_regenerates_its_journal(self, monkeypatch, journals):
-        service, _ = self._updating(monkeypatch, status="OPEN")
-        run(
-            service.update_invoice(
-                ENTITY, INVOICE, {}, line_item_gl_updates={"l1": "gl"}
-            )
-        )
-        assert journals.calls == [("purchase", True)]
 
     def test_direction_can_only_change_on_a_draft(self, monkeypatch, journals):
         service, _ = self._updating(monkeypatch, status="OPEN", invoice_type="PURCHASE")
@@ -460,3 +380,204 @@ class TestStockDecisions:
                     ENTITY, INVOICE, [{"line_item_id": "l1", "action": "track"}]
                 )
             )
+
+
+class FakeTable:
+    """Just enough of a PostgREST table: select / insert / delete, eq filters, order."""
+
+    def __init__(self, rows):
+        self.rows = rows
+        self._op, self._filters, self._values = "select", [], None
+
+    def select(self, *_):
+        self._op = "select"
+        return self
+
+    def insert(self, values):
+        self._op, self._values = "insert", values
+        return self
+
+    def delete(self):
+        self._op = "delete"
+        return self
+
+    def eq(self, column, value):
+        self._filters.append((column, str(value)))
+        return self
+
+    def order(self, *_):
+        return self
+
+    def execute(self):
+        hit = [
+            r for r in self.rows if all(str(r.get(c)) == v for c, v in self._filters)
+        ]
+        if self._op == "insert":
+            row = {"id": str(uuid4()), **self._values}
+            self.rows.append(row)
+            hit = [row]
+        elif self._op == "delete":
+            for r in hit:
+                self.rows.remove(r)
+        return type("R", (), {"data": hit})()
+
+
+class TestPaymentLinks:
+    def _linking(
+        self,
+        monkeypatch,
+        *,
+        status="OPEN",
+        invoice_type="PURCHASE",
+        gross=180,
+        txn=None,
+        links=(),
+    ):
+        service, state = make_service(
+            monkeypatch, status=status, invoice_type=invoice_type
+        )
+        state["invoice"].update({"gross_amount": gross, "currency": "GBP"})
+        txn_id = str(uuid4())
+        tables = {
+            "financial_transactions": [
+                {
+                    "id": txn_id,
+                    "entity_id": str(ENTITY),
+                    "direction": "out",
+                    "excluded_reason": None,
+                    "amount": 180,
+                    "currency_code": "GBP",
+                    **(txn or {}),
+                }
+            ],
+            "invoice_payments": [dict(link) for link in links],
+        }
+
+        class Client:
+            def table(self, name):
+                return FakeTable(tables[name])
+
+        service._client = Client()
+        # Read the links from the fake tables rather than the stub make_service installs.
+        monkeypatch.delattr(service, "list_payments")
+        state["txn_id"] = UUID(txn_id)
+        state["tables"] = tables
+        return service, state
+
+    def test_a_payment_covering_the_invoice_marks_it_paid(self, monkeypatch, journals):
+        service, state = self._linking(monkeypatch)
+        result = run(service.link_payment(ENTITY, INVOICE, state["txn_id"]))
+        (link,) = state["tables"]["invoice_payments"]
+        assert link["invoice_id"] == str(INVOICE) and link["amount"] == 180
+        assert link["matched_by"] == "user"
+        assert result["status"] == "PAID" and state["status_writes"] == ["PAID"]
+        assert journals.calls == []  # a match posts nothing
+
+    def test_a_smaller_payment_marks_it_part_paid(self, monkeypatch, journals):
+        service, state = self._linking(monkeypatch, txn={"amount": -90})
+        run(service.link_payment(ENTITY, INVOICE, state["txn_id"]))
+        assert state["tables"]["invoice_payments"][0]["amount"] == 90
+        assert state["status_writes"] == ["PARTIALLY_PAID"]
+
+    def test_a_draft_is_linked_but_stays_to_review(self, monkeypatch, journals):
+        service, state = self._linking(monkeypatch, status="DRAFT")
+        run(service.link_payment(ENTITY, INVOICE, state["txn_id"]))
+        assert len(state["tables"]["invoice_payments"]) == 1
+        assert state["status_writes"] == []
+
+    def test_linking_the_same_pair_again_changes_nothing(self, monkeypatch, journals):
+        service, state = self._linking(monkeypatch)
+        run(service.link_payment(ENTITY, INVOICE, state["txn_id"]))
+        run(service.link_payment(ENTITY, INVOICE, state["txn_id"]))
+        assert len(state["tables"]["invoice_payments"]) == 1
+
+    @pytest.mark.parametrize(
+        "kwargs,message",
+        [
+            ({"txn": {"direction": "in"}}, "money going out"),
+            ({"txn": {"excluded_reason": "duplicate"}}, "left out of your books"),
+            ({"status": "VOID"}, "not owed"),
+        ],
+    )
+    def test_refused_links_write_nothing(self, monkeypatch, journals, kwargs, message):
+        service, state = self._linking(monkeypatch, **kwargs)
+        with pytest.raises(InvoiceRuleError, match=message):
+            run(service.link_payment(ENTITY, INVOICE, state["txn_id"]))
+        assert state["tables"]["invoice_payments"] == []
+        assert state["status_writes"] == []
+
+    def test_a_transaction_already_paying_another_invoice_is_refused(
+        self, monkeypatch, journals
+    ):
+        service, state = self._linking(monkeypatch)
+        state["tables"]["invoice_payments"].append(
+            {
+                "invoice_id": str(uuid4()),
+                "financial_transaction_id": str(state["txn_id"]),
+            }
+        )
+        with pytest.raises(InvoiceRuleError, match="another invoice"):
+            run(service.link_payment(ENTITY, INVOICE, state["txn_id"]))
+
+    def test_another_businesss_transaction_is_not_found(self, monkeypatch, journals):
+        service, state = self._linking(monkeypatch, txn={"entity_id": str(uuid4())})
+        with pytest.raises(ValueError, match="not found"):
+            run(service.link_payment(ENTITY, INVOICE, state["txn_id"]))
+
+    def test_unlinking_the_last_payment_reopens_the_invoice(
+        self, monkeypatch, journals
+    ):
+        service, state = self._linking(monkeypatch, status="PAID")
+        state["tables"]["invoice_payments"].append(
+            {
+                "id": "p1",
+                "invoice_id": str(INVOICE),
+                "financial_transaction_id": str(state["txn_id"]),
+                "amount": 180,
+                "currency_code": "GBP",
+            }
+        )
+        run(service.unlink_payment(ENTITY, INVOICE, state["txn_id"]))
+        assert state["tables"]["invoice_payments"] == []
+        assert state["status_writes"] == ["OPEN"]
+
+    def test_unlinking_a_transaction_that_is_not_linked_is_refused(
+        self, monkeypatch, journals
+    ):
+        service, state = self._linking(monkeypatch, status="PAID")
+        with pytest.raises(InvoiceRuleError, match="not matched"):
+            run(service.unlink_payment(ENTITY, INVOICE, state["txn_id"]))
+        assert state["status_writes"] == []
+
+    def test_finalising_a_draft_whose_payment_is_linked_goes_straight_to_paid(
+        self, monkeypatch, journals
+    ):
+        service, state = self._linking(monkeypatch, status="DRAFT")
+        run(service.link_payment(ENTITY, INVOICE, state["txn_id"]))
+        run(service.set_invoice_status(ENTITY, INVOICE, "OPEN"))
+        assert state["status_writes"] == ["PAID"]
+
+
+class TestSyncedInvoices:
+    def test_a_synced_invoices_status_is_not_set_by_hand(self, monkeypatch, journals):
+        service, state = make_service(monkeypatch, status="OPEN")
+        state["invoice"]["origin"] = "revolut_merchant"
+        with pytest.raises(InvoiceRuleError, match="synced from Revolut"):
+            run(service.set_invoice_status(ENTITY, INVOICE, "PAID"))
+        assert state["status_writes"] == []
+
+    def test_a_synced_invoice_cannot_be_deleted_or_change_direction(
+        self, monkeypatch, journals
+    ):
+        service, state = TestDelete()._deleting(monkeypatch, status="VOID")
+        state["invoice"]["origin"] = "revolut_expense"
+        with pytest.raises(InvoiceRuleError, match="next sync"):
+            run(service.delete_invoice(ENTITY, INVOICE))
+        assert not state["deleted"]
+
+        editor, editing = TestUpdate()._updating(monkeypatch, status="DRAFT")
+        editing["invoice"]["origin"] = "revolut_merchant"
+        with pytest.raises(InvoiceRuleError, match="comes from Revolut"):
+            run(editor.update_invoice(ENTITY, INVOICE, {"invoice_type": "SALE"}))
+        # Notes stay the business's own.
+        run(editor.update_invoice(ENTITY, INVOICE, {"notes": "from Revolut"}))

@@ -84,8 +84,6 @@ export interface PaymentCandidate {
 export interface InvoiceDetail {
   invoice: InvoiceRow & { contacts: InvoiceContact | null };
   lines: InvoiceLineItem[];
-  /** Journals posted for this invoice (accrual and payment). */
-  journals: { id: string; journal_type: string; journal_date: string; status: string }[];
   /** A bank transaction already matched to this invoice, if any. */
   matched_transaction_id: string | null;
   /** Bank transactions that could be this invoice's payment, nearest in amount first. */

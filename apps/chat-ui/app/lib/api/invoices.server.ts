@@ -2,8 +2,8 @@
  * Invoices: server-side reads and the call to the AI agent.
  *
  * Every read runs as the signed-in user (cookie session), so row-level security decides what
- * they can see: their invoices, and the journals, stock movements, payments and chart of
- * accounts around them. The service-role client is only used for the document store (Storage),
+ * they can see: their invoices, and the stock movements, payments and chart of accounts
+ * around them. The service-role client is only used for the document store (Storage),
  * and only after the invoice has been fetched as the user, so the entity and file always come
  * from a row the user is allowed to see, never from the request.
  *
@@ -106,9 +106,8 @@ export async function getInvoiceDetail(
     .sort((a, b) => a.id.localeCompare(b.id));
 
   const entityId = invoice.entity_id;
-  const [journals, matched, stocked, accounts, products, candidates] = await Promise.all([
-    readJournals(user, entityId, invoiceId),
-    findMatchingTransaction(user, invoice.invoice_number, entityId),
+  const [matched, stocked, accounts, products, candidates] = await Promise.all([
+    findMatchingTransaction(user, invoiceId),
     readStockedLines(
       user,
       lines.map(l => l.id)
@@ -121,26 +120,12 @@ export async function getInvoiceDetail(
   return {
     invoice,
     lines,
-    journals,
     matched_transaction_id: matched,
     payment_candidates: matched ? [] : candidates,
     stocked_line_ids: stocked,
     gl_accounts: accounts,
     products,
   };
-}
-
-async function readJournals(supabase: SupabaseClient, entityId: string, invoiceId: string) {
-  const { data, error } = await supabase
-    .from('journals')
-    .select('id, journal_type, journal_date, status')
-    .eq('entity_id', entityId)
-    .eq('source_type', 'invoice')
-    .eq('source_id', invoiceId)
-    .neq('status', 'reversed')
-    .order('journal_date');
-  if (error) throw new Error(`Failed to load journals: ${error.message}`);
-  return data ?? [];
 }
 
 async function readStockedLines(supabase: SupabaseClient, lineIds: string[]): Promise<string[]> {
@@ -181,25 +166,22 @@ async function readProducts(user: SupabaseClient, entityId: string) {
 }
 
 /**
- * A bank transaction already matched to this invoice (the PayPal enrichment writes the invoice
- * number into metadata.invoice_id). null means no match, a normal result; a failing query throws.
+ * The bank transaction matched to this invoice as its payment (the earliest, if several part
+ * payments are). null means no match, a normal result; a failing query throws.
  */
 export async function findMatchingTransaction(
   supabase: SupabaseClient,
-  invoiceNumber: string,
-  entityId: string
+  invoiceId: string
 ): Promise<string | null> {
-  if (!invoiceNumber || !entityId) return null;
   const { data, error } = await supabase
-    .from('financial_transactions')
-    .select('id')
-    .eq('entity_id', entityId)
-    .filter('metadata->>invoice_id', 'eq', invoiceNumber)
-    .is('excluded_reason', null)
+    .from('invoice_payments')
+    .select('financial_transaction_id')
+    .eq('invoice_id', invoiceId)
+    .order('created_at')
     .limit(1)
     .maybeSingle();
   if (error) throw new Error(`Failed to check for a matching payment: ${error.message}`);
-  return data?.id ?? null;
+  return (data?.financial_transaction_id as string | undefined) ?? null;
 }
 
 /**
@@ -218,7 +200,7 @@ export async function findPaymentCandidates(
   if (!(total > 0)) return [];
   const { data, error } = await supabase
     .from('financial_transactions')
-    .select('id, occurred_at, description, counterparty_name, amount, currency_code, metadata')
+    .select('id, occurred_at, description, counterparty_name, amount, currency_code')
     .eq('entity_id', invoice.entity_id)
     .eq('direction', invoice.invoice_type === 'SALE' ? 'in' : 'out')
     .eq('currency_code', invoice.currency)
@@ -228,8 +210,21 @@ export async function findPaymentCandidates(
     .order('occurred_at', { ascending: false })
     .limit(200);
   if (error) throw new Error(`Failed to look for a matching payment: ${error.message}`);
-  return (data ?? [])
-    .filter(t => !(t.metadata as Record<string, unknown> | null)?.invoice_id)
+  const rows = data ?? [];
+  // A transaction pays one invoice, so those already matched are not offered.
+  const { data: taken, error: takenError } = rows.length
+    ? await supabase
+        .from('invoice_payments')
+        .select('financial_transaction_id')
+        .in(
+          'financial_transaction_id',
+          rows.map(t => t.id as string)
+        )
+    : { data: [], error: null };
+  if (takenError) throw new Error(`Failed to look for a matching payment: ${takenError.message}`);
+  const matched = new Set((taken ?? []).map(t => t.financial_transaction_id as string));
+  return rows
+    .filter(t => !matched.has(t.id as string))
     .map(t => ({
       id: t.id as string,
       occurred_at: t.occurred_at as string,
@@ -244,55 +239,6 @@ export async function findPaymentCandidates(
         b.occurred_at.localeCompare(a.occurred_at)
     )
     .slice(0, 8);
-}
-
-/**
- * Link a bank transaction to an invoice (the invoice number goes in its metadata, which is what
- * the paid-invoice check and the PayPal enrichment look for), or take the link off again. Both
- * transaction and invoice are read as the signed-in user first; the write is service-role only
- * because users have no write policy on transactions.
- */
-export async function setPaymentMatch(
-  supabase: SupabaseClient,
-  invoice: OwnedInvoice,
-  transactionId: string,
-  match: boolean
-): Promise<{ ok: true; message: string } | { ok: false; error: string }> {
-  const { data: txn, error } = await supabase
-    .from('financial_transactions')
-    .select('id, entity_id, direction, excluded_reason, metadata')
-    .eq('id', transactionId)
-    .maybeSingle();
-  if (error) throw new Error(error.message);
-  if (!txn || txn.entity_id !== invoice.entity_id) {
-    return { ok: false, error: 'That transaction was not found.' };
-  }
-  const metadata = { ...((txn.metadata as Record<string, unknown> | null) ?? {}) };
-  if (match) {
-    if (txn.excluded_reason)
-      return { ok: false, error: 'That transaction is left out of your books.' };
-    if (txn.direction !== (invoice.invoice_type === 'SALE' ? 'in' : 'out')) {
-      return {
-        ok: false,
-        error: `A ${invoice.invoice_type === 'SALE' ? 'sale is paid by money coming in' : 'purchase is paid by money going out'}.`,
-      };
-    }
-    if (metadata.invoice_id && metadata.invoice_id !== invoice.invoice_number) {
-      return { ok: false, error: 'That transaction is already matched to another invoice.' };
-    }
-    metadata.invoice_id = invoice.invoice_number;
-  } else {
-    if (metadata.invoice_id !== invoice.invoice_number) {
-      return { ok: false, error: 'That transaction is not matched to this invoice.' };
-    }
-    delete metadata.invoice_id;
-  }
-  const { error: updateError } = await getServerSupabaseClient()
-    .from('financial_transactions')
-    .update({ metadata })
-    .eq('id', txn.id);
-  if (updateError) return { ok: false, error: updateError.message };
-  return { ok: true, message: match ? 'Payment matched' : 'Match removed' };
 }
 
 /** The minimum a write needs to know about an invoice the user may touch. */

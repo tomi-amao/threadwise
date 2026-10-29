@@ -30,6 +30,7 @@ const TABLES: [table: string, owned: () => number][] = [
   ['inventory_movements', () => seed.inventory.movementCount],
   ['inventory_on_hand', () => seed.inventory.itemCount],
   ['invoices', () => seed.invoices.total],
+  ['invoice_payments', () => seed.invoices.paymentLinks],
   ['products', () => seed.productCount + 3],
   ['collections', () => seed.collections.count],
   ['collection_products', () => 5],
@@ -55,6 +56,7 @@ test.describe('without signing in', () => {
       'collections',
       'collection_costs',
       'transaction_attachments',
+      'invoice_payments',
     ]) {
       const result = await api('GET', table, 'limit=5');
       expect(result.rows, table).toEqual([]);

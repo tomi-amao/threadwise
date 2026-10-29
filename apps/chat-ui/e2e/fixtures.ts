@@ -178,6 +178,8 @@ export interface SeedManifest {
     otherCurrency: number;
     openCount: number;
     paidCount: number;
+    /** Invoice-payment links (bank transactions matched to invoices). */
+    paymentLinks: number;
     draftPurchase: string;
     draftSale: string;
     priorPeriodDraft: string;

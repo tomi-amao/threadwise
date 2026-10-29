@@ -113,19 +113,25 @@ async def _invoice(user: AgentUser, record_id: str) -> list[str]:
     matched = await _rows(
         user,
         """
-        select t.occurred_at::date as day, t.description, t.amount,
-               coalesce(t.currency_code, 'GBP') as currency
-          from financial_transactions t
-         where t.metadata->>'invoice_id' = %s and t.excluded_reason is null
-         limit 1
+        select t.occurred_at::date as day, t.description, p.amount,
+               p.currency_code as currency
+          from invoice_payments p
+          join financial_transactions t on t.id = p.financial_transaction_id
+         where p.invoice_id = %s
+         order by t.occurred_at
+         limit 3
         """,
-        (inv["invoice_number"],),
+        (record_id,),
     )
     if matched:
-        m = matched[0]
         lines.append(
-            f"Matched bank payment: {m['day']}, {_money(m, 'amount', m['currency'])}, "
-            f"{_clean(m['description'] or '')}."
+            "Matched bank payments: "
+            + "; ".join(
+                f"{m['day']}, {_money(m, 'amount', m['currency'])}, "
+                f"{_clean(m['description'] or '')}"
+                for m in matched
+            )
+            + "."
         )
     elif inv["status"] not in ("DRAFT", "CANCELLED", "VOID") and inv["gross_amount"]:
         lines.append("No bank payment is matched to it.")
@@ -138,7 +144,9 @@ async def _invoice(user: AgentUser, record_id: str) -> list[str]:
              where t.direction = %s and t.currency_code = %s
                and t.excluded_reason is null
                and t.amount between %s * 0.9 and %s * 1.1
-               and coalesce(t.metadata->>'invoice_id', '') = ''
+               and not exists (
+                   select 1 from invoice_payments p where p.financial_transaction_id = t.id
+               )
              order by abs(t.amount - %s), t.occurred_at desc
              limit 3
             """,
@@ -285,7 +293,9 @@ async def _transaction(user: AgentUser, record_id: str) -> list[str]:
         select t.occurred_at::date as day, t.description, t.counterparty_name as payee,
                t.direction, t.amount, coalesce(t.currency_code, 'GBP') as currency,
                t.status, t.excluded_reason, t.metadata->>'expense_category' as category,
-               t.metadata->>'invoice_id' as invoice,
+               (select i.invoice_number
+                  from invoice_payments p join invoices i on i.id = p.invoice_id
+                 where p.financial_transaction_id = t.id) as invoice,
                t.journalised_at is not null as journalised
           from financial_transactions t where t.id = %s
         """,

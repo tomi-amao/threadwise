@@ -2,7 +2,7 @@
  * InvoicesPage
  *
  * What you owe, what you are owed, and what still needs your attention. An invoice moves
- * To review (uploaded, read by the AI, waiting for a person) to Open (finalised and posted)
+ * To review (uploaded, read by the AI, waiting for a person) to Open (finalised)
  * to Paid, so that is how the page is organised: the tiles say where the money stands, the
  * tabs are the stages, and "Jump to" goes straight to what is late or waiting.
  *

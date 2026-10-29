@@ -213,7 +213,7 @@ def contract() -> dict[str, Any]:
                 Proposal(
                     action="set_invoice_status",
                     title="Mark invoice INV-OUT-2003 as paid",
-                    description="Harbour & Co, £960.00. Posts the payment journal.",
+                    description="Harbour & Co, £960.00.",
                     changes=[Change(label="Status", before="Open", after="Paid")],
                     link="/invoices?invoice=i-1",
                     approve_label="Mark as paid",

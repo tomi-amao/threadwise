@@ -2,9 +2,12 @@
  * InvoiceDrawer
  *
  * One invoice, from upload to payment, in one place (replaces three modals). The top of the
- * drawer is always the next step: a draft is reviewed and finalised (which posts it to the
- * books), an open invoice is marked paid, and so on. Below are the facts, the lines with
- * their accounts, the stock decisions for a purchase, the document and the notes.
+ * drawer is always the next step: a draft is reviewed and finalised, an open invoice is marked
+ * paid, and so on. Below are the facts, the lines with their accounts, the stock decisions for
+ * a purchase, the document and the notes.
+ *
+ * Invoices are documents: no status change posts to the books. The ledger follows the bank or
+ * payment transaction that settles an invoice, which is why matching one is worth doing.
  *
  * The drawer loads its own data from /api/invoices?id= and reloads it after every change. The
  * page's list revalidates too, through `onChanged`.
@@ -49,9 +52,6 @@ type Load =
 interface Result {
   ok: boolean;
   error?: string;
-  code?: string;
-  warnings?: string[];
-  voided?: number;
   recorded?: number;
   notRecorded?: string[];
   url?: string;
@@ -157,7 +157,7 @@ function Confirm({
   );
 }
 
-type Pending = 'unmatched-paid' | 'void' | 'delete' | 'unpay';
+type Pending = 'void' | 'delete' | 'unpay';
 
 export function InvoiceDrawer({
   invoiceId,
@@ -277,13 +277,12 @@ function Body({
     }
     const message = success(result);
     if (message) toast.success(message);
-    for (const warning of result.warnings ?? []) toast.warning(warning);
     reload();
     onChanged();
     return result;
   };
 
-  const { invoice, lines, journals, matched_transaction_id, stocked_line_ids } = detail;
+  const { invoice, lines, matched_transaction_id, stocked_line_ids } = detail;
   const { gl_accounts, products } = detail;
   const status = invoice.status;
   const shown = shownStatus(invoice, today);
@@ -312,15 +311,12 @@ function Body({
       group: a.account_type.replace(/_/g, ' '),
     }));
 
-  const setStatus = (target: InvoiceStatus, label: string, extra: Record<string, string> = {}) =>
-    run('status', { intent: 'setStatus', status: target, ...extra }, () => label);
+  const setStatus = (target: InvoiceStatus, label: string) =>
+    run('status', { intent: 'setStatus', status: target }, () => label);
 
-  const finalise = () => setStatus('OPEN', 'Invoice finalised and posted to your books');
+  const finalise = () => setStatus('OPEN', 'Invoice finalised');
 
-  const markPaid = async () => {
-    const result = await setStatus('PAID', 'Marked as paid');
-    if (!result.ok && result.code === 'no_matching_payment') setPending('unmatched-paid');
-  };
+  const markPaid = () => setStatus('PAID', 'Marked as paid');
 
   const saveCoding = () =>
     run(
@@ -361,11 +357,8 @@ function Body({
 
   const confirmPending = async () => {
     if (!pending) return;
-    if (pending === 'unmatched-paid') {
-      const r = await setStatus('PAID', 'Marked as paid', { confirmUnmatched: '1' });
-      if (r.ok) setPending(null);
-    } else if (pending === 'void') {
-      const r = await setStatus('VOID', 'Invoice voided and reversed in your books');
+    if (pending === 'void') {
+      const r = await setStatus('VOID', 'Invoice voided');
       if (r.ok) setPending(null);
     } else if (pending === 'unpay') {
       const r = await setStatus('OPEN', 'Payment undone');
@@ -383,23 +376,16 @@ function Body({
     Pending,
     { title: string; description: string; confirm: string; tone?: 'destructive' }
   > = {
-    'unmatched-paid': {
-      title: 'Mark paid without a matched payment?',
-      description:
-        'No bank payment has been matched to this invoice. It will be marked paid, but the ledger cannot show which account the money left until a payment is matched.',
-      confirm: 'Mark paid anyway',
-    },
     void: {
       title: 'Void this invoice?',
       description:
-        'The invoice stays on record, but every journal it posted is reversed so it no longer affects your books. This cannot be undone.',
+        'The invoice stays on record as void and can no longer be paid. This cannot be undone.',
       confirm: 'Void invoice',
       tone: 'destructive',
     },
     unpay: {
       title: 'Undo the payment?',
-      description:
-        'The invoice goes back to open and its payment journal is reversed. The invoice itself stays in your books.',
+      description: 'The invoice goes back to open, waiting for payment.',
       confirm: 'Undo payment',
     },
     delete: {
@@ -432,14 +418,15 @@ function Body({
               <p className="mt-1 text-[13px] text-text-2">
                 {isSale
                   ? `Finalising records ${money(invoice.gross_amount, invoice.currency)} as owed to you.`
-                  : `Finalising posts this to your books: each line is debited to its account and Accounts Payable is credited ${money(invoice.gross_amount, invoice.currency)}.`}
+                  : `Finalising records ${money(invoice.gross_amount, invoice.currency)} as owed by you.`}{' '}
+                Your books follow the payment, not the invoice.
               </p>
             </div>
             <ul className="space-y-1 text-[13px]">
               <li className={uncoded > 0 ? 'text-accent-text' : 'text-text-2'}>
                 {uncoded === 0
                   ? 'Every line has an account.'
-                  : `${uncoded} ${uncoded === 1 ? 'line has' : 'lines have'} no account and will use the default.`}
+                  : `${uncoded} ${uncoded === 1 ? 'line has' : 'lines have'} no account yet.`}
               </li>
               {!isSale && stockLines.length > 0 && (
                 <li className={stockOpen > 0 ? 'text-accent-text' : 'text-text-2'}>
@@ -494,8 +481,7 @@ function Body({
 
         {dead && (
           <p className="text-[15px]">
-            This invoice is {STATUS[status].label.toLowerCase()}. It stays on record but has no
-            effect on your books.
+            This invoice is {STATUS[status].label.toLowerCase()}. It stays on record.
           </p>
         )}
       </section>
@@ -588,11 +574,6 @@ function Body({
             {busy === 'coding' ? 'Saving…' : 'Save accounts'}
           </Button>
         )}
-        {finalised && codingDirty && (
-          <p className="text-[13px] text-muted-foreground">
-            Saving re-posts this invoice&rsquo;s journal with the new accounts.
-          </p>
-        )}
       </section>
 
       {!isSale && !dead && lines.length > 0 && (
@@ -638,11 +619,6 @@ function Body({
       <section aria-label="Record" className="space-y-3 border-t pt-5">
         <Eyebrow>Record</Eyebrow>
         <ul className="space-y-1 text-[14px] text-text-2">
-          <li>
-            {journals.length === 0
-              ? 'Nothing is posted to your books for this invoice.'
-              : `${journals.length} ${journals.length === 1 ? 'journal' : 'journals'} posted, latest ${shortDate(journals[journals.length - 1].journal_date)}.`}
-          </li>
           <li>Added {shortDate(invoice.created_at)}</li>
         </ul>
         <div className="flex flex-wrap gap-2">

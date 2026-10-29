@@ -21,6 +21,8 @@ from uuid import UUID
 
 from ..core.supabase_client import get_supabase_client
 from ..normalization.utils import extract_rows
+from .invoice_rules import InvoiceRuleError
+from .invoice_service import invoice_service
 
 logger = logging.getLogger(__name__)
 
@@ -144,7 +146,7 @@ class ReconciliationService:
                     entity_id=entity_id,
                     invoice_numbers=invoice_numbers,
                     invoice_id_ref=invoice_id_ref,
-                    transaction_amount=Decimal(str(r_txn.get("amount", 0))),
+                    transaction_id=r_txn["id"],
                     currency=r_txn.get("currency_code", "GBP"),
                 )
                 invoices_updated += inv_result["count"]
@@ -495,15 +497,12 @@ class ReconciliationService:
             if not matched_txn:
                 continue
 
-            txn_amount = Decimal(str(abs(matched_txn.get("amount", 0))))
-            new_status = (
-                "PAID"
-                if txn_amount >= inv_gross * Decimal("0.95")
-                else "PARTIALLY_PAID"
-            )
             previous_status = invoice.get("status")
-
-            await self._update_invoice_status(inv_id, new_status)
+            new_status = await self._link(
+                entity_id, inv_id, matched_txn["id"], previous_status
+            )
+            if new_status is None:
+                continue
 
             matched_count += 1
             updated_invoices.append(
@@ -569,18 +568,29 @@ class ReconciliationService:
         result = await asyncio.to_thread(_query)
         return extract_rows(result)
 
-    async def _update_invoice_status(self, invoice_id: str, new_status: str) -> None:
-        """Update an invoice's status."""
+    async def _link(
+        self,
+        entity_id: UUID,
+        invoice_id: str,
+        transaction_id: str,
+        previous_status: Optional[str],
+    ) -> Optional[str]:
+        """Link the transaction as the invoice's payment; the status follows the links.
 
-        def _update():
-            return (
-                self.client.table("invoices")
-                .update({"status": new_status})
-                .eq("id", invoice_id)
-                .execute()
+        Returns the new status, or None when the link is refused (wrong direction, left
+        out of the books, already paying another invoice) or changes nothing.
+        """
+        try:
+            invoice = await invoice_service.link_payment(
+                entity_id, UUID(invoice_id), UUID(transaction_id), "reconciliation"
             )
-
-        await asyncio.to_thread(_update)
+        except (InvoiceRuleError, ValueError) as exc:
+            logger.info(
+                "Not matching invoice %s to %s: %s", invoice_id, transaction_id, exc
+            )
+            return None
+        new_status = invoice.get("status")
+        return None if new_status == previous_status else new_status
 
     # =========================================================================
     # INVOICE MATCHING (called from cross-provider detection)
@@ -591,10 +601,10 @@ class ReconciliationService:
         entity_id: UUID,
         invoice_numbers: List[str],
         invoice_id_ref: Optional[str],
-        transaction_amount: Decimal,
+        transaction_id: str,
         currency: str,
     ) -> Dict[str, Any]:
-        """Match transactions to invoices by invoice_number and update status."""
+        """Link the transaction to the invoices its references name; status follows."""
         candidates = list(invoice_numbers)
         if invoice_id_ref and invoice_id_ref not in candidates:
             candidates.append(invoice_id_ref)
@@ -625,18 +635,17 @@ class ReconciliationService:
 
         for invoice in invoices:
             invoice_id = invoice["id"]
-            invoice_gross = Decimal(str(invoice.get("gross_amount", 0)))
             invoice_currency = invoice.get("currency", "GBP")
             previous_status = invoice.get("status")
 
             if invoice_currency != currency:
                 continue
 
-            new_status = (
-                "PAID" if transaction_amount >= invoice_gross else "PARTIALLY_PAID"
+            new_status = await self._link(
+                entity_id, invoice_id, transaction_id, previous_status
             )
-
-            await self._update_invoice_status(invoice_id, new_status)
+            if new_status is None:
+                continue
 
             updated_count += 1
             updated_invoices.append(

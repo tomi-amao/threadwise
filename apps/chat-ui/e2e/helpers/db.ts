@@ -77,6 +77,15 @@ export async function deleteStandInMovements(): Promise<void> {
 export interface InvoiceSnapshot {
   invoices: { id: string; status: string; notes: string | null; invoice_type: string }[];
   lines: { id: string; gl_account_id: string | null }[];
+  payments: {
+    id: string;
+    entity_id: string;
+    invoice_id: string;
+    financial_transaction_id: string;
+    amount: number;
+    currency_code: string;
+    matched_by: string;
+  }[];
 }
 
 /** The seeded invoices a test may change (the 1,020 bulk ones are never touched). */
@@ -92,7 +101,12 @@ export async function snapshotInvoices(): Promise<InvoiceSnapshot> {
     'invoice_line_items',
     `select=id,gl_account_id&invoice_id=in.(${ids})`
   );
-  return { invoices, lines };
+  const payments = await rest<InvoiceSnapshot['payments']>(
+    'GET',
+    'invoice_payments',
+    'select=id,entity_id,invoice_id,financial_transaction_id,amount,currency_code,matched_by'
+  );
+  return { invoices, lines, payments };
 }
 
 /** Put every changed invoice and line back, and remove what a test created. */
@@ -117,6 +131,13 @@ export async function restoreInvoices(before: InvoiceSnapshot): Promise<void> {
       });
     }
   }
+  // Payment matches: take away the ones a test made, put back the ones it removed.
+  const linkWas = new Set(before.payments.map(p => p.id));
+  const linkNow = new Set(now.payments.map(p => p.id));
+  const added = now.payments.filter(p => !linkWas.has(p.id)).map(p => p.id);
+  if (added.length) await rest('DELETE', 'invoice_payments', `id=in.(${added.join(',')})`);
+  const removed = before.payments.filter(p => !linkNow.has(p.id));
+  if (removed.length) await rest('POST', 'invoice_payments', '', removed);
   // Invoices made by the stand-in agent when a test uploads a file, and what it created for
   // them (stock items, movements, its two contacts).
   await rest('DELETE', 'invoices', 'invoice_number=like.E2E-UP-*');
@@ -433,7 +454,13 @@ export async function borrowTransaction(
     'financial_transactions',
     `select=id,amount,base_amount,counterparty_name,metadata&direction=eq.${direction}&excluded_reason=is.null&external_transaction_id=like.e2e-txn-*&order=external_transaction_id.desc&limit=40`
   );
-  const row = rows.find(r => !r.metadata?.invoice_id);
+  const links = await rest<{ financial_transaction_id: string }[]>(
+    'GET',
+    'invoice_payments',
+    `select=financial_transaction_id&financial_transaction_id=in.(${rows.map(r => r.id).join(',')})`
+  );
+  const linked = new Set(links.map(l => l.financial_transaction_id));
+  const row = rows.find(r => !r.metadata?.invoice_id && !linked.has(r.id));
   if (!row) throw new Error('No unmatched transaction to borrow');
   await rest('PATCH', 'financial_transactions', `id=eq.${row.id}`, {
     amount,
@@ -443,6 +470,8 @@ export async function borrowTransaction(
   return {
     id: row.id,
     restore: async () => {
+      // A match the test left behind would make the transaction look taken next time.
+      await rest('DELETE', 'invoice_payments', `financial_transaction_id=eq.${row.id}`);
       await rest('PATCH', 'financial_transactions', `id=eq.${row.id}`, {
         amount: row.amount,
         base_amount: row.base_amount,
@@ -453,13 +482,14 @@ export async function borrowTransaction(
   };
 }
 
-export async function readTxnInvoiceId(id: string): Promise<unknown> {
-  const rows = await rest<{ metadata: Record<string, unknown> | null }[]>(
+/** The number of the invoice this transaction is matched to as its payment, if any. */
+export async function readTxnInvoiceId(id: string): Promise<string | undefined> {
+  const rows = await rest<{ invoices: { invoice_number: string } | null }[]>(
     'GET',
-    'financial_transactions',
-    `select=metadata&id=eq.${id}`
+    'invoice_payments',
+    `select=invoices(invoice_number)&financial_transaction_id=eq.${id}`
   );
-  return rows[0]?.metadata?.invoice_id;
+  return rows[0]?.invoices?.invoice_number;
 }
 
 // ─── Collections (for tests that create, edit and remove them) ─────────────────────────────────

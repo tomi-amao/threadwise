@@ -1,37 +1,35 @@
 /**
  * Invoice API route
  *
- * GET  ?id=<invoice>            the invoice with its lines, journals, matched payment and pickers
+ * GET  ?id=<invoice>            the invoice with its lines, matched payment and pickers
  * GET  ?id=<invoice>&document=1 a short-lived signed URL for the uploaded document
  * POST intent=upload            store the file, have the agent extract it into a DRAFT invoice
- * POST intent=setStatus         move the invoice through its lifecycle (the agent posts journals)
+ * POST intent=setStatus         move the invoice through its lifecycle (nothing is posted)
  * POST intent=update            notes, direction (drafts only) and the GL account of each line
  * POST intent=stock             decide, per purchase line, how it is tracked as stock
  * POST intent=delete            remove a draft, cancelled or void invoice
- * POST intent=matchPayment      link a bank transaction as the invoice's payment (unmatchPayment undoes it)
+ * POST intent=matchPayment      link a bank transaction as the invoice's payment (unmatchPayment undoes
+ *                               it); the agent then sets paid or part paid from what is linked
  *
  * Every invoice is first fetched as the signed-in user (row-level security), so one user can
  * never read or change another's by guessing an id. Rules about *what* may change (lifecycle,
- * deletion, direction) are enforced by the agent, which owns the ledger; this route does not
- * duplicate them, it only shows the agent's refusal.
+ * deletion, direction) are enforced by the agent; this route does not duplicate them, it only
+ * shows the agent's refusal.
  */
 
 import type { ActionFunctionArgs, LoaderFunctionArgs } from 'react-router';
 import {
   AgentError,
   callAgent,
-  findMatchingTransaction,
   getDocumentUrl,
   getInvoiceDetail,
   getOwnedInvoice,
   getUserEntity,
   jsonInit,
-  setPaymentMatch,
   type OwnedInvoice,
 } from '~/lib/api/invoices.server';
 import { requestAccessToken } from '~/lib/api/agent-auth.server';
 import { getServerSupabaseClient } from '~/lib/supabase';
-import { getRequestSupabaseClient } from '~/lib/supabase-server';
 import type { StockDecision } from '~/types/invoice';
 
 const MAX_FILE_BYTES = 10 * 1024 * 1024;
@@ -44,8 +42,7 @@ function json(data: unknown, status = 200) {
   });
 }
 
-const fail = (error: string, status: number, extra: Record<string, unknown> = {}) =>
-  json({ ok: false, error, ...extra }, status);
+const fail = (error: string, status: number) => json({ ok: false, error }, status);
 
 const parseJson = <T,>(value: FormDataEntryValue | null): T | null => {
   if (typeof value !== 'string') return null;
@@ -100,15 +97,8 @@ export async function action({ request }: ActionFunctionArgs) {
       case 'delete':
         return await remove(request, invoice);
       case 'matchPayment':
-      case 'unmatchPayment': {
-        const result = await setPaymentMatch(
-          getRequestSupabaseClient(request),
-          invoice,
-          String(form.get('transactionId') ?? ''),
-          intent === 'matchPayment'
-        );
-        return result.ok ? json(result) : fail(result.error, 400);
-      }
+      case 'unmatchPayment':
+        return await matchPayment(request, invoice, form, intent === 'matchPayment');
       default:
         return fail('Unknown action', 400);
     }
@@ -177,40 +167,36 @@ async function setStatus(request: Request, invoice: OwnedInvoice, form: FormData
   const status = String(form.get('status') ?? '').toUpperCase();
   if (!STATUSES.includes(status)) return fail('Unknown status', 400);
 
-  // Marking paid clears the payable against the bank. Without an imported payment the agent
-  // cannot say which account the money left, so ask for a deliberate go-ahead.
-  if (status === 'PAID' && invoice.status !== 'PAID' && form.get('confirmUnmatched') !== '1') {
-    const matched = await findMatchingTransaction(
-      getRequestSupabaseClient(request),
-      invoice.invoice_number,
-      invoice.entity_id
-    );
-    if (!matched) {
-      return fail(
-        'No bank payment has been matched to this invoice yet. Import the payment first, or ' +
-          'mark it paid anyway.',
-        409,
-        { code: 'no_matching_payment' }
-      );
-    }
-  }
-
-  const result = await callAgent<{
-    warnings?: string[];
-    voided_journals?: unknown[];
-    purchase_journal?: unknown;
-  }>(
+  await callAgent(
     `/accounting/invoices/${invoice.id}/status`,
     await requestAccessToken(request),
     jsonInit('PATCH', { entity_id: invoice.entity_id, status })
   );
-  return json({
-    ok: true,
-    status,
-    posted: !!result.purchase_journal,
-    voided: result.voided_journals?.length ?? 0,
-    warnings: result.warnings ?? [],
-  });
+  return json({ ok: true, status });
+}
+
+async function matchPayment(
+  request: Request,
+  invoice: OwnedInvoice,
+  form: FormData,
+  match: boolean
+) {
+  const transactionId = String(form.get('transactionId') ?? '');
+  if (!transactionId) return fail('A transaction id is required', 400);
+  const token = await requestAccessToken(request);
+  const path = `/accounting/invoices/${invoice.id}/payments`;
+  await (match
+    ? callAgent(
+        path,
+        token,
+        jsonInit('POST', { entity_id: invoice.entity_id, transaction_id: transactionId })
+      )
+    : callAgent(
+        `${path}/${encodeURIComponent(transactionId)}?entity_id=${encodeURIComponent(invoice.entity_id)}`,
+        token,
+        { method: 'DELETE' }
+      ));
+  return json({ ok: true });
 }
 
 async function update(request: Request, invoice: OwnedInvoice, form: FormData) {

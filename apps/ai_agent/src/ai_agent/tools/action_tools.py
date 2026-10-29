@@ -41,16 +41,8 @@ INVOICE_STATUS_LABELS = {
     "VOID": "void",
 }
 
-# What a move does to the ledger, in words for the person approving it.
-INVOICE_CONSEQUENCES = {
-    ("DRAFT", "OPEN"): "Finalises it and posts its journal.",
-    ("PAID", "OPEN"): "Takes the payment back: voids the payment journal.",
-    ("OPEN", "PAID"): "Posts the payment journal.",
-    ("PARTIALLY_PAID", "PAID"): "Posts the payment journal.",
-    ("OVERDUE", "PAID"): "Posts the payment journal.",
-    ("DRAFT", "PAID"): "Finalises it and posts its journal and its payment journal.",
-}
-VOIDING = "Voids every journal this invoice posted. This cannot be undone."
+# Invoices post nothing to the ledger, so the only consequence worth saying is finality.
+TERMINAL = "This cannot be undone."
 
 
 def approved(answer: Any) -> bool:
@@ -151,9 +143,7 @@ async def set_invoice_status(
     except InvoiceRuleError as exc:
         return {"done": False, "reason": str(exc)}
 
-    consequence = INVOICE_CONSEQUENCES.get((current, status)) or (
-        VOIDING if status in ("CANCELLED", "VOID") else None
-    )
+    consequence = TERMINAL if status in ("CANCELLED", "VOID") else None
     who = f"{invoice['counterparty']}, " if invoice["counterparty"] else ""
     proposal = Proposal(
         action="set_invoice_status",

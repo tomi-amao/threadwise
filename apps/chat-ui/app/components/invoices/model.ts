@@ -5,14 +5,15 @@
  * business owes. The page says "Owed to you" and "You owe" rather than Sale and Purchase,
  * which are accounting words for the same thing.
  *
- * Stage. An invoice moves To review (a draft: uploaded and extracted, not yet posted) to Open
- * (finalised, awaiting payment) to Paid. Overdue is not a stage but a state of Open: the
- * database only has OVERDUE if a person sets it, so an unpaid invoice past its due date is
- * shown as overdue here (the same rule as ai_agent's invoice_rules.effective_status).
+ * Stage. An invoice moves To review (a draft: uploaded and extracted, not yet checked) to Open
+ * (finalised, awaiting payment) to Paid. Invoices are documents: no stage posts to the books.
+ * Overdue is not a stage but a state of Open: the database only has OVERDUE if a person sets
+ * it, so an unpaid invoice past its due date is shown as overdue here (the same rule as
+ * ai_agent's invoice_rules.effective_status).
  *
  * Totals only add invoices in the business's own currency. The invoice rows carry a
- * currency and an fx_rate, but the agent does not convert them when it journals, so a
- * converted headline would disagree with the ledger.
+ * currency and an fx_rate, but nothing converts them reliably, so a converted headline
+ * would be a guess.
  */
 
 import type { ChipTone } from '~/components/ui/chip';

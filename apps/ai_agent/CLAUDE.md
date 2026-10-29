@@ -18,8 +18,9 @@ This service does three distinct jobs:
    (Shopify, Revolut, PayPal, Squarespace) via Inngest, normalizes them into a
    canonical schema, and persists them to Supabase/Postgres. Zoho Calendar is
    the one provider that also goes the other way — see "OAuth providers" below.
-3. **Accounting engine** — turns normalized payments/transactions/invoices into
-   double-entry journals against a chart of accounts.
+3. **Accounting engine** — turns normalized payments and transactions into
+   double-entry journals against a chart of accounts. Invoices are documents and
+   never post.
 
 Longer explanations for people are in `docs/` (start at `docs/README.md`): architecture,
 security, chat agent, data pipeline, accounting, the route list, development. Update the matching
@@ -318,10 +319,17 @@ Double-entry journals are generated from normalized records:
   — debits cash, credits clearing. No fee entry (fees are captured at accrual time).
 - **Expense journal**: from an outbound financial transaction — debits the resolved
   expense account, credits cash.
-- Purchase/Sale/Payment journals are created from invoices.
+- Invoices are **not** a journal source: the transaction that settles an invoice is what
+  is journaled, so an invoice's status, edits or deletion never touch the ledger. Keep it
+  that way; a second path from invoices is how the same expense gets counted twice.
+  Which transaction paid an invoice is `invoice_payments` (written only by
+  `InvoiceService.link_payment`/`unlink_payment`, which also set the status), not
+  `financial_transactions.metadata.invoice_id`: that field is the provider's own reference.
+  Synced invoices (`origin` other than `upload`) are read-only for status, direction and
+  deletion. Details: `docs/accounting.md`.
 - Also: funding (inbound personal transfer), sales receipt (direct PayPal sale), refund
   and refund reversal, FX conversion, inventory cost of goods sold, and stock disposal.
-  All 13 types, with their `JournalService` methods, are in `docs/accounting.md`.
+  All 10 types, with their `JournalService` methods, are in `docs/accounting.md`.
 - Journals follow the same rules throughout: debits equal credits, one journal per source
   record (idempotent), and `reverse_journal` is a soft void (`status = 'reversed'`), not an
   opposite entry.
