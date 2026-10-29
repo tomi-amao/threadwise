@@ -80,6 +80,12 @@ In the Inngest dashboard: **Apps → Sync new app**, URL
 `https://threadwise-ai-agent.onrender.com/api/inngest`. The app appears as `threadwise-ai-agent`
 with its functions.
 
+It must appear in the **Production** environment. Do not set `INNGEST_ENV` on Render: it names a
+branch environment. The SDK would otherwise take its environment from Render's git branch
+(`RENDER_GIT_BRANCH=main`), and the client ignores that for this reason
+(`integrations/inngest/config.py`). If an app shows up in a branch environment called `main`,
+archive that environment.
+
 ### 4. GitHub (keeps Inngest in sync after each deploy)
 
 In the repo's **Settings → Secrets and variables → Actions**:

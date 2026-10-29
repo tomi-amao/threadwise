@@ -1,6 +1,7 @@
 """Inngest configuration and client setup for ThreadWise AI Agent."""
 
 import logging
+import os
 from datetime import datetime, timezone
 from typing import Any, Dict
 
@@ -17,13 +18,38 @@ INNGEST_APP_ID = settings.inngest_app_id
 INNGEST_EVENT_KEY = settings.inngest_event_key
 INNGEST_SIGNING_KEY = settings.inngest_signing_key
 
-# Initialize Inngest client with realtime support
-client = inngest.Inngest(
-    app_id=INNGEST_APP_ID,
-    logger=logger,
-    event_key=INNGEST_EVENT_KEY,
-    signing_key=INNGEST_SIGNING_KEY,
+# Without INNGEST_ENV the SDK names its Inngest environment after the platform's git branch, and
+# Render sets RENDER_GIT_BRANCH=main. Production then reported itself as a "main" branch
+# environment: Inngest created one on the first sync, refused every sync into Production ("SDK
+# environment is outside this key's access"), and that environment's crons were rejected by the
+# production signing key. Production is the environment with no name, so only INNGEST_ENV may name
+# one (for a real branch environment). The SDK reads these once, when the client is created.
+PLATFORM_BRANCH_VARS = (
+    "RAILWAY_GIT_BRANCH",
+    "RENDER_GIT_BRANCH",
+    "VERCEL_GIT_COMMIT_REF",
 )
+
+
+def create_client() -> inngest.Inngest:
+    """The Inngest client, in the environment INNGEST_ENV names (Production when it is unset)."""
+    hidden = {
+        name: os.environ.pop(name)
+        for name in PLATFORM_BRANCH_VARS
+        if name in os.environ
+    }
+    try:
+        return inngest.Inngest(
+            app_id=INNGEST_APP_ID,
+            logger=logger,
+            event_key=INNGEST_EVENT_KEY,
+            signing_key=INNGEST_SIGNING_KEY,
+        )
+    finally:
+        os.environ.update(hidden)
+
+
+client = create_client()
 
 
 def get_client() -> inngest.Inngest:
