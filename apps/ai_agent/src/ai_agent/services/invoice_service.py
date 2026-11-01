@@ -167,6 +167,20 @@ class ExtractedInvoice(BaseModel):
     )
 
 
+def document_part(file_content: bytes, mime_type: str) -> Dict[str, Any]:
+    """The file as one part of a multimodal message: a PDF as a file, anything else as an
+    image."""
+    b64 = base64.b64encode(file_content).decode("utf-8")
+    if mime_type == "application/pdf":
+        return {
+            "type": "file",
+            "source_type": "base64",
+            "mime_type": mime_type,
+            "data": b64,
+        }
+    return {"type": "image_url", "image_url": {"url": f"data:{mime_type};base64,{b64}"}}
+
+
 # =============================================================================
 # INVOICE SERVICE
 # =============================================================================
@@ -221,8 +235,6 @@ class InvoiceService:
         """
         model = init_chat_model(settings.default_chat_model)
         structured_model = model.with_structured_output(ExtractedInvoice)
-
-        b64 = base64.b64encode(file_content).decode("utf-8")
 
         # --- Build entity context block ---
         entity_block = f"Our business name: {entity_name}"
@@ -332,22 +344,7 @@ class InvoiceService:
             {"type": "text", "text": system_text},
         ]
 
-        if mime_type == "application/pdf":
-            content_parts.append(
-                {
-                    "type": "file",
-                    "source_type": "base64",
-                    "mime_type": mime_type,
-                    "data": b64,
-                }
-            )
-        else:
-            content_parts.append(
-                {
-                    "type": "image_url",
-                    "image_url": {"url": f"data:{mime_type};base64,{b64}"},
-                }
-            )
+        content_parts.append(document_part(file_content, mime_type))
 
         content_parts.append(
             {
@@ -450,6 +447,11 @@ class InvoiceService:
         counterparty_id: UUID,
         source: str = "manual",
         file_path: str = "",
+        *,
+        status: str = "DRAFT",
+        origin: str = "upload",
+        external_id: Optional[str] = None,
+        attachment_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Persist an invoice record to the database.
 
@@ -458,6 +460,9 @@ class InvoiceService:
             extracted: AI-extracted invoice data
             counterparty_id: Contact UUID of counterparty
             source: Upload source label (e.g. "manual", "email")
+            status: DRAFT for an upload (a person reviews it); a synced invoice says its own
+            origin, external_id, attachment_id: where the record came from (see the
+                invoice_register migration); the defaults are an upload's
 
         Returns:
             Invoice dict (includes file_path for storage reference)
@@ -499,10 +504,13 @@ class InvoiceService:
             "gross_amount": gross,
             "fx_rate": extracted.fx_rate,
             "counterparty_id": str(counterparty_id),
-            "status": "DRAFT",
+            "status": status,
             "source": source,
             "file_path": file_path or None,
             "notes": extracted.notes,
+            "origin": origin,
+            "external_id": external_id,
+            "attachment_id": attachment_id,
         }
 
         result = await asyncio.to_thread(
@@ -1131,11 +1139,12 @@ class InvoiceService:
         """Delete an invoice and its line items, and its stored document.
 
         Only a DRAFT, CANCELLED or VOID invoice can go; a live one is voided instead, so
-        the record stays. Line items cascade with the invoice.
+        the record stays. An invoice read from a receipt can always go (the receipt stays on
+        its transaction). Line items and payment links cascade with the invoice.
         """
         invoice = await self._get_owned_invoice(entity_id, invoice_id)
         check_editable(invoice.get("origin"), "delete")
-        check_deletable(invoice.get("status") or "")
+        check_deletable(invoice.get("status") or "", invoice.get("origin"))
 
         result = await asyncio.to_thread(
             lambda: self.client.table("invoices")

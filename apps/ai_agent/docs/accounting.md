@@ -101,9 +101,13 @@ invoice to its transaction links the two; it does not post either.
 | `revolut_expense`  | A supplier invoice read from a receipt on a Revolut expense | The sync; status follows the payment |
 
 `external_id` is the provider's id (unique per business and origin, so a sync upserts), and
-`attachment_id` points at the stored receipt it was read from. A synced invoice is read-only in
-the app: its status, direction and existence belong to the provider (`check_editable` refuses
-them with a 409); notes and line accounts stay editable. `source` is a different thing: the
+`attachment_id` points at the stored receipt it was read from. A synced invoice's status and
+direction are not the app's (`check_editable` refuses them with a 409, per `LOCKED` in
+`invoice_rules.py`): a payment request's follow Revolut, and an invoice read from a receipt was
+paid by the transaction the receipt is on. A payment request cannot be deleted either (the next
+sync would bring it back); an invoice read from a receipt can, whatever its status, which is how
+a misread file is dismissed (the file stays on its transaction and is not read again). Notes and
+line accounts stay editable. How receipts are read: `data-pipeline.md`. `source` is a different thing: the
 platform the extraction thinks an uploaded invoice was paid through.
 
 ### Payments

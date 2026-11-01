@@ -42,25 +42,26 @@ one channel per source), which the frontend subscribes to with a token from
 
 ## Inngest functions
 
-All are registered on `/api/inngest` (30 in total).
+All are registered on `/api/inngest` (31 in total).
 
-| Group         | Function                                                                                | Trigger                                                                    |
-| ------------- | --------------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
-| Shopify       | `shopify_sync_all`, `shopify_sync_endpoint`, `shopify_sync_order_transactions`          | `shopify/sync.requested`, `.endpoint`, `.order_transactions.requested`     |
-| Revolut       | `revolut_sync_all`, `revolut_sync_endpoint`                                             | `revolut/sync.requested`, `revolut/sync.endpoint`                          |
-|               | `revolut_sync_receipts` (invoked by `revolut_sync_all`)                                 | `revolut/sync.receipts`                                                    |
-|               | `revolut_merchant_sync` (invoices; invoked by `revolut_sync_all` and `_endpoint`)       | `revolut/sync.payment_requests`                                            |
-| PayPal        | `paypal_sync_all`, `paypal_sync_endpoint`                                               | `paypal/sync.requested`, `paypal/sync.endpoint`                            |
-| Squarespace   | `squarespace_sync_all`, `squarespace_sync_endpoint`, `squarespace_sync_single_endpoint` | `squarespace/sync.requested`, ...                                          |
-| Zoho Calendar | `zoho_calendar_sync_all`, `zoho_calendar_sync_endpoint`                                 | `zoho_calendar/sync.requested`, `.endpoint`                                |
-|               | `zoho_calendar_push_daily`                                                              | cron `0 6 * * *`                                                           |
-| Normalisation | `normalize_raw_event`, `normalize_batch`, `normalize_source`                            | `normalization/event.received`, `batch.requested`, `source.requested`      |
-|               | `normalize_after_sync` (Squarespace), `normalize_after_<provider>_sync`                 | `<provider>/sync.completed`                                                |
-|               | `reprocess_failed_events`                                                               | cron `0 */6 * * *`                                                         |
-|               | `reprocess_stuck_processing_events`                                                     | cron `0 */2 * * *`                                                         |
-|               | `reprocess_failed_manual`                                                               | `normalization/reprocess.requested`                                        |
-| Accounting    | `generate_all_journals`                                                                 | `accounting/journals.generate.requested`                                   |
-| Other         | `process_chat_message`, `process_document_embedding`, `cleanup_old_threads`             | `chat/message.received`, `documents/embedding.completed`, cron `0 2 * * *` |
+| Group         | Function                                                                                 | Trigger                                                                    |
+| ------------- | ---------------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| Shopify       | `shopify_sync_all`, `shopify_sync_endpoint`, `shopify_sync_order_transactions`           | `shopify/sync.requested`, `.endpoint`, `.order_transactions.requested`     |
+| Revolut       | `revolut_sync_all`, `revolut_sync_endpoint`                                              | `revolut/sync.requested`, `revolut/sync.endpoint`                          |
+|               | `revolut_sync_receipts` (invoked by `revolut_sync_all`)                                  | `revolut/sync.receipts`                                                    |
+|               | `revolut_read_receipts` (sent by `revolut_sync_receipts`; one per integration at a time) | `revolut/receipts.read`                                                    |
+|               | `revolut_merchant_sync` (invoices; invoked by `revolut_sync_all` and `_endpoint`)        | `revolut/sync.payment_requests`                                            |
+| PayPal        | `paypal_sync_all`, `paypal_sync_endpoint`                                                | `paypal/sync.requested`, `paypal/sync.endpoint`                            |
+| Squarespace   | `squarespace_sync_all`, `squarespace_sync_endpoint`, `squarespace_sync_single_endpoint`  | `squarespace/sync.requested`, ...                                          |
+| Zoho Calendar | `zoho_calendar_sync_all`, `zoho_calendar_sync_endpoint`                                  | `zoho_calendar/sync.requested`, `.endpoint`                                |
+|               | `zoho_calendar_push_daily`                                                               | cron `0 6 * * *`                                                           |
+| Normalisation | `normalize_raw_event`, `normalize_batch`, `normalize_source`                             | `normalization/event.received`, `batch.requested`, `source.requested`      |
+|               | `normalize_after_sync` (Squarespace), `normalize_after_<provider>_sync`                  | `<provider>/sync.completed`                                                |
+|               | `reprocess_failed_events`                                                                | cron `0 */6 * * *`                                                         |
+|               | `reprocess_stuck_processing_events`                                                      | cron `0 */2 * * *`                                                         |
+|               | `reprocess_failed_manual`                                                                | `normalization/reprocess.requested`                                        |
+| Accounting    | `generate_all_journals`                                                                  | `accounting/journals.generate.requested`                                   |
+| Other         | `process_chat_message`, `process_document_embedding`, `cleanup_old_threads`              | `chat/message.received`, `documents/embedding.completed`, cron `0 2 * * *` |
 
 ## Attachments (Revolut receipts)
 
@@ -80,6 +81,31 @@ for the business by Revolut; without it (401/403) the step stops and the sync of
 carries on. The Transactions drawer lists the files and opens one through
 `/api/transactions?attachment=<id>`, which reads the row as the user and redirects to a
 five-minute signed link.
+
+### Reading receipts into the invoice register
+
+At the end of each run `revolut_sync_receipts` sends `revolut/receipts.read`, and does not wait
+for it: `revolut_read_receipts` (`services/receipt_invoices.py`) reads the stored files in the
+background, at most one run per integration at a time, 5 files a step and 100 a run (a full run
+starts the next). For each file whose transaction has been normalised (the others wait for a
+later run):
+
+- the model classifies it as `invoice` (a supplier's invoice or bill, Revolut's fee invoices
+  included), `receipt` (proof of payment that is not an invoice) or `other`, recorded in
+  `transaction_attachments.document_kind` with `read_at`;
+- an invoice on money going out is read with the same extraction as an upload and stored as a
+  `PURCHASE` invoice with `origin = 'revolut_expense'`, `external_id` = the receipt id,
+  `attachment_id` = the file and status `PAID`, linked to its transaction (`matched_by =
+'sync'`). The register needs a number and a date: a document without them gets `RCPT-<receipt
+id>` and the transaction's date, and one with no readable amounts takes the transaction's;
+- if the transaction already pays an invoice (uploaded, or another file on the same expense),
+  no second one is made: the file becomes that invoice's document if it has none.
+
+A failed read is kept (`read_attempts`, `read_error`) and retried on later runs, three times in
+all. These invoices cannot have their status or direction changed (the transaction paid them),
+but they can be deleted, which is how a misread file is dismissed: the file stays on its
+transaction and is not read again. Bills paid through Revolut BillPay keep their file on the
+bill, which no Revolut API exposes, so they need an upload.
 
 ## Invoices sent from Revolut (Merchant payment requests)
 

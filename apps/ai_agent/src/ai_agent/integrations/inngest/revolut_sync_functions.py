@@ -3,7 +3,9 @@
 Orchestrates bulk loading from Revolut Business API endpoints
 with paginated extraction and raw event storage. Two more steps write straight to app tables:
 receipts (``revolut_sync_receipts``) and the invoices sent from Revolut, which are Merchant API
-payment requests (``revolut_merchant_sync``, the ``payment_requests`` endpoint).
+payment requests (``revolut_merchant_sync``, the ``payment_requests`` endpoint). Stored receipts
+are then read in the background (``revolut_read_receipts``), and the supplier invoices among
+them are added to the invoice register.
 """
 
 import logging
@@ -43,6 +45,12 @@ PAGE_DELAY_SECONDS = 1.0
 RECEIPTS_SYNC_KEY = "receipts"
 RECEIPT_LOOKBACK = timedelta(days=90)
 RECEIPTS_PER_STEP = 10
+
+# Reading receipts: each file is one or two model calls, so a step reads a few and a run reads
+# at most READS_PER_RUN, then starts the next run if more are waiting.
+READ_RECEIPTS_EVENT = "revolut/receipts.read"
+READS_PER_STEP = 5
+READS_PER_RUN = 100
 
 
 @inngest_client.create_function(
@@ -584,6 +592,12 @@ async def revolut_sync_receipts(ctx: inngest.Context) -> Dict[str, Any]:
             source_id, RECEIPTS_SYNC_KEY, status="completed", synced_at=run_started_at
         ),
     )
+    # Reading them takes a while (a model call per file), so it runs on its own and the sync
+    # does not wait. It also picks up files an earlier run stored but did not read.
+    await ctx.step.send_event(
+        "read-receipts",
+        inngest.Event(name=READ_RECEIPTS_EVENT, data={"source_id": source_id}),
+    )
     ctx.logger.info(
         f"Revolut receipts for {source_id}: {stored} stored, {missing} no longer in Revolut"
     )
@@ -592,6 +606,66 @@ async def revolut_sync_receipts(ctx: inngest.Context) -> Dict[str, Any]:
         "receipts_stored": stored,
         "receipts_missing": missing,
     }
+
+
+@inngest_client.create_function(
+    fn_id="revolut_read_receipts",
+    trigger=inngest.TriggerEvent(event=READ_RECEIPTS_EVENT),
+    # One reader per integration: two would read the same files.
+    concurrency=[inngest.Concurrency(limit=1, key="event.data.source_id")],
+    retries=3,
+)
+async def revolut_read_receipts(ctx: inngest.Context) -> Dict[str, Any]:
+    """Classify stored receipts and file the supplier invoices among them (see
+    ``services/receipt_invoices.py``).
+
+    Started by ``revolut_sync_receipts`` after each run. Reads up to READS_PER_RUN unread
+    files, READS_PER_STEP to a step, and starts itself again when that many were read, so a
+    first run over a long history finishes in several runs rather than one very long one.
+    """
+    # Imported here, like the Merchant sync's service, so this module loads on its own.
+    from ...services.receipt_invoices import read_attachment, unread_attachments
+
+    event_data: Dict[str, Any] = dict(ctx.event.data)
+    source_id: str = event_data.get("source_id") or ""
+    if not source_id:
+        raise ValueError("source_id is required")
+
+    source = await ctx.step.run(
+        "get-source", lambda: sync_service.get_external_source(source_id)
+    )
+    if not source or not source.get("entity_id"):
+        raise inngest.NonRetriableError(
+            f"Source not found or has no business: {source_id}"
+        )
+    entity_id = str(source["entity_id"])
+
+    unread = await ctx.step.run(
+        "find-unread", lambda: unread_attachments(entity_id, READS_PER_RUN)
+    )
+    outcomes: Dict[str, int] = {}
+    for start in range(0, len(unread), READS_PER_STEP):
+        chunk = unread[start : start + READS_PER_STEP]
+
+        async def _read(chunk: List[Dict[str, Any]] = chunk) -> List[str]:
+            return [
+                (await read_attachment(UUID(entity_id), row))["outcome"]
+                for row in chunk
+            ]
+
+        for outcome in await ctx.step.run(f"read-{start // READS_PER_STEP}", _read):
+            outcomes[outcome] = outcomes.get(outcome, 0) + 1
+
+    # A full batch means more may be waiting. (Files whose transaction is not in yet are
+    # never in the batch: they are read on a run after the transaction arrives.)
+    read = len(unread) - outcomes.get("waiting", 0)
+    if len(unread) == READS_PER_RUN:
+        await ctx.step.send_event(
+            "read-more",
+            inngest.Event(name=READ_RECEIPTS_EVENT, data={"source_id": source_id}),
+        )
+    ctx.logger.info(f"Revolut receipts read for {source_id}: {outcomes}")
+    return {"status": "completed", "read": read, "outcomes": outcomes}
 
 
 INVOICES_PER_STEP = 20
@@ -769,5 +843,6 @@ REVOLUT_SYNC_FUNCTIONS = [
     revolut_sync_all,
     revolut_sync_endpoint,
     revolut_sync_receipts,
+    revolut_read_receipts,
     revolut_merchant_sync,
 ]

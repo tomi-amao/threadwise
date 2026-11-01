@@ -19,9 +19,13 @@ Payments decide paid. An invoice is linked to the transactions that settled it
 cover (``status_from_payments``). Marking paid by hand is for money with no transaction
 behind it, such as cash.
 
-Synced invoices (``SYNCED_ORIGINS``) belong to their provider: their status comes from the
-sync and their payment links, so a person cannot set it, change their direction or delete
-them (``check_editable``).
+Synced invoices (``SYNCED_ORIGINS``) are not the app's to settle: a Revolut payment request's
+status comes from Revolut, and an invoice read from a receipt was paid by the transaction the
+receipt is on. So a person cannot set their status or change their direction
+(``check_editable``). A payment request cannot be deleted either (the next sync would bring it
+back), but an invoice read from a receipt can: the receipt stays on its transaction and is not
+read again, so deleting one is how a person says "this is not an invoice". Their payments are
+still linked, to show which transaction moved the money.
 
 ``OVERDUE`` is a status a person can set, but nothing sets it automatically, so an
 invoice that is simply past its due date is still OPEN in the database.
@@ -51,10 +55,31 @@ TRANSITIONS: Dict[str, FrozenSet[str]] = {
 # Statuses an invoice can be deleted from; a live one is voided instead, to keep the record.
 DELETABLE: FrozenSet[str] = frozenset({"DRAFT", "CANCELLED", "VOID"})
 
-# Where an invoice can come from. Uploads are the business's own documents; the rest are
-# copies of what a provider holds, kept in step by a sync.
+# Where an invoice can come from. Uploads are the business's own documents; the rest come
+# from a sync: a payment request sent from Revolut, or a supplier invoice read from a receipt
+# on a Revolut expense.
 ORIGINS: FrozenSet[str] = frozenset({"upload", "revolut_merchant", "revolut_expense"})
 SYNCED_ORIGINS: FrozenSet[str] = ORIGINS - {"upload"}
+
+Change = Literal["status", "direction", "delete"]
+
+# What a person may not change, per synced origin, and why.
+LOCKED: Dict[str, Dict[str, str]] = {
+    "revolut_merchant": {
+        "status": "This invoice is synced from Revolut. Its status follows Revolut and "
+        "its matched payments.",
+        "direction": "This invoice is synced from Revolut. Which side owes whom comes "
+        "from Revolut.",
+        "delete": "This invoice is synced from Revolut. It would come back on the next "
+        "sync.",
+    },
+    "revolut_expense": {
+        "status": "This invoice was read from a Revolut receipt. It was paid by the "
+        "transaction the receipt is on.",
+        "direction": "This invoice was read from a receipt on money going out, so it is "
+        "a purchase.",
+    },
+}
 
 # Statuses a payment link can settle. A draft is still being checked and keeps its place in
 # To review; a cancelled or void invoice is not owed.
@@ -96,8 +121,14 @@ def check_transition(current: str, target: str) -> None:
         )
 
 
-def check_deletable(status: str) -> None:
-    """Raise InvoiceRuleError unless the invoice is a draft, cancelled or void."""
+def check_deletable(status: str, origin: Optional[str] = None) -> None:
+    """Raise InvoiceRuleError unless the invoice is a draft, cancelled or void.
+
+    An invoice read from a receipt can go whatever its status: it is a reading of a file that
+    stays on its transaction, so nothing is lost, and it is not read again.
+    """
+    if origin == "revolut_expense":
+        return
     status = normalise_status(status)
     if status not in DELETABLE:
         raise InvoiceRuleError(
@@ -150,15 +181,8 @@ def status_from_payments(
     return "PAID" if paid >= total * PAID_SHARE else "PARTIALLY_PAID"
 
 
-def check_editable(
-    origin: Optional[str], change: Literal["status", "direction", "delete"]
-) -> None:
+def check_editable(origin: Optional[str], change: Change) -> None:
     """Raise InvoiceRuleError if ``change`` is not the app's to make for this origin."""
-    if (origin or "upload") not in SYNCED_ORIGINS:
-        return
-    what = {
-        "status": "Its status follows Revolut and its matched payments",
-        "direction": "Which side owes whom comes from Revolut",
-        "delete": "It would come back on the next sync",
-    }[change]
-    raise InvoiceRuleError(f"This invoice is synced from Revolut. {what}.")
+    reason = LOCKED.get(origin or "upload", {}).get(change)
+    if reason:
+        raise InvoiceRuleError(reason)

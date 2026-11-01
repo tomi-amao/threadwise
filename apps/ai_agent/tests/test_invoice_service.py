@@ -570,7 +570,7 @@ class TestSyncedInvoices:
         self, monkeypatch, journals
     ):
         service, state = TestDelete()._deleting(monkeypatch, status="VOID")
-        state["invoice"]["origin"] = "revolut_expense"
+        state["invoice"]["origin"] = "revolut_merchant"
         with pytest.raises(InvoiceRuleError, match="next sync"):
             run(service.delete_invoice(ENTITY, INVOICE))
         assert not state["deleted"]
@@ -581,6 +581,25 @@ class TestSyncedInvoices:
             run(editor.update_invoice(ENTITY, INVOICE, {"invoice_type": "SALE"}))
         # Notes stay the business's own.
         run(editor.update_invoice(ENTITY, INVOICE, {"notes": "from Revolut"}))
+
+    def test_an_invoice_read_from_a_receipt_can_be_deleted_though_paid(
+        self, monkeypatch, journals
+    ):
+        service, state = TestDelete()._deleting(monkeypatch, status="PAID")
+        state["invoice"]["origin"] = "revolut_expense"
+        result = run(service.delete_invoice(ENTITY, INVOICE))
+        # The file is the transaction's attachment, not the invoice's upload: it stays.
+        assert state["deleted"] and "removed" not in state
+        assert result == {"deleted": True, "file_removed": False}
+
+    def test_an_invoice_read_from_a_receipt_keeps_its_status(
+        self, monkeypatch, journals
+    ):
+        service, state = make_service(monkeypatch, status="PAID")
+        state["invoice"]["origin"] = "revolut_expense"
+        with pytest.raises(InvoiceRuleError, match="receipt"):
+            run(service.set_invoice_status(ENTITY, INVOICE, "VOID"))
+        assert state["status_writes"] == []
 
 
 class TestSyncedPayments:

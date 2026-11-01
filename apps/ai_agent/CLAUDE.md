@@ -335,8 +335,9 @@ Double-entry journals are generated from normalized records:
   Which transaction paid an invoice is `invoice_payments` (written only by
   `InvoiceService.link_payment`/`unlink_payment`, which also set the status), not
   `financial_transactions.metadata.invoice_id`: that field is the provider's own reference.
-  Synced invoices (`origin` other than `upload`) are read-only for status, direction and
-  deletion. Details: `docs/accounting.md`.
+  Synced invoices (`origin` other than `upload`) are read-only for status and direction
+  (`invoice_rules.LOCKED`); a Revolut payment request cannot be deleted, an invoice read from a
+  receipt (`revolut_expense`, `services/receipt_invoices.py`) can. Details: `docs/accounting.md`.
 - Also: funding (inbound personal transfer), sales receipt (direct PayPal sale), refund
   and refund reversal, FX conversion, inventory cost of goods sold, and stock disposal.
   All 10 types, with their `JournalService` methods, are in `docs/accounting.md`.

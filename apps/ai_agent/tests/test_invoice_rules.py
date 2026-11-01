@@ -6,6 +6,7 @@ from decimal import Decimal
 import pytest
 
 from ai_agent.services.invoice_rules import (
+    LOCKED,
     SYNCED_ORIGINS,
     TRANSITIONS,
     VALID_STATUSES,
@@ -149,8 +150,21 @@ class TestEditable:
         check_editable("upload", change)
         check_editable(None, change)
 
-    @pytest.mark.parametrize("origin", sorted(SYNCED_ORIGINS))
     @pytest.mark.parametrize("change", ["status", "direction", "delete"])
-    def test_synced_invoices_belong_to_revolut(self, origin, change):
+    def test_payment_requests_belong_to_revolut(self, change):
         with pytest.raises(InvoiceRuleError, match="synced from Revolut"):
-            check_editable(origin, change)
+            check_editable("revolut_merchant", change)
+
+    @pytest.mark.parametrize("change", ["status", "direction"])
+    def test_an_invoice_read_from_a_receipt_follows_its_transaction(self, change):
+        with pytest.raises(InvoiceRuleError, match="receipt"):
+            check_editable("revolut_expense", change)
+
+    def test_an_invoice_read_from_a_receipt_can_be_dismissed_whatever_its_status(self):
+        check_editable("revolut_expense", "delete")
+        check_deletable("PAID", "revolut_expense")
+        with pytest.raises(InvoiceRuleError):
+            check_deletable("PAID", "upload")
+
+    def test_every_synced_origin_has_its_locks(self):
+        assert set(LOCKED) == SYNCED_ORIGINS
