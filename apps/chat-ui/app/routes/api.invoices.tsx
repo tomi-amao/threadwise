@@ -144,6 +144,7 @@ async function upload(request: Request, form: FormData) {
       invoice: { id: string; invoice_number: string | null; invoice_type: string };
       contact: { name: string; company_name: string | null } | null;
       extraction: { confidence_score: number };
+      payment_match: { amount: number; currency: string; occurred_at: string } | null;
     }>('/accounting/invoices/process', await requestAccessToken(request), {
       method: 'POST',
       body: agentForm,
@@ -155,6 +156,8 @@ async function upload(request: Request, form: FormData) {
       direction: result.invoice.invoice_type,
       counterparty: result.contact?.company_name || result.contact?.name || null,
       confidence: result.extraction?.confidence_score ?? null,
+      // Linked on upload because one payment carries its number and exact amount.
+      paymentMatched: !!result.payment_match,
     });
   } catch (error) {
     // Extraction failed, so no invoice points at the file: do not leave it orphaned.

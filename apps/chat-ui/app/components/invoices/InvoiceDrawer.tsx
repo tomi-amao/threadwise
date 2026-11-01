@@ -512,9 +512,10 @@ function Body({
         )}
       </section>
 
-      {finalised && (
+      {!dead && (
         <PaymentMatch
           matchedId={matched_transaction_id}
+          matchedBy={detail.matched_by}
           candidates={detail.payment_candidates}
           isSale={isSale}
           busy={busy !== null}

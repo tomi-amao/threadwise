@@ -755,6 +755,28 @@ async def normalize_after_sync(ctx: inngest.Context) -> Dict[str, Any]:
         raise
 
 
+async def _request_invoice_matching(ctx: inngest.Context, source_id: Any) -> None:
+    """Ask for the business's uploads to be matched to their payments (after a sync of
+    bank or PayPal transactions). Steps are memoised, so a retry does not normalise again.
+    """
+    # Imported here, as the sync functions do: services import integrations, whose package
+    # loads every Inngest function.
+    from ..services.external_sync_service import sync_service
+
+    source = await ctx.step.run(
+        "get-source-for-matching",
+        lambda: sync_service.get_external_source(str(source_id)),
+    )
+    entity_id = (source or {}).get("entity_id")
+    if entity_id:
+        await ctx.step.send_event(
+            "match-invoices",
+            inngest.Event(
+                name="invoices/match.requested", data={"entity_id": str(entity_id)}
+            ),
+        )
+
+
 @inngest_client.create_function(
     fn_id="normalize_after_revolut_sync",
     trigger=inngest.TriggerEvent(event="revolut/sync.completed"),
@@ -781,6 +803,8 @@ async def normalize_after_revolut_sync(ctx: inngest.Context) -> Dict[str, Any]:
                 "batch_size": 100,
             },
         )
+        # New transactions may pay invoices already uploaded.
+        await _request_invoice_matching(ctx, source_id)
 
         return {
             "status": "completed",
@@ -820,6 +844,8 @@ async def normalize_after_paypal_sync(ctx: inngest.Context) -> Dict[str, Any]:
                 "batch_size": 100,
             },
         )
+        # New transactions may pay invoices already uploaded.
+        await _request_invoice_matching(ctx, source_id)
 
         return {
             "status": "completed",

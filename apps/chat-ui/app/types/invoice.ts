@@ -103,7 +103,7 @@ export interface ProductOption {
   name: string;
 }
 
-/** A bank transaction that might be the payment for an invoice. */
+/** A bank transaction that might be the payment for an invoice, scored by the agent. */
 export interface PaymentCandidate {
   id: string;
   occurred_at: string;
@@ -111,7 +111,14 @@ export interface PaymentCandidate {
   counterparty: string | null;
   amount: number;
   currency: string;
+  /** Why it fits, in plain words: "Invoice number on the transaction", "Exact amount"… */
+  reasons: string[];
+  /** The invoice number and the exact amount agree. */
+  confident: boolean;
 }
+
+/** Who matched an invoice to its payment. */
+export type MatchedBy = 'user' | 'reconciliation' | 'sync' | 'backfill' | 'auto';
 
 /** Everything the drawer shows for one invoice. */
 export interface InvoiceDetail {
@@ -119,6 +126,8 @@ export interface InvoiceDetail {
   lines: InvoiceLineItem[];
   /** A bank transaction already matched to this invoice, if any. */
   matched_transaction_id: string | null;
+  /** How that match was made: 'auto' when the number and amount agreed on upload or sync. */
+  matched_by: MatchedBy | null;
   /** Bank transactions that could be this invoice's payment, nearest in amount first. */
   payment_candidates: PaymentCandidate[];
   gl_accounts: GlAccountOption[];

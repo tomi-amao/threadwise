@@ -233,6 +233,7 @@ async def _cleanup_temporary_files() -> int:
 
 # Import normalization functions
 from ...normalization.inngest_functions import NORMALIZATION_FUNCTIONS  # noqa: E402
+from .invoice_matching_functions import INVOICE_MATCHING_FUNCTIONS  # noqa: E402
 from .journal_generation_functions import JOURNAL_GENERATION_FUNCTIONS  # noqa: E402
 from .paypal_sync_functions import PAYPAL_SYNC_FUNCTIONS  # noqa: E402
 from .revolut_sync_functions import REVOLUT_SYNC_FUNCTIONS  # noqa: E402
@@ -254,4 +255,5 @@ FUNCTIONS = [
     *ZOHO_CALENDAR_SYNC_FUNCTIONS,  # Include Zoho Calendar sync functions
     *NORMALIZATION_FUNCTIONS,  # Include normalization functions
     *JOURNAL_GENERATION_FUNCTIONS,  # Include journal generation functions
+    *INVOICE_MATCHING_FUNCTIONS,  # Match uploaded invoices to their payments
 ]

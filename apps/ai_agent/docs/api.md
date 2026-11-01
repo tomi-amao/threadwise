@@ -46,6 +46,8 @@ Router guard: **entity**, except `/health-checks` (**internal**).
 | GET    | `/invoices/{invoice_id}`                           | owned                                         |
 | PATCH  | `/invoices/{invoice_id}`                           | owned                                         |
 | PATCH  | `/invoices/{invoice_id}/status`                    | owned; lifecycle rules, 409 if not allowed    |
+| GET    | `/invoices/{invoice_id}/payment-candidates`        | owned; likely payments, with why they fit     |
+| POST   | `/invoices/match`                                  | match every unlinked upload (Inngest)         |
 | POST   | `/invoices/{invoice_id}/payments`                  | owned; match a transaction as its payment     |
 | DELETE | `/invoices/{invoice_id}/payments/{transaction_id}` | owned; remove that match                      |
 | DELETE | `/invoices/{invoice_id}`                           | owned                                         |

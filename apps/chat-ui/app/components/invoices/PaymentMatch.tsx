@@ -1,7 +1,8 @@
 /**
- * PaymentMatch: which bank transaction paid (or was paid by) this invoice. The match is what
- * lets the ledger show which account the money moved through, so a finalised invoice without one
- * offers the likeliest transactions to pick from, nearest in amount first.
+ * PaymentMatch: which bank transaction paid (or was paid by) this invoice. An invoice without
+ * one, draft or not, offers the likeliest transactions, best first, each saying why it fits
+ * (the agent scores them: services/invoice_matching.py). A match made automatically, because
+ * one payment carried the invoice number and the exact amount, says so and can be removed.
  */
 
 import { useState } from 'react';
@@ -9,11 +10,12 @@ import { Link } from 'react-router';
 import { ArrowSquareOut } from 'phosphor-react';
 import { Button } from '~/components/ui/button';
 import { Eyebrow } from '~/components/ui/eyebrow';
-import type { PaymentCandidate } from '~/types/invoice';
+import type { MatchedBy, PaymentCandidate } from '~/types/invoice';
 import { money, shortDate } from './model';
 
 export function PaymentMatch({
   matchedId,
+  matchedBy,
   candidates,
   isSale,
   busy,
@@ -21,6 +23,7 @@ export function PaymentMatch({
   onUnmatch,
 }: {
   matchedId: string | null;
+  matchedBy: MatchedBy | null;
   candidates: PaymentCandidate[];
   isSale: boolean;
   busy: boolean;
@@ -36,6 +39,11 @@ export function PaymentMatch({
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <p className="text-[15px]">Matched to a bank transaction.</p>
+            {matchedBy === 'auto' && (
+              <p className="mt-0.5 text-[13px] text-text-2">
+                Matched automatically: the invoice number and the amount agree.
+              </p>
+            )}
             <Link
               to={`/transactions?transactionId=${matchedId}`}
               className="mt-1 inline-flex items-center gap-1 rounded-sm text-[14px] text-accent-text underline underline-offset-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -49,12 +57,14 @@ export function PaymentMatch({
         </div>
       ) : candidates.length === 0 ? (
         <p className="text-[14px] text-text-2">
-          No bank transaction of about this amount is waiting to be matched.
+          No bank transaction that fits is waiting to be matched. It is checked again after each
+          sync.
         </p>
       ) : (
         <>
           <p className="text-[14px] text-text-2">
-            Not matched yet. {isSale ? 'Money received' : 'Money paid out'} close to this total:
+            Not matched yet. {isSale ? 'Money received' : 'Money paid out'} that could be its
+            payment, likeliest first:
           </p>
           {!open ? (
             <Button variant="outline" size="sm" onClick={() => setOpen(true)}>
@@ -71,6 +81,11 @@ export function PaymentMatch({
                     <div className="text-[13px] text-text-2">
                       {shortDate(c.occurred_at.slice(0, 10))}, {money(c.amount, c.currency)}
                     </div>
+                    {c.reasons.length > 0 && (
+                      <div className="text-[12px] text-muted-foreground">
+                        {c.reasons.join(' · ')}
+                      </div>
+                    )}
                   </div>
                   <Button
                     size="sm"

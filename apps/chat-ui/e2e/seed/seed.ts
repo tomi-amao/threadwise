@@ -1039,7 +1039,12 @@ async function main() {
         financial_transaction_id: t.id,
         amount: Math.abs(Number(t.amount)),
         currency_code: t.currency_code,
-        matched_by: 'user',
+        // The paid one was matched on upload: its number and amount agree with the payment.
+        matched_by:
+          MATCHED_PAYMENTS[Number(t.external_transaction_id.replace('e2e-txn-', '')) - 1] ===
+          'INV-ML-0900'
+            ? 'auto'
+            : 'user',
       }))
     )
   );

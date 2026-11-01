@@ -344,7 +344,10 @@ Double-entry journals are generated from normalized records:
   receipt (`revolut_expense`, `services/receipt_invoices.py`) can. Invoices never touch stock
   either: a line's `line_kind` (product / sample / other) and `product_id` say what it bought,
   for the drawer only, and no invoice code writes `products`, `inventory_items` or
-  `inventory_movements` (`tests/test_invoice_line_products.py` guards it). Details:
+  `inventory_movements` (`tests/test_invoice_line_products.py` guards it). An upload is matched
+  to its payment by `services/invoice_matching.py` (automatically only on invoice number + exact
+  amount, `matched_by = 'auto'`), on upload and after each Revolut or PayPal sync
+  (`match_invoice_payments`); a duplicate upload is refused with a 409. Details:
   `docs/accounting.md`.
 - Also: funding (inbound personal transfer), sales receipt (direct PayPal sale), refund
   and refund reversal, FX conversion, inventory cost of goods sold, and stock disposal.

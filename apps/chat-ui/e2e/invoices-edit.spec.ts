@@ -51,7 +51,8 @@ async function openInvoice(page: Page, number: string, tab = 'all') {
 const pdf = (name: string) => ({
   name,
   mimeType: 'application/pdf',
-  buffer: Buffer.from('%PDF-1.1\n%%EOF'),
+  // Each file's bytes differ, as real files do: the same bytes twice is a duplicate upload.
+  buffer: Buffer.from(`%PDF-1.1\n% ${name}\n%%EOF`),
 });
 
 test.describe('adding invoices', () => {
@@ -103,6 +104,27 @@ test.describe('adding invoices', () => {
     await expect(dialog.getByRole('button', { name: 'Try again' })).toBeVisible();
     await dialog.getByRole('button', { name: 'Remove unreadable.pdf' }).click();
     await expect(dialog.getByRole('list', { name: 'Files' })).toHaveCount(0);
+  });
+
+  test('the same file added twice is refused the second time', async ({ page }) => {
+    await page.goto('/invoices');
+    await page.getByRole('button', { name: 'Add invoice' }).click();
+    let dialog = page.getByRole('dialog');
+    await dialog.getByLabel('Choose invoice files').setInputFiles(pdf('twice.pdf'));
+    await dialog.getByRole('button', { name: 'Add 1 invoice' }).click();
+    await expect(page).toHaveURL(/invoice=/);
+    await expect(page.getByRole('dialog')).toContainText('Stand-in Supplier Ltd');
+
+    await page.goto('/invoices');
+    await page.getByRole('button', { name: 'Add invoice' }).click();
+    dialog = page.getByRole('dialog');
+    await dialog.getByLabel('Choose invoice files').setInputFiles(pdf('twice.pdf'));
+    await dialog.getByRole('button', { name: 'Add 1 invoice' }).click();
+    const files = dialog.getByRole('list', { name: 'Files' });
+    await expect(files).toContainText('already in your invoices as E2E-UP-');
+    // Nothing to try again: the invoice is already there.
+    await expect(dialog.getByRole('button', { name: 'Try again' })).toHaveCount(0);
+    await expect(dialog).toBeVisible();
   });
 
   test('a draft that was just added can be deleted', async ({ page }) => {
@@ -217,6 +239,23 @@ test.describe('moving an invoice through its lifecycle', () => {
       await expect(match).not.toContainText('Matched to a bank transaction');
       expect(await readTxnInvoiceId(borrowed.id)).toBeUndefined();
       expect((await readInvoice(inv.overduePurchase))?.status).toBe('OPEN');
+    } finally {
+      await borrowed.restore();
+    }
+  });
+
+  test('a draft is offered its likely payment, with why it fits', async ({ page }) => {
+    // INV-ML-1001 is a £1,200 draft: make one transaction look like its payment.
+    const borrowed = await borrowTransaction('out', 1200, 'Mill Lane Textiles');
+    try {
+      const drawer = await openInvoice(page, inv.draftPurchase, 'review');
+      const match = drawer.getByRole('region', { name: 'Payment match' });
+      await expect(match).toContainText('Not matched yet');
+      await match.getByRole('button', { name: 'Match a payment' }).click();
+      const offer = match.locator('li', { hasText: 'Mill Lane Textiles' });
+      await expect(offer).toContainText('£1,200.00');
+      await expect(offer).toContainText('Exact amount');
+      await expect(offer.getByRole('button', { name: /^Match Mill Lane Textiles/ })).toBeVisible();
     } finally {
       await borrowed.restore();
     }

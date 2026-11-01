@@ -21,7 +21,7 @@ import { Segmented } from '~/components/ui/segmented';
 import { cn } from '~/lib/utils';
 
 type Direction = 'auto' | 'SALE' | 'PURCHASE';
-type Status = 'queued' | 'uploading' | 'done' | 'error';
+type Status = 'queued' | 'uploading' | 'done' | 'error' | 'duplicate';
 
 interface Item {
   id: number;
@@ -108,13 +108,26 @@ export function AddInvoiceDialog({
           invoiceId?: string;
           invoiceNumber?: string | null;
           counterparty?: string | null;
+          paymentMatched?: boolean;
         };
+        // Already in the register: nothing was added, and trying again would not change that.
+        if (response.status === 409) {
+          failed = true;
+          patch(item.id, { status: 'duplicate', message: result.error ?? 'Already added' });
+          continue;
+        }
         if (!result.ok || !result.invoiceId) throw new Error(result.error ?? 'Upload failed');
         created.push(result.invoiceId);
         patch(item.id, {
           status: 'done',
           invoiceId: result.invoiceId,
-          message: [result.counterparty, result.invoiceNumber].filter(Boolean).join(' · '),
+          message: [
+            result.counterparty,
+            result.invoiceNumber,
+            result.paymentMatched && 'matched to its payment',
+          ]
+            .filter(Boolean)
+            .join(' · '),
         });
       } catch (error) {
         failed = true;
@@ -214,6 +227,13 @@ export function AddInvoiceDialog({
                     size={18}
                     weight="fill"
                     className="shrink-0 text-income"
+                    aria-hidden
+                  />
+                ) : item.status === 'duplicate' ? (
+                  <WarningCircle
+                    size={18}
+                    weight="fill"
+                    className="shrink-0 text-accent-text"
                     aria-hidden
                   />
                 ) : item.status === 'error' ? (

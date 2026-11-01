@@ -121,7 +121,7 @@ platform the extraction thinks an uploaded invoice was paid through.
 ### Payments
 
 `invoice_payments` links an invoice to the transactions that paid it (amount and currency of
-each, and `matched_by`: `user`, `reconciliation`, `sync` or `backfill`). A transaction pays one
+each, and `matched_by`: `user`, `reconciliation`, `sync`, `backfill` or `auto`). A transaction pays one
 invoice. `InvoiceService.link_payment` and `unlink_payment` (`POST` and
 `DELETE /accounting/invoices/{id}/payments[/{transaction_id}]`) are the only writers; they refuse
 a transaction in the wrong direction (money in pays a sale, money out a purchase), left out of the
@@ -133,6 +133,30 @@ removing the last one makes it `OPEN` again. A payment in another currency canno
 it counts as paid. A draft keeps its place in To review when a payment is linked, and finalising
 it goes straight to what its links say. Marking paid by hand is for money with no transaction
 behind it.
+
+### Matching an upload to its payment
+
+`services/invoice_matching.py` scores the business's transactions against an upload: the right
+direction and currency, counted in the books, not paying another invoice, from 15 days before
+the invoice date to 120 after, and either within 10% of the total or carrying the invoice number
+(a part payment). It scores up the invoice number on the transaction (its text or provider data,
+punctuation aside), the exact amount, the counterparty's name (a long word on its first six
+letters, for cut-short card merchants) and a close date. Each candidate says why it fits.
+
+A candidate is **confident** when it carries the invoice number and the exact amount. When
+exactly one is, the upload is linked to it automatically (`matched_by = 'auto'`); otherwise the
+drawer offers the candidates, drafts included (`GET /accounting/invoices/{id}/payment-candidates`).
+Matching runs on upload and after each Revolut or PayPal sync (`match_invoice_payments`, also
+`POST /accounting/invoices/match` on demand) for every upload that is a draft, open or overdue
+with no payment linked. That pass first removes automatic links whose transaction has since been
+excluded (the PayPal clean-up excludes a PayPal payment a Revolut one covers), so the next match
+finds the one that counts; a person's links are never touched. Against the 35 linked uploads in
+production (2026-11-01) it chose the linked payment for 31 automatically, put it first for the
+other 4, and chose a wrong one for none.
+
+An upload is refused (409, nothing written) when it is the same file as one already held (its
+SHA-256, `invoices.file_sha256`, checked before the model reads it) or carries the same number as
+an invoice from the same counterparty (`same_number`: case and punctuation aside).
 
 Before `invoice_payments`, a match was the invoice number written into the transaction's
 `metadata.invoice_id`, the field providers use for their own references. The migration copied

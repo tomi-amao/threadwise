@@ -218,6 +218,10 @@ test.describe('invoices', () => {
     await expect(drawer.getByRole('region', { name: 'Next step' })).toContainText(
       'matched to a bank transaction'
     );
+    // It was matched on upload, because its number and amount agree with the payment.
+    await expect(drawer.getByRole('region', { name: 'Payment match' })).toContainText(
+      'Matched automatically: the invoice number and the amount agree.'
+    );
     await expect(drawer.getByRole('link', { name: /View the transaction/ })).toHaveAttribute(
       'href',
       /\/transactions\?transactionId=/

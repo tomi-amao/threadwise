@@ -19,8 +19,9 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 
 from ...normalization.utils import extract_rows
+from ...services import invoice_matching
 from ...services.invoice_rules import VALID_STATUSES, InvoiceRuleError
-from ...services.invoice_service import invoice_service
+from ...services.invoice_service import DuplicateInvoiceError, invoice_service
 from ...services.journal_service import JournalError, journal_service
 from ...services.paypal_cleaning_service import paypal_cleaning_service
 from ...services.reconciliation_service import reconciliation_service
@@ -684,9 +685,12 @@ async def process_invoice(
     5. Invoice line items created (with GL account resolved from chart of accounts)
 
     The invoice is created as a DRAFT. Invoices never post to the ledger; the
-    transaction that pays one is what gets journaled.
+    transaction that pays one is what gets journaled. It is then matched to its payment
+    when one transaction carries its number and exact amount (``payment_match``).
 
-    Returns the invoice, contact, line items and extraction summary.
+    Returns the invoice, contact, line items, extraction summary and payment match. A
+    duplicate (the same file, or the same number from the same counterparty) is refused
+    with a 409 naming the invoice already held.
     """
     try:
         content = await file.read()
@@ -702,6 +706,8 @@ async def process_invoice(
             invoice_type_override=invoice_type,
         )
         return result
+    except DuplicateInvoiceError as e:  # before ValueError: it is a subclass
+        raise HTTPException(status_code=409, detail=str(e))
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
     except Exception as e:
@@ -803,6 +809,55 @@ class LinkPaymentRequest(BaseModel):
     transaction_id: str = Field(
         ..., description="The financial transaction that paid it"
     )
+
+
+@router.get(
+    "/invoices/{invoice_id}/payment-candidates", dependencies=[Depends(owned_invoice)]
+)
+async def invoice_payment_candidates(invoice_id: str, entity_id: str):
+    """The transactions most likely to be this invoice's payment, best first.
+
+    Each says why it fits (the invoice number on it, the exact amount, the counterparty's
+    name, how far from the invoice date) and whether it is ``confident`` (number and exact
+    amount). Drafts included. Reads only.
+    """
+    try:
+        candidates = await invoice_matching.candidates_for(
+            UUID(entity_id), UUID(invoice_id)
+        )
+        return {"candidates": candidates}
+    except Exception as e:
+        logger.error(f"Error finding payment candidates: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class MatchInvoicesRequest(BaseModel):
+    entity_id: str
+
+
+@router.post("/invoices/match")
+async def match_invoices(request: MatchInvoicesRequest):
+    """Match every unlinked upload to its payment, in the background.
+
+    Runs the same pass as after each Revolut or PayPal sync (``invoices/match.requested``):
+    automatic links whose transaction has since been excluded are removed, then each
+    unlinked upload is linked when its payment is confident and the only one.
+    """
+    import inngest as inngest_sdk
+
+    from ...integrations.inngest import get_client
+
+    try:
+        await get_client().send(
+            inngest_sdk.Event(
+                name="invoices/match.requested",
+                data={"entity_id": request.entity_id},
+            )
+        )
+        return {"entity_id": request.entity_id, "status": "triggered"}
+    except Exception as e:
+        logger.error(f"Error triggering invoice matching: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/invoices/{invoice_id}/payments", dependencies=[Depends(owned_invoice)])

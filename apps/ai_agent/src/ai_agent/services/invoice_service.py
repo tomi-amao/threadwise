@@ -14,7 +14,9 @@ do they touch stock: what a line bought is shown on the invoice, and nothing is 
 
 import asyncio
 import base64
+import hashlib
 import logging
+import re
 from typing import Any, Dict, List, Literal, NamedTuple, Optional, Tuple, cast
 from uuid import UUID
 
@@ -185,6 +187,21 @@ def document_part(file_content: bytes, mime_type: str) -> Dict[str, Any]:
             "data": b64,
         }
     return {"type": "image_url", "image_url": {"url": f"data:{mime_type};base64,{b64}"}}
+
+
+class DuplicateInvoiceError(InvoiceRuleError):
+    """The upload is an invoice the register already holds: the same file, or the same
+    number from the same counterparty."""
+
+    def __init__(self, message: str, invoice_id: str):
+        super().__init__(message)
+        self.invoice_id = invoice_id
+
+
+def same_number(a: Optional[str], b: Optional[str]) -> bool:
+    """Invoice numbers compared as people write them: case, spaces and punctuation aside."""
+    squash = lambda s: re.sub(r"[^0-9a-z]", "", (s or "").lower())  # noqa: E731
+    return bool(squash(a)) and squash(a) == squash(b)
 
 
 class ProductCatalogue(NamedTuple):
@@ -517,6 +534,7 @@ class InvoiceService:
         origin: str = "upload",
         external_id: Optional[str] = None,
         attachment_id: Optional[str] = None,
+        file_sha256: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Persist an invoice record to the database.
 
@@ -576,6 +594,7 @@ class InvoiceService:
             "origin": origin,
             "external_id": external_id,
             "attachment_id": attachment_id,
+            "file_sha256": file_sha256,
         }
 
         result = await asyncio.to_thread(
@@ -762,6 +781,11 @@ class InvoiceService:
             2. Contact upsert (counterparty only, never our own entity)
             3. Invoice creation (source = AI-detected platform or 'manual')
             4. Line item creation (with GL account resolution from CoA)
+            5. Matching to its payment (``invoice_matching.auto_match``): linked only when
+               a transaction carries the invoice number and the exact amount
+
+        A duplicate is refused with DuplicateInvoiceError before anything is written: the
+        same file (checked before the model reads it) or the same counterparty and number.
 
         Args:
             entity_id: Business entity UUID
@@ -771,8 +795,12 @@ class InvoiceService:
             file_path: Supabase storage path (e.g. "entity_id/timestamp-name.pdf")
 
         Returns:
-            { invoice, contact, line_items, extraction }
+            { invoice, contact, line_items, extraction, payment_match }
         """
+        # The same file again is refused before the model is paid to read it.
+        file_sha256 = hashlib.sha256(file_content).hexdigest()
+        await self._refuse_duplicate_file(entity_id, file_sha256)
+
         # Step 0: Fetch entity + CoA for AI context
         entity = await self._fetch_entity(entity_id)
         entity_name: str = (
@@ -819,6 +847,9 @@ class InvoiceService:
             entity_id, extracted.counterparty, contact_type
         )
         logger.info(f"Contact upserted: {contact['id']} ({contact['name']})")
+        await self._refuse_duplicate_number(
+            entity_id, UUID(contact["id"]), extracted.invoice_number
+        )
 
         # Determine source label: prefer AI-detected platform, fall back to 'manual'
         source_label = extracted.payment_source or "manual"
@@ -830,6 +861,7 @@ class InvoiceService:
             UUID(contact["id"]),
             source=source_label,
             file_path=file_path,
+            file_sha256=file_sha256,
         )
         logger.info(f"Invoice created: {invoice['id']} (source: {source_label})")
 
@@ -844,10 +876,21 @@ class InvoiceService:
         )
         logger.info(f"Created {len(line_items)} line items")
 
+        # Step 5: Match it to its payment, if one confidently fits. A failure here never
+        # fails the upload: the invoice is in, and is matched again after the next sync.
+        from .invoice_matching import auto_match
+
+        try:
+            payment_match = await auto_match(entity_id, UUID(invoice["id"]))
+        except Exception as exc:
+            logger.warning(f"Matching invoice {invoice['id']} failed: {exc}")
+            payment_match = None
+
         return {
             "invoice": invoice,
             "contact": contact,
             "line_items": line_items,
+            "payment_match": payment_match,
             "extraction": {
                 "invoice_type": extracted.invoice_type,
                 "payment_source": extracted.payment_source,
@@ -855,6 +898,45 @@ class InvoiceService:
                 "invoice_number": extracted.invoice_number,
             },
         }
+
+    async def _refuse_duplicate_file(self, entity_id: UUID, file_sha256: str) -> None:
+        rows = extract_rows(
+            await asyncio.to_thread(
+                lambda: self.client.table("invoices")
+                .select("id, invoice_number")
+                .eq("entity_id", str(entity_id))
+                .eq("file_sha256", file_sha256)
+                .limit(1)
+                .execute()
+            )
+        )
+        if rows:
+            raise DuplicateInvoiceError(
+                f"This file is already in your invoices as {rows[0]['invoice_number']}.",
+                rows[0]["id"],
+            )
+
+    async def _refuse_duplicate_number(
+        self, entity_id: UUID, counterparty_id: UUID, invoice_number: Optional[str]
+    ) -> None:
+        if not invoice_number:
+            return
+        rows = extract_rows(
+            await asyncio.to_thread(
+                lambda: self.client.table("invoices")
+                .select("id, invoice_number")
+                .eq("entity_id", str(entity_id))
+                .eq("counterparty_id", str(counterparty_id))
+                .execute()
+            )
+        )
+        for row in rows:
+            if same_number(row.get("invoice_number"), invoice_number):
+                raise DuplicateInvoiceError(
+                    f"Invoice {row['invoice_number']} from this supplier or customer is "
+                    "already in your invoices.",
+                    row["id"],
+                )
 
     # =========================================================================
     # QUERY HELPERS
@@ -1028,7 +1110,7 @@ class InvoiceService:
         entity_id: UUID,
         invoice_id: UUID,
         transaction_id: UUID,
-        matched_by: Literal["user", "reconciliation", "sync"] = "user",
+        matched_by: Literal["user", "reconciliation", "sync", "auto"] = "user",
     ) -> Dict[str, Any]:
         """Record that a transaction paid this invoice, then set the status it implies.
 

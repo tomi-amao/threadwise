@@ -4,6 +4,7 @@
  *
  *   POST   /accounting/inventory/disposal          record a gift or write-off (Inventory)
  *   POST   /accounting/invoices/process            "read" an uploaded invoice into a draft
+ *   GET    /accounting/invoices/{id}/payment-candidates  likely payments, with why they fit
  *   PATCH  /accounting/invoices/{id}/status        move an invoice through its lifecycle
  *   PATCH  /accounting/invoices/{id}               notes, direction, line accounts, what lines bought
  *   DELETE /accounting/invoices/{id}               remove a draft
@@ -29,6 +30,7 @@
  * Every route answers only a request carrying a live Supabase user token, as the real agent does.
  */
 
+import { createHash } from 'node:crypto';
 import { createServer } from 'node:http';
 import { Readable } from 'node:stream';
 import { createClient } from '@supabase/supabase-js';
@@ -80,6 +82,22 @@ async function processInvoice(
   if (file.name.includes('unreadable')) {
     return send(res, 422, { detail: 'Could not read any invoice data from this document' });
   }
+  // The same file twice is refused, as the agent does (by the file's SHA-256).
+  const sha256 = createHash('sha256')
+    .update(Buffer.from(await file.arrayBuffer()))
+    .digest('hex');
+  const { data: same } = await supabase
+    .from('invoices')
+    .select('invoice_number')
+    .eq('entity_id', entityId)
+    .eq('file_sha256', sha256)
+    .limit(1)
+    .maybeSingle();
+  if (same) {
+    return send(res, 409, {
+      detail: `This file is already in your invoices as ${same.invoice_number}.`,
+    });
+  }
   const type = form.get('invoice_type') === 'SALE' ? 'SALE' : 'PURCHASE';
   const name = type === 'SALE' ? 'Stand-in Customer Ltd' : 'Stand-in Supplier Ltd';
 
@@ -121,6 +139,7 @@ async function processInvoice(
       due_date: new Date(Date.now() + 30 * 86_400_000).toISOString(),
       source: 'manual',
       file_path: String(form.get('file_path') ?? '') || null,
+      file_sha256: sha256,
     })
     .select('id, invoice_number, invoice_type')
     .single();
@@ -133,7 +152,73 @@ async function processInvoice(
     vat_rate: 0.2,
     tax_code: 'STANDARD',
   });
-  send(res, 200, { invoice, contact, line_items: [], extraction: { confidence_score: 0.93 } });
+  send(res, 200, {
+    invoice,
+    contact,
+    line_items: [],
+    extraction: { confidence_score: 0.93 },
+    payment_match: null,
+  });
+}
+
+/**
+ * Likely payments for an invoice, as the agent scores them (services/invoice_matching.py),
+ * simplified: the right direction and currency, counted in the books, not paying another
+ * invoice, within 10% of the total; the invoice number counts when it is the transaction's
+ * PayPal reference. No date window. Best first.
+ */
+async function paymentCandidates(res: import('node:http').ServerResponse, id: string) {
+  const { data: invoice } = await supabase
+    .from('invoices')
+    .select('entity_id, invoice_number, invoice_type, status, currency, gross_amount')
+    .eq('id', id)
+    .maybeSingle();
+  if (!invoice) return send(res, 404, { detail: `Invoice not found: ${id}` });
+  if (['CANCELLED', 'VOID'].includes(invoice.status)) return send(res, 200, { candidates: [] });
+  const total = Number(invoice.gross_amount);
+  const { data: rows } = await supabase
+    .from('financial_transactions')
+    .select('id, occurred_at, description, counterparty_name, amount, currency_code, metadata')
+    .eq('entity_id', invoice.entity_id)
+    .eq('direction', invoice.invoice_type === 'SALE' ? 'in' : 'out')
+    .eq('currency_code', invoice.currency)
+    .is('excluded_reason', null)
+    .gte('amount', total * 0.9)
+    .lte('amount', total * 1.1)
+    .limit(200);
+  const ids = (rows ?? []).map(r => r.id as string);
+  const { data: taken } = ids.length
+    ? await supabase
+        .from('invoice_payments')
+        .select('financial_transaction_id')
+        .in('financial_transaction_id', ids)
+    : { data: [] };
+  const busy = new Set((taken ?? []).map(t => t.financial_transaction_id as string));
+  const candidates = (rows ?? [])
+    .filter(r => !busy.has(r.id as string))
+    .map(r => {
+      const amount = Number(r.amount);
+      const exact = Math.abs(amount - total) < 0.005;
+      const number =
+        (r.metadata as { invoice_id?: string } | null)?.invoice_id === invoice.invoice_number;
+      return {
+        transaction_id: r.id,
+        occurred_at: r.occurred_at,
+        description: r.description,
+        counterparty: r.counterparty_name,
+        amount,
+        currency: r.currency_code,
+        reasons: [
+          ...(number ? ['Invoice number on the transaction'] : []),
+          exact ? 'Exact amount' : 'Amount within 10%',
+        ],
+        confident: number && exact,
+        score: (number ? 50 : 0) + (exact ? 30 : 15) - Math.abs(amount - total) / total,
+      };
+    })
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 8);
+  send(res, 200, { candidates });
 }
 
 async function setStatus(
@@ -435,7 +520,7 @@ createServer(async (req, res) => {
   }
 
   const invoiceRoute =
-    /^\/accounting\/invoices\/([0-9a-f-]{36})(\/status|\/payments(?:\/[0-9a-f-]{36})?)?(\?.*)?$/.exec(
+    /^\/accounting\/invoices\/([0-9a-f-]{36})(\/status|\/payment-candidates|\/payments(?:\/[0-9a-f-]{36})?)?(\?.*)?$/.exec(
       req.url ?? ''
     );
   if (req.method === 'POST' && req.url === '/accounting/invoices/process') {
@@ -444,6 +529,7 @@ createServer(async (req, res) => {
   if (invoiceRoute) {
     const [, id, suffix] = invoiceRoute;
     if (req.method === 'PATCH' && suffix === '/status') return setStatus(req, res, id);
+    if (req.method === 'GET' && suffix === '/payment-candidates') return paymentCandidates(res, id);
     if (req.method === 'PATCH' && !suffix) return updateInvoice(req, res, id);
     if (req.method === 'DELETE' && !suffix) return deleteInvoice(res, id);
     if (req.method === 'POST' && suffix === '/payments') return linkPayment(req, res, id);
