@@ -503,6 +503,26 @@ export async function restoreJournals(before: JournalSnapshot): Promise<void> {
   }
 }
 
+/** The journals of the payment matched to an invoice, live ones first (for splits). */
+export async function readPaymentJournals(invoiceNumber: string) {
+  const [invoice] = await rest<{ id: string }[]>(
+    'GET',
+    'invoices',
+    `select=id&invoice_number=eq.${encodeURIComponent(invoiceNumber)}`
+  );
+  const [link] = await rest<{ financial_transaction_id: string }[]>(
+    'GET',
+    'invoice_payments',
+    `select=financial_transaction_id&invoice_id=eq.${invoice.id}`
+  );
+  const journals = await rest<{ id: string; journal_type: string; status: string }[]>(
+    'GET',
+    'journals',
+    `select=id,journal_type,status&source_type=eq.financial_transaction&source_id=eq.${link.financial_transaction_id}`
+  );
+  return journals.sort((a, b) => Number(a.status === 'reversed') - Number(b.status === 'reversed'));
+}
+
 export async function readJournalsByDescription(description: string) {
   return rest<{ id: string; status: string; source_type: string | null }[]>(
     'GET',

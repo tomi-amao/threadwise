@@ -30,6 +30,7 @@ import type {
   InvoiceRow,
   MatchedBy,
   PaymentCandidate,
+  SplitProposal,
 } from '~/types/invoice';
 
 const CONTACT_COLUMNS = 'id, name, company_name, email, contact_type';
@@ -131,7 +132,10 @@ export async function getInvoiceDetail(
     readGlAccounts(user),
     readProducts(user, entityId),
   ]);
-  const candidates = matched ? [] : await findPaymentCandidates(request, invoice);
+  const [candidates, splits] = await Promise.all([
+    matched ? [] : findPaymentCandidates(request, invoice),
+    matched && invoice.invoice_type === 'PURCHASE' ? findSplitProposals(request, invoice) : [],
+  ]);
 
   return {
     invoice,
@@ -139,6 +143,7 @@ export async function getInvoiceDetail(
     matched_transaction_id: matched?.transactionId ?? null,
     matched_by: matched?.matchedBy ?? null,
     payment_candidates: candidates,
+    split_proposals: splits,
     gl_accounts: accounts,
     products,
   };
@@ -234,6 +239,28 @@ export async function findPaymentCandidates(
   } catch (error) {
     console.warn('Payment suggestions unavailable:', error);
     return [];
+  }
+}
+
+/**
+ * For each payment matched to a purchase: how its journal would be split by the invoice's lines,
+ * or that it already is, or why it cannot be (services/invoice_split.py). Nothing is stored by
+ * asking. null when the agent cannot be reached, so the drawer can say so rather than show
+ * nothing, which would read as "there is no split".
+ */
+export async function findSplitProposals(
+  request: Request,
+  invoice: InvoiceRow
+): Promise<SplitProposal[] | null> {
+  try {
+    const result = await callAgent<{ proposals: SplitProposal[] }>(
+      `/accounting/invoices/${invoice.id}/split?entity_id=${encodeURIComponent(invoice.entity_id)}`,
+      await requestAccessToken(request)
+    );
+    return result.proposals;
+  } catch (error) {
+    console.warn('Journal split unavailable:', error);
+    return null;
   }
 }
 

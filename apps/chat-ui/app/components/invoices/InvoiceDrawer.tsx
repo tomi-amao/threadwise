@@ -3,11 +3,13 @@
  *
  * One invoice, from upload to payment, in one place (replaces three modals). The top of the
  * drawer is always the next step: a draft is reviewed and finalised, an open invoice is marked
- * paid, and so on. Below are the facts, the lines with their accounts, the stock decisions for
- * a purchase, the document and the notes.
+ * paid, and so on. Below are the facts, the lines with their accounts, what a purchase bought,
+ * the document and the notes.
  *
  * Invoices are documents: no status change posts to the books. The ledger follows the bank or
- * payment transaction that settles an invoice, which is why matching one is worth doing.
+ * payment transaction that settles an invoice, which is why matching one is worth doing: once
+ * matched, a purchase's lines can split its payment's journal across their accounts
+ * (SplitSection), after the person approves it.
  *
  * A synced invoice (sent from Revolut, or read from a Revolut receipt) has no status buttons:
  * its status is Revolut's, or it was paid by the payment its receipt is on. One read from a
@@ -40,6 +42,7 @@ import { cn } from '~/lib/utils';
 import { PaymentMatch } from './PaymentMatch';
 import { BoughtSection } from './BoughtSection';
 import { PaidOutsideBankForm } from './PaidOutsideBank';
+import { SplitSection } from './SplitSection';
 import {
   DIRECTION,
   DOCUMENT_ACTION,
@@ -566,6 +569,26 @@ function Body({
           }
           onUnmatch={id =>
             run('match', { intent: 'unmatchPayment', transactionId: id }, () => 'Match removed')
+          }
+        />
+      )}
+
+      {!isSale && !dead && matched_transaction_id && (
+        <SplitSection
+          proposals={detail.split_proposals}
+          invoiceNumber={invoice.invoice_number}
+          invoiceCurrency={invoice.currency}
+          lines={lines}
+          busy={busy !== null}
+          onApply={id =>
+            run(
+              'split',
+              { intent: 'split', transactionId: id },
+              () => 'Journal split by the invoice'
+            )
+          }
+          onUndo={id =>
+            run('split', { intent: 'undoSplit', transactionId: id }, () => 'Split undone')
           }
         />
       )}

@@ -14,8 +14,11 @@ import {
   readInvoice,
   readTxnInvoiceId,
   readLineAccount,
+  readPaymentJournals,
   restoreInvoices,
+  restoreJournals,
   snapshotInvoices,
+  snapshotJournals,
   type InvoiceSnapshot,
 } from './helpers/db';
 
@@ -458,5 +461,53 @@ test.describe('synced invoices', () => {
     await expect(page.getByText('Invoice removed')).toBeVisible();
     await expect(page).not.toHaveURL(/invoice=/);
     expect(await readInvoice(number)).toBeNull();
+  });
+});
+
+test.describe("splitting a payment's journal by the invoice", () => {
+  test('the split replaces the journal, the transaction says so, and undo puts it back', async ({
+    page,
+  }) => {
+    const journals = await snapshotJournals();
+    try {
+      const live = async () =>
+        (await readPaymentJournals(inv.split.invoice))
+          .filter(j => j.status !== 'reversed')
+          .map(j => `${j.journal_type}:${j.status}`);
+      expect(await live()).toEqual(['expense:posted']);
+
+      const drawer = await openInvoice(page, inv.split.invoice, 'paid');
+      const books = drawer.getByRole('region', { name: 'Payment journal' });
+      await books.getByRole('button', { name: 'Split the journal' }).click();
+      await expect(page.getByText('Journal split by the invoice')).toBeVisible();
+      await expect(books).toContainText('Split by this invoice');
+      await expect(books.getByRole('list', { name: 'Split' }).getByRole('listitem')).toHaveCount(
+        inv.split.lines.length
+      );
+      // One journal in the books for the payment: the split, with the expense reversed.
+      expect(await live()).toEqual(['invoice_split:posted']);
+
+      // The transaction's own drawer shows the split and points back to the invoice.
+      await drawer.getByRole('link', { name: /View the transaction/ }).click();
+      const txn = page.getByRole('dialog');
+      await expect(txn).toContainText('Split across the lines of the invoice it paid');
+      await expect(txn.getByRole('link', { name: `invoice ${inv.split.invoice}` })).toBeVisible();
+      await txn.getByRole('link', { name: `invoice ${inv.split.invoice}` }).click();
+
+      const again = page.getByRole('dialog');
+      await again
+        .getByRole('region', { name: 'Payment journal' })
+        .getByRole('button', { name: 'Undo the split' })
+        .click();
+      await expect(page.getByText('Split undone')).toBeVisible();
+      await expect(
+        again.getByRole('region', { name: 'Payment journal' }).getByRole('button', {
+          name: 'Split the journal',
+        })
+      ).toBeVisible();
+      expect(await live()).toEqual(['expense:posted']);
+    } finally {
+      await restoreJournals(journals);
+    }
   });
 });

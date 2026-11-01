@@ -10,6 +10,8 @@ const gbp0 = (n: number) =>
     maximumFractionDigits: 0,
   }).format(n);
 const num = (n: number) => n.toLocaleString('en-GB');
+const gbp = (n: number) =>
+  new Intl.NumberFormat('en-GB', { style: 'currency', currency: 'GBP' }).format(n);
 
 const table = (page: Page) => page.getByRole('region', { name: 'Invoices' });
 const row = (page: Page, number: string) => table(page).locator('tr', { hasText: number });
@@ -230,6 +232,27 @@ test.describe('invoices', () => {
     await expect(drawer.getByRole('button', { name: /^Delete/ })).toHaveCount(0);
   });
 
+  test("a matched purchase shows its payment's journal and the split its lines suggest", async ({
+    page,
+  }) => {
+    const drawer = await openInvoice(page, inv.split.invoice, 'paid');
+    const books = drawer.getByRole('region', { name: 'Payment journal' });
+    await expect(books).toContainText('The payment is journaled to 1033');
+    const split = books.getByRole('list', { name: 'Split' }).getByRole('listitem');
+    await expect(split).toHaveCount(inv.split.lines.length);
+    for (const line of inv.split.lines) {
+      const shown = split.filter({ hasText: line.description });
+      await expect(shown).toContainText(line.account);
+      await expect(shown).toContainText(gbp(line.amount));
+    }
+    await expect(books).toContainText('keeps the payment’s date');
+    await page.keyboard.press('Escape');
+
+    // A sale has nothing to split: its payment is income, journaled from the bank feed.
+    const sale = await openInvoice(page, inv.revolutRequest, 'paid');
+    await expect(sale.getByRole('region', { name: 'Payment journal' })).toHaveCount(0);
+  });
+
   test('a void invoice says it stays on record and can be deleted; a live one cannot', async ({
     page,
   }) => {
@@ -415,6 +438,11 @@ test.describe('invoices', () => {
     const overdue = await openInvoice(page, inv.overduePurchase, 'open');
     await overdue.getByRole('button', { name: 'Paid without the bank' }).click();
     await scan('paid without the bank form');
+    await page.keyboard.press('Escape');
+
+    const split = await openInvoice(page, inv.split.invoice, 'paid');
+    await expect(split.getByRole('button', { name: 'Split the journal' })).toBeVisible();
+    await scan('journal split proposal');
     await page.keyboard.press('Escape');
 
     await openInvoice(page, inv.revolutRequest, 'paid');

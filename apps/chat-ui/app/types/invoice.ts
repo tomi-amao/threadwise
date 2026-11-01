@@ -123,6 +123,44 @@ export interface PaymentCandidate {
   confident: boolean;
 }
 
+/** One line of a journal, as the split shows it (services/invoice_split.py `_shown`). */
+export interface SplitJournalLine {
+  account_id: string;
+  account_number: string | null;
+  account_name: string | null;
+  description: string | null;
+  debit: number;
+  credit: number;
+  currency: string | null;
+  /** On a proposed debit: the invoice line it comes from, and its VAT share. */
+  line_item_id?: string;
+  vat?: number;
+  /** False when the invoice line has no account, so it keeps the payment's. */
+  from_invoice_account?: boolean;
+}
+
+/**
+ * How one matched payment's journal would be split by the invoice's lines (`ready`), that it
+ * already is (`applied`), or why it cannot be (`not_journaled`, `unsupported`, with `reason`).
+ */
+export interface SplitProposal {
+  transaction_id: string;
+  state: 'ready' | 'applied' | 'not_journaled' | 'unsupported';
+  reason: string | null;
+  occurred_at: string | null;
+  payment_amount: number | null;
+  payment_currency: string | null;
+  journal_amount: number | null;
+  journal_currency: string | null;
+  /** The payment as a share of the invoice (0.4 for a 40% deposit); null across currencies. */
+  share_of_invoice: number | null;
+  /** The journal it replaces, and how it stood (a posted expense, or a draft). */
+  replaces: { id: string; journal_type: string; status: string }[];
+  current_lines: SplitJournalLine[];
+  lines: SplitJournalLine[];
+  split_journal_id: string | null;
+}
+
 /** Who matched an invoice to its payment. */
 export type MatchedBy = 'user' | 'reconciliation' | 'sync' | 'backfill' | 'auto';
 
@@ -136,6 +174,11 @@ export interface InvoiceDetail {
   matched_by: MatchedBy | null;
   /** Bank transactions that could be this invoice's payment, nearest in amount first. */
   payment_candidates: PaymentCandidate[];
+  /**
+   * For a purchase with a matched payment: each payment's journal split by the invoice's lines.
+   * Empty when there is nothing to split; null when the agent could not be asked.
+   */
+  split_proposals: SplitProposal[] | null;
   gl_accounts: GlAccountOption[];
   /** The business's products (not archived), to link a line to. */
   products: ProductOption[];

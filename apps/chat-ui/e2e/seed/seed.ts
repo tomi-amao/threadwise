@@ -911,7 +911,11 @@ async function main() {
       contact: 'Mill Lane Textiles',
       issued: 100,
       due: -70,
-      lines: [['Cotton jersey', 50, 22, 0, '1033']],
+      lines: [
+        ['Cotton jersey', 50, 22, 0, '1033'],
+        // On another account than the payment's journal (1033), so the journal can be split.
+        ['Courier', 1, 60, 0, '6300'],
+      ],
     },
     {
       number: 'INV-PP-2999',
@@ -1061,6 +1065,24 @@ async function main() {
     })
   );
 
+  const splitOf = (number: string) => {
+    const spec = invoiceSpecs.find(s => s.number === number)!;
+    const index = Number(Object.keys(MATCHED_PAYMENTS).find(i => MATCHED_PAYMENTS[+i] === number));
+    const payment = Number(txnRows[index].amount);
+    const gross = totalsOf(spec).gross;
+    const [largest, ...rest] = [...spec.lines].sort((a, b) => b[1] * b[2] - a[1] * a[2]);
+    const others = rest.map(([description, q, u, v, account]) => ({
+      description,
+      account: account!,
+      amount: money((payment * q * u * (1 + v)) / gross),
+    }));
+    const kept = money(payment - others.reduce((n, l) => n + l.amount, 0));
+    return {
+      invoice: number,
+      payment,
+      lines: [{ description: largest[0], account: largest[4]!, amount: kept }, ...others],
+    };
+  };
   const base = invoiceSpecs.filter(s => !s.number.startsWith('INV-BULK'));
   const unpaid = (s: SeedInvoice) => ['OPEN', 'PARTIALLY_PAID'].includes(s.status);
   const late = (s: SeedInvoice) => unpaid(s) && s.due !== null && s.due < 0;
@@ -1100,6 +1122,9 @@ async function main() {
     // What a purchase bought: a production run linked to its product.
     boughtInvoice: 'INV-PK-5001',
     boughtProduct: 'Heavy Knit Cardigan',
+    // Its payment's journal split by its lines (services/invoice_split.py): by line gross,
+    // the rounding on the largest line.
+    split: splitOf('INV-ML-0900'),
     receiptInvoice: 'RCPT-RM-0001',
     receiptInvoiceCounterparty: 'Royal Mail Group',
     uploadedCount: invoiceSpecs.filter(s => !s.origin).length,

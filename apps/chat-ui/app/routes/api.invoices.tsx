@@ -9,10 +9,11 @@
  *                               (a Revolut payment request's original, say); it is not read
  * POST intent=setStatus         move the invoice through its lifecycle (nothing is posted)
  * POST intent=update            notes, direction (drafts only) and the GL account of each line
- * POST intent=stock             decide, per purchase line, how it is tracked as stock
  * POST intent=delete            remove a draft, cancelled or void invoice
  * POST intent=matchPayment      link a bank transaction as the invoice's payment (unmatchPayment undoes
  *                               it); the agent then sets paid or part paid from what is linked
+ * POST intent=split             replace a matched payment's journal with its split by the
+ *                               invoice's lines (undoSplit puts the previous journal back)
  *
  * Every invoice is first fetched as the signed-in user (row-level security), so one user can
  * never read or change another's by guessing an id. Rules about *what* may change (lifecycle,
@@ -103,6 +104,9 @@ export async function action({ request }: ActionFunctionArgs) {
       case 'matchPayment':
       case 'unmatchPayment':
         return await matchPayment(request, invoice, form, intent === 'matchPayment');
+      case 'split':
+      case 'undoSplit':
+        return await split(request, invoice, form, intent === 'split');
       default:
         return fail('Unknown action', 400);
     }
@@ -243,6 +247,25 @@ async function matchPayment(
   const token = await requestAccessToken(request);
   const path = `/accounting/invoices/${invoice.id}/payments`;
   await (match
+    ? callAgent(
+        path,
+        token,
+        jsonInit('POST', { entity_id: invoice.entity_id, transaction_id: transactionId })
+      )
+    : callAgent(
+        `${path}/${encodeURIComponent(transactionId)}?entity_id=${encodeURIComponent(invoice.entity_id)}`,
+        token,
+        { method: 'DELETE' }
+      ));
+  return json({ ok: true });
+}
+
+async function split(request: Request, invoice: OwnedInvoice, form: FormData, apply: boolean) {
+  const transactionId = String(form.get('transactionId') ?? '');
+  if (!transactionId) return fail('A transaction id is required', 400);
+  const token = await requestAccessToken(request);
+  const path = `/accounting/invoices/${invoice.id}/split`;
+  await (apply
     ? callAgent(
         path,
         token,

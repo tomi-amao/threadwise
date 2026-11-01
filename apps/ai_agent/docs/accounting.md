@@ -68,6 +68,10 @@ locked accounting period. A split payment counts as journaled, so journal genera
 make it a second expense journal. Changing the transaction's account in its drawer reverses the
 split and journals it afresh, as for any journal.
 
+In the app, the invoice drawer's "In your books" section shows the payment's journal now, the
+split its lines suggest, and Split / Undo (`components/invoices/SplitSection.tsx`); the
+transaction's drawer says when its journal is split and links back to the invoice.
+
 Every journal comes from a money movement (a payment, a bank transaction, a stock movement) or a
 manual adjustment. Invoices are not a source: see [Invoices](#invoices).
 
