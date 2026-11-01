@@ -736,3 +736,89 @@ export async function deleteTestFeedback(): Promise<void> {
 export async function insertFeedback(row: Record<string, unknown>): Promise<void> {
   await rest('POST', 'assistant_feedback', '', row);
 }
+
+// ─── Transactions ─────────────────────────────────────────────────────
+
+/** The external id of the move addInternalMove writes, so removeInternalMove can find it. */
+export const INTERNAL_MOVE_ID = 'e2e-internal-move';
+
+/**
+ * A move between the seeded business's two bank accounts, stored as the sync stores one:
+ * excluded, flagged internal, with both legs. The newest transaction, so it is the first row.
+ */
+export async function addInternalMove(amount: number): Promise<string> {
+  const accounts = await rest<{ id: string; entity_id: string; external_account_id: string }[]>(
+    'GET',
+    'bank_accounts',
+    'select=id,entity_id,external_account_id&external_account_id=in.(e2e-bank-1,e2e-bank-2)'
+  );
+  const from = accounts.find(a => a.external_account_id === 'e2e-bank-2');
+  const to = accounts.find(a => a.external_account_id === 'e2e-bank-1');
+  if (!from || !to) throw new Error('The seeded bank accounts are missing');
+  await removeInternalMove();
+  const [row] = await rest<{ id: string }[]>('POST', 'financial_transactions', '', {
+    entity_id: from.entity_id,
+    bank_account_id: from.id,
+    source: 'revolut',
+    external_transaction_id: INTERNAL_MOVE_ID,
+    transaction_type: 'transfer',
+    amount,
+    base_amount: amount,
+    currency_code: 'GBP',
+    base_currency_code: 'GBP',
+    direction: 'out',
+    occurred_at: new Date().toISOString(),
+    description: 'Merchant payout to an internal account',
+    status: 'excluded',
+    excluded_reason: 'Moved between your own Revolut accounts',
+    metadata: {
+      state: 'completed',
+      internal_move: true,
+      legs: [
+        { account_id: 'e2e-bank-2', amount: -amount, currency: 'GBP' },
+        { account_id: 'e2e-bank-1', amount, currency: 'GBP' },
+      ],
+    },
+  });
+  return row.id;
+}
+
+/** The external id of the merchant payment addMerchantPayment writes. */
+export const MERCHANT_PAYMENT_ID = 'e2e-merchant-payment';
+
+/** A Revolut merchant payment with the fee Revolut kept, as the sync stores one. */
+export async function addMerchantPayment(amount: number, fee: number): Promise<string> {
+  const [account] = await rest<{ id: string; entity_id: string }[]>(
+    'GET',
+    'bank_accounts',
+    'select=id,entity_id&external_account_id=eq.e2e-bank-1'
+  );
+  if (!account) throw new Error('The seeded bank account is missing');
+  await removeInternalMove();
+  const [row] = await rest<{ id: string }[]>('POST', 'financial_transactions', '', {
+    entity_id: account.entity_id,
+    bank_account_id: account.id,
+    source: 'revolut',
+    external_transaction_id: MERCHANT_PAYMENT_ID,
+    transaction_type: 'reserve_release',
+    amount,
+    base_amount: amount,
+    currency_code: 'GBP',
+    base_currency_code: 'GBP',
+    direction: 'in',
+    occurred_at: new Date().toISOString(),
+    description: 'Merchant payment',
+    status: 'pending',
+    metadata: { state: 'completed', fee, fee_currency: 'GBP' },
+  });
+  return row.id;
+}
+
+/** Removes what addInternalMove and addMerchantPayment wrote. */
+export async function removeInternalMove(): Promise<void> {
+  await rest(
+    'DELETE',
+    'financial_transactions',
+    `external_transaction_id=in.(${INTERNAL_MOVE_ID},${MERCHANT_PAYMENT_ID})`
+  );
+}

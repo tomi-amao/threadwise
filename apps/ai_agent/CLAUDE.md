@@ -240,6 +240,10 @@ is Inngest-orchestrated, under `integrations/inngest/`:
   The services they call import `integrations.*`, whose `__init__` loads every Inngest
   function, so a sync function imports such a service inside its body, not at module top.
   Details: `docs/data-pipeline.md`.
+- A Revolut transaction whose legs are all the business's own accounts (`revolut_normalizer.
+internal_move_legs`) is stored excluded with `metadata.internal_move`: the normaliser keeps
+  one leg, and from one leg a move between accounts looks like money leaving. A merchant
+  payment's fee is on its leg (`metadata.fee`) and is journaled on the payment itself.
 - `normalization/inngest_functions.py` — the canonical processing path: consumes
   raw events, dispatches to the provider-specific normalizer, persists canonical
   records. Chained via `normalize_after_<provider>_sync` triggers.

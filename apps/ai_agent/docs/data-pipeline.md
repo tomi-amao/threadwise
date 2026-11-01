@@ -139,8 +139,22 @@ writes):
   not arrived yet is tried again on the next run.
 
 Orders are not raw events and are not normalised, so the card has no "Load data". Revolut
-offers no PDF, due date or tax breakdown for these invoices. The acquiring fee is on the order
-(`payments[].fees`) but is not posted yet: merchant receipts are still journaled gross.
+offers no PDF, due date or tax breakdown for these invoices. The acquiring fee is journaled from
+the Business API's merchant payment, which carries it on its leg (see below), not from the order.
+
+## Moves between the business's own Revolut accounts
+
+The normaliser stores a non-exchange transaction from one leg. A move between two of the
+business's accounts has two legs, so stored from one it read as money leaving: a merchant
+payment's settlement (merchant account to a second merchant account) and payout (to the main
+account) would have been journaled as expenses. `internal_move_legs` recognises such a move on
+its own, whenever it arrives: two or more legs, each on an account, none with a counterparty, in
+one currency, adding up to nothing (every payment to or from someone else has one leg). It is
+stored from the side the money left, excluded (`Moved between your own Revolut accounts`), with
+`metadata.internal_move` and the legs; the Transactions page shows it as an "Internal move", with
+its own status filter. Each leg's `fee` is kept as `metadata.fee`; only merchant payments journal
+it so far (card payments abroad carry one too). Migration `20261101000000_revolut_internal_moves`
+applied the same to what was already stored, leaving any move that already had a journal.
 
 The list endpoint's paging is undocumented; `MerchantAdapter.list_orders` pages backwards on
 `to` = the oldest `created_at` seen and stops when a page brings nothing new. The API version

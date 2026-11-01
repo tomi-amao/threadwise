@@ -15,6 +15,7 @@ import {
   ArrowClockwise,
   ArrowLeft,
   ArrowRight,
+  ArrowsLeftRight,
   CaretRight,
   CircleNotch,
   MagnifyingGlass,
@@ -46,6 +47,7 @@ import {
   baseAmount,
   dayKey,
   dayLabel,
+  feeOf,
   filingOf,
   int,
   money,
@@ -94,12 +96,15 @@ function TransactionRow({
 }) {
   const filing = filingOf(txn);
   const excluded = filing === 'excluded';
+  const internal = filing === 'internal';
   const inbound = txn.direction === 'in';
   const foreign = !!txn.base_currency_code && txn.currency_code !== txn.base_currency_code;
+  const fee = feeOf(txn);
   const title = txn.counterparty_name || txn.description || 'No description';
   const subtitle = txn.counterparty_name && txn.description ? txn.description : null;
   const chip = (
-    <Chip tone={FILING[filing].tone} dot>
+    <Chip tone={FILING[filing].tone} dot={!internal}>
+      {internal && <ArrowsLeftRight aria-hidden size={12} weight="bold" />}
       {FILING[filing].label}
     </Chip>
   );
@@ -134,16 +139,35 @@ function TransactionRow({
           <div
             className={cn(
               'tabular-nums',
-              inbound && !excluded && 'text-income',
-              excluded && 'text-muted-foreground line-through'
+              inbound && !excluded && !internal && 'text-income',
+              excluded && 'text-muted-foreground line-through',
+              internal && 'text-muted-foreground'
             )}
           >
-            {inbound ? '+' : '−'}
+            {/* Neither in nor out: the money stayed in the business. */}
+            {internal ? (
+              <ArrowsLeftRight
+                role="img"
+                aria-label="Moved"
+                size={12}
+                weight="bold"
+                className="mr-1 inline"
+              />
+            ) : inbound ? (
+              '+'
+            ) : (
+              '−'
+            )}
             {money(baseAmount(txn), txn.base_currency_code ?? 'GBP')}
           </div>
           {foreign && (
             <div className="font-mono text-xs text-muted-foreground">
               {money(txn.amount, txn.currency_code)}
+            </div>
+          )}
+          {fee && (
+            <div className="font-mono text-xs text-muted-foreground">
+              {money(fee.amount, fee.currency)} fee
             </div>
           )}
         </div>
@@ -372,11 +396,14 @@ export function TransactionsPage() {
           <Segmented
             label="Status"
             value={filters.status || 'all'}
-            onChange={v => update({ status: v === 'all' ? '' : (v as 'active' | 'excluded') })}
+            onChange={v =>
+              update({ status: v === 'all' ? '' : (v as 'active' | 'excluded' | 'internal') })
+            }
             options={[
               { value: 'all', label: 'Any status' },
               { value: 'active', label: 'Active' },
               { value: 'excluded', label: 'Excluded' },
+              { value: 'internal', label: 'Internal moves' },
             ]}
           />
           <NativeSelect

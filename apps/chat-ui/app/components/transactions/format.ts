@@ -43,9 +43,34 @@ export const typeLabel = (type: string): string =>
 
 export const SOURCE_LABEL: Record<string, string> = { revolut: 'Revolut', paypal: 'PayPal' };
 
-export type Filing = 'excluded' | 'journalled' | 'pending';
+/**
+ * The provider's fee on the transaction (metadata.fee), in its own currency: a card payment
+ * abroad is stored in the billed currency, but Revolut charges its fee in the account's.
+ */
+export function feeOf(t: FinancialTransaction): { amount: number; currency: string } | null {
+  const amount = Number(t.metadata?.fee);
+  if (!amount) return null;
+  return {
+    amount,
+    currency: String(t.metadata?.fee_currency ?? t.base_currency_code ?? t.currency_code),
+  };
+}
+
+export type Filing = 'excluded' | 'internal' | 'journalled' | 'pending';
+
+/** The reason the sync gives; a reason someone wrote before it is kept and shown as a note. */
+export const INTERNAL_MOVE_REASON = 'Moved between your own Revolut accounts';
+
+/**
+ * Money moved between the business's own accounts (a merchant payment settling into the main
+ * account): stored excluded, since nothing left the business, but not something a rule or a
+ * person left out, so it is shown as its own thing.
+ */
+export const isInternalMove = (t: FinancialTransaction): boolean =>
+  t.metadata?.internal_move === true;
 
 export function filingOf(t: FinancialTransaction): Filing {
+  if (isInternalMove(t)) return 'internal';
   if (t.excluded_reason) return 'excluded';
   return t.journalised_at ? 'journalled' : 'pending';
 }
@@ -55,6 +80,7 @@ export const FILING: Record<Filing, { label: string; tone: ChipTone }> = {
   journalled: { label: 'Journalled', tone: 'done' },
   pending: { label: 'Pending', tone: 'active' },
   excluded: { label: 'Excluded', tone: 'draft' },
+  internal: { label: 'Internal move', tone: 'plain' },
 };
 
 /** Local calendar day, 'YYYY-MM-DD', used to group rows. */

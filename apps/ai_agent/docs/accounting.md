@@ -25,7 +25,7 @@ Code: `services/journal_service.py` (`JournalService`, the journals), `services/
 | ------------------ | --------------------------------------------------------------------------------------------------------------------------------- | -------------------------------- |
 | Accrual            | A captured payment: debit clearing (net of gateway fees) and bank charges; credit revenue, shipping and tax from the linked order | `create_accrual_journal`         |
 | Settlement         | An inbound gateway payout (Stripe or PayPal to Revolut): debit cash, credit clearing. No fee line (fees were taken at accrual)    | `create_settlement_journal`      |
-| Funding            | An inbound personal or external transfer                                                                                          | `create_funding_journal`         |
+| Funding            | An inbound personal or external transfer; a Revolut merchant payment books its fee (below)                                        | `create_funding_journal`         |
 | Sales receipt      | A direct PayPal sale                                                                                                              | `create_sales_receipt_journal`   |
 | Refund             | An inbound refund transaction                                                                                                     | `create_refund_journal`          |
 | Refund reversal    | A refunded order: reverses its revenue, cost and stock                                                                            | `create_refund_reversal_journal` |
@@ -33,6 +33,14 @@ Code: `services/journal_service.py` (`JournalService`, the journals), `services/
 | Expense            | An outbound bank transaction: debit the resolved expense account, credit cash                                                     | `create_expense_journal`         |
 | Cost of goods sold | A fulfilled order                                                                                                                 | `create_inventory_cogs_journal`  |
 | Disposal           | A gift or write-off of stock: one dated movement plus its journal                                                                 | `record_inventory_disposal`      |
+
+A Revolut merchant payment (`reserve_release`) is a funding journal, and carries Revolut's fee
+when the transaction has one (`metadata.fee`, taken from the leg by the normaliser): debit cash
+with what reached the account, debit 8020 Bank charges with the fee, credit 4030 Wholesale
+revenue with what the customer paid (`merchant_fee`; a foreign payment's fee is scaled to its GBP
+amount). The settlement and payout that take the money on to the main account are moves between
+the business's own accounts, excluded at normalisation, so the one journal is the whole of it.
+Each journal stands on its own, so the order the three arrive in does not matter.
 
 Every journal comes from a money movement (a payment, a bank transaction, a stock movement) or a
 manual adjustment. Invoices are not a source: see [Invoices](#invoices).

@@ -7,8 +7,8 @@
 export interface TxnFilters {
   q: string;
   direction: '' | 'in' | 'out';
-  /** The API only distinguishes active from excluded (not journalled/pending). */
-  status: '' | 'active' | 'excluded';
+  /** The API distinguishes active, excluded and internal moves (not journalled/pending). */
+  status: '' | 'active' | 'excluded' | 'internal';
   type: string;
   source: string;
   from: string;
@@ -32,7 +32,7 @@ export function readFilters(sp: URLSearchParams): TxnFilters {
   return {
     q: sp.get('q') ?? '',
     direction: oneOf(sp.get('direction'), ['', 'in', 'out'] as const, ''),
-    status: oneOf(sp.get('status'), ['', 'active', 'excluded'] as const, ''),
+    status: oneOf(sp.get('status'), ['', 'active', 'excluded', 'internal'] as const, ''),
     type: sp.get('type') ?? '',
     source: sp.get('source') ?? '',
     from: sp.get('from') ?? '',

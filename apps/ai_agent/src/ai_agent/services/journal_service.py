@@ -90,6 +90,32 @@ def _compute_gbp_equivalent(txn: dict, native_amount: Decimal) -> Optional[float
     return round(base_float, 4)
 
 
+def merchant_fee(
+    txn: dict, journal_amount: Decimal, journal_currency: str = "GBP"
+) -> Decimal:
+    """The fee Revolut kept from a merchant payment, in the journal's currency.
+
+    ``metadata.fee`` is in ``metadata.fee_currency`` (the account's). When that is the
+    journal's currency it is used as it is; otherwise (a foreign payment journaled at its GBP
+    base amount) it is scaled by the payment's own rate. A fee that is not less than the
+    payment is not believed and gives 0, so the journal falls back to the gross amount rather
+    than leaving cash at nothing.
+    """
+    meta = txn.get("metadata") or {}
+    fee = Decimal(str(meta.get("fee") or 0))
+    own = Decimal(str(abs(float(txn.get("amount") or 0))))
+    if fee <= 0 or not own:
+        return Decimal(0)
+    fee_currency = str(
+        meta.get("fee_currency") or txn.get("currency_code") or ""
+    ).upper()
+    if fee_currency == journal_currency.upper():
+        scaled = fee.quantize(Decimal("0.01"))
+    else:
+        scaled = (fee * journal_amount / own).quantize(Decimal("0.01"))
+    return scaled if scaled < journal_amount else Decimal(0)
+
+
 class JournalError(Exception):
     """Raised when journal operations fail."""
 
@@ -538,6 +564,14 @@ class JournalService:
             DEBIT  1014/1019/... Cash    = amount
             CREDIT 4020 Revenue          = amount  (general sales receipt)
 
+        Revolut merchant payment (reserve_release) with a fee on it (metadata.fee): the
+        customer paid the amount and Revolut kept the fee, so
+            DEBIT  1014 Cash                 = amount - fee
+            DEBIT  8020 Bank charges         = fee
+            CREDIT 4030 Wholesale revenue    = amount
+        The settlement and payout that move it on to the main account are internal moves,
+        excluded at normalisation, so this journal is the whole of it.
+
         Args:
             force: If True, (re)create even if a journal already exists —
                 see create_accrual_journal's docstring for why this defaults
@@ -629,11 +663,22 @@ class JournalService:
 
         credit_id = await self._get_account_id(entity_id, credit_code)
 
+        fee = (
+            merchant_fee(txn, amount, currency)
+            if txn_type == "reserve_release" and not is_personal
+            else Decimal(0)
+        )
+        fee_id = (
+            await self._get_account_id(entity_id, accts.BANK_CHARGES) if fee else None
+        )
+
         missing = []
         if not cash_id:
             missing.append(cash_code)
         if not credit_id:
             missing.append(credit_code)
+        if fee and not fee_id:
+            missing.append(accts.BANK_CHARGES)
         if missing:
             raise JournalError(
                 f"Missing chart of accounts ({', '.join(missing)}). "
@@ -643,19 +688,31 @@ class JournalService:
         line_items = [
             {
                 "account_id": str(cash_id),
-                "debit": float(amount),
+                "debit": float(amount - fee),
                 "credit": 0,
                 "currency": currency,
                 "description": f"Cash received: {description_text}",
             },
+        ]
+        if fee:
+            line_items.append(
+                {
+                    "account_id": str(fee_id),
+                    "debit": float(fee),
+                    "credit": 0,
+                    "currency": currency,
+                    "description": "Revolut merchant fee",
+                }
+            )
+        line_items.append(
             {
                 "account_id": str(credit_id),
                 "debit": 0,
                 "credit": float(amount),
                 "currency": currency,
                 "description": credit_label,
-            },
-        ]
+            }
+        )
 
         return await self._create_journal(
             entity_id=entity_id,
