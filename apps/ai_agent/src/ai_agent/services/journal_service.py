@@ -1289,13 +1289,14 @@ class JournalService:
     # =========================================================================
 
     # inventory_items.item_type -> the inventory asset account it capitalises
-    # into. Only 'sellable' and 'sample' exist in the data today; trims/
-    # accessories (1034) are coded directly on invoice line items rather than
-    # tracked per inventory_item, so they are not reachable through this path.
+    # into. Samples are never valued (they are counted, not capitalised), so they
+    # have no account here and their disposals post nothing; trims/accessories
+    # (1034) are coded directly on invoice line items rather than tracked per
+    # inventory_item, so they are not reachable through this path.
     _ITEM_TYPE_INVENTORY_ACCOUNT = {
         "sellable": accts.INVENTORY_FINISHED_GOODS,
-        "sample": accts.INVENTORY_SAMPLES,
     }
+    UNVALUED_ITEM_TYPES = frozenset({"sample"})
 
     async def record_inventory_disposal(
         self,
@@ -1318,7 +1319,9 @@ class JournalService:
         ``disposal_type`` is ``'GIFT'`` or ``'WRITE_OFF'``:
             GIFT:      DEBIT 6011 Social Media & Influencer
             WRITE_OFF: DEBIT 5070 COGS — Inventory Write-Downs
-                       CREDIT 1033/1035 Inventory (by the item's item_type)
+                       CREDIT 1033 Inventory — Finished Goods
+
+        A sample is never valued: its disposal is a movement at no cost, with no journal.
 
         The journal is skipped (movement-only) when ``occurred_at`` predates
         :attr:`PERPETUAL_COGS_START` — that period was restated by hand.
@@ -1341,7 +1344,12 @@ class JournalService:
         if not item:
             raise JournalError(f"Inventory item not found: {inventory_item_id}")
 
-        unit_cost = float(item.get("unit_cost") or 0)
+        item_type = str(item.get("item_type") or "")
+        unit_cost = (
+            0.0
+            if item_type in self.UNVALUED_ITEM_TYPES
+            else float(item.get("unit_cost") or 0)
+        )
         movement_date = occurred_at or datetime.now(timezone.utc).isoformat()
 
         movement = await asyncio.to_thread(
@@ -1372,15 +1380,14 @@ class JournalService:
 
         amount = round(abs(quantity) * unit_cost, 2)
         if amount <= 0:
-            # No cost on this item — a real and common state (uncosted legacy
-            # stock). The movement is still recorded for the audit trail; there
+            # No cost on this item: uncosted legacy stock, or a sample (never
+            # valued). The movement is still recorded for the audit trail; there
             # is simply nothing to journal.
             return result
 
         if movement_date[:10] < self.PERPETUAL_COGS_START:
             return result
 
-        item_type = str(item.get("item_type") or "")
         inventory_account = self._ITEM_TYPE_INVENTORY_ACCOUNT.get(
             item_type, accts.INVENTORY_FINISHED_GOODS
         )

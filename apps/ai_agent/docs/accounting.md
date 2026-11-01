@@ -32,7 +32,7 @@ Code: `services/journal_service.py` (`JournalService`, the journals), `services/
 | FX conversion      | A currency conversion between accounts                                                                                            | `create_fx_conversion_journal`   |
 | Expense            | An outbound bank transaction: debit the resolved expense account, credit cash                                                     | `create_expense_journal`         |
 | Cost of goods sold | A fulfilled order                                                                                                                 | `create_inventory_cogs_journal`  |
-| Disposal           | A gift or write-off of stock: one dated movement plus its journal                                                                 | `record_inventory_disposal`      |
+| Disposal           | A gift or write-off of stock: one dated movement plus its journal (a sample: the movement only, as samples are never valued)      | `record_inventory_disposal`      |
 
 A Revolut merchant payment (`reserve_release`) is a funding journal, and carries Revolut's fee
 when the transaction has one (`metadata.fee`, taken from the leg by the normaliser): debit cash
