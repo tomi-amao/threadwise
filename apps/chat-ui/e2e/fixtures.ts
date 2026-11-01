@@ -197,6 +197,9 @@ export interface SeedManifest {
     revolutRequestCounterparty: string;
     revolutRequestGross: number;
     revolutRequestLinesTotal: number;
+    /** A purchase whose one line is a product linked to `boughtProduct`. */
+    boughtInvoice: string;
+    boughtProduct: string;
     /** A supplier invoice read from the receipt on `attachments.transactionId`, paid by it. */
     receiptInvoice: string;
     receiptInvoiceCounterparty: string;

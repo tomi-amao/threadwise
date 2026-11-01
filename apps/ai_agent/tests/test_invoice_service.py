@@ -1,4 +1,4 @@
-"""Tests for the invoice service's lifecycle, deletion, editing and stock decisions.
+"""Tests for the invoice service's lifecycle, deletion, editing and payment links.
 
 The service talks to Supabase and the journal service; both are replaced here with fakes
 so the tests pin down the *decisions* the service makes: what it writes, refuses and
@@ -274,112 +274,6 @@ class TestUpdate:
         service, state = self._updating(monkeypatch, status="PAID")
         run(service.update_invoice(ENTITY, INVOICE, {"notes": "chased"}))
         assert state["invoice_updates"][0][0] == {"notes": "chased"}
-
-
-class TestStockDecisions:
-    def _stocking(self, monkeypatch, recorded=("l1",), **kwargs):
-        service, state = make_service(monkeypatch, **kwargs)
-        state["calls"] = []
-
-        async def create(entity_id, invoice_id, ids, overrides=None):
-            state["calls"].append(("new", ids, overrides))
-            return []
-
-        async def link(entity_id, invoice_id, links):
-            state["calls"].append(("link", links))
-            return {}
-
-        async def track(entity_id, invoice_id, ids, overrides=None):
-            state["calls"].append(("track", ids, overrides))
-            return {}
-
-        async def stock_state(invoice_id, ids):
-            return set(recorded) & set(ids)
-
-        monkeypatch.setattr(service, "create_products_from_line_items", create)
-        monkeypatch.setattr(service, "link_line_items_to_existing_products", link)
-        monkeypatch.setattr(service, "create_inventory_movements_only", track)
-        monkeypatch.setattr(service, "stock_state", stock_state)
-        return service, state
-
-    def test_each_action_goes_to_the_right_step(self, monkeypatch, journals):
-        service, state = self._stocking(monkeypatch, recorded=("l1", "l2"))
-        result = run(
-            service.apply_stock_decisions(
-                ENTITY,
-                INVOICE,
-                [
-                    {
-                        "line_item_id": "l1",
-                        "action": "new",
-                        "name": " Wool Cap ",
-                        "sku": "CAP",
-                        "asset_account_id": "a1",
-                    },
-                    {"line_item_id": "l2", "action": "link", "product_id": "p1"},
-                ],
-            )
-        )
-        kinds = [c[0] for c in state["calls"]]
-        assert kinds == ["new", "link"]
-        assert state["calls"][0][2] == {
-            "l1": {"name": "Wool Cap", "sku": "CAP", "asset_account_id": "a1"}
-        }
-        assert state["calls"][1][1] == [{"line_item_id": "l2", "product_id": "p1"}]
-        assert result["recorded"] == 2 and result["not_recorded"] == []
-
-    def test_expense_lines_do_nothing_and_are_not_reported_missing(
-        self, monkeypatch, journals
-    ):
-        service, state = self._stocking(monkeypatch, recorded=())
-        result = run(
-            service.apply_stock_decisions(
-                ENTITY, INVOICE, [{"line_item_id": "l2", "action": "expense"}]
-            )
-        )
-        assert state["calls"] == []
-        assert result["not_recorded"] == []
-
-    def test_a_line_that_could_not_be_recorded_is_reported(self, monkeypatch, journals):
-        service, _ = self._stocking(monkeypatch, recorded=())
-        result = run(
-            service.apply_stock_decisions(
-                ENTITY, INVOICE, [{"line_item_id": "l1", "action": "track"}]
-            )
-        )
-        assert result["not_recorded"] == ["l1"]
-
-    @pytest.mark.parametrize(
-        "decisions,message",
-        [
-            ([{"line_item_id": "nope", "action": "track"}], "does not belong"),
-            ([{"line_item_id": "l1", "action": "link"}], "Choose a product"),
-            ([{"line_item_id": "l1", "action": "burn"}], "Unknown stock action"),
-            (
-                [
-                    {"line_item_id": "l1", "action": "track"},
-                    {"line_item_id": "l1", "action": "expense"},
-                ],
-                "more than once",
-            ),
-        ],
-    )
-    def test_invalid_decisions_fail_before_anything_is_written(
-        self, monkeypatch, journals, decisions, message
-    ):
-        service, state = self._stocking(monkeypatch)
-        with pytest.raises(InvoiceRuleError, match=message):
-            run(service.apply_stock_decisions(ENTITY, INVOICE, decisions))
-        assert state["calls"] == []
-
-    def test_sales_invoices_carry_no_stock(self, monkeypatch, journals):
-        service, _ = self._stocking(monkeypatch, invoice_type="SALE")
-        with pytest.raises(InvoiceRuleError, match="Only purchase"):
-            run(
-                service.apply_stock_decisions(
-                    ENTITY, INVOICE, [{"line_item_id": "l1", "action": "track"}]
-                )
-            )
 
 
 class FakeTable:

@@ -82,7 +82,12 @@ export interface InvoiceSnapshot {
     invoice_type: string;
     file_path: string | null;
   }[];
-  lines: { id: string; gl_account_id: string | null }[];
+  lines: {
+    id: string;
+    gl_account_id: string | null;
+    line_kind: string;
+    product_id: string | null;
+  }[];
   payments: {
     id: string;
     entity_id: string;
@@ -105,7 +110,7 @@ export async function snapshotInvoices(): Promise<InvoiceSnapshot> {
   const lines = await rest<InvoiceSnapshot['lines']>(
     'GET',
     'invoice_line_items',
-    `select=id,gl_account_id&invoice_id=in.(${ids})`
+    `select=id,gl_account_id,line_kind,product_id&invoice_id=in.(${ids})`
   );
   const payments = await rest<InvoiceSnapshot['payments']>(
     'GET',
@@ -134,11 +139,14 @@ export async function restoreInvoices(before: InvoiceSnapshot): Promise<void> {
       }
     }
   }
-  const lineWas = new Map(before.lines.map(l => [l.id, l.gl_account_id]));
+  const lineWas = new Map(before.lines.map(l => [l.id, l]));
   for (const line of now.lines) {
-    if (lineWas.has(line.id) && lineWas.get(line.id) !== line.gl_account_id) {
+    const original = lineWas.get(line.id);
+    if (original && JSON.stringify(original) !== JSON.stringify(line)) {
       await rest('PATCH', 'invoice_line_items', `id=eq.${line.id}`, {
-        gl_account_id: lineWas.get(line.id),
+        gl_account_id: original.gl_account_id,
+        line_kind: original.line_kind,
+        product_id: original.product_id,
       });
     }
   }
@@ -149,12 +157,40 @@ export async function restoreInvoices(before: InvoiceSnapshot): Promise<void> {
   if (added.length) await rest('DELETE', 'invoice_payments', `id=in.(${added.join(',')})`);
   const removed = before.payments.filter(p => !linkNow.has(p.id));
   if (removed.length) await rest('POST', 'invoice_payments', '', removed);
-  // Invoices made by the stand-in agent when a test uploads a file, and what it created for
-  // them (stock items, movements, its two contacts).
+  // Invoices made by the stand-in agent when a test uploads a file, and its two contacts.
   await rest('DELETE', 'invoices', 'invoice_number=like.E2E-UP-*');
-  await deleteStandInMovements();
-  await rest('DELETE', 'inventory_items', 'sku=like.e2e-*');
   await rest('DELETE', 'contacts', 'name=in.("Stand-in Supplier Ltd","Stand-in Customer Ltd")');
+}
+
+/** How many rows a whole table has, counted by the database (not capped by the page size). */
+export async function tableSize(table: string): Promise<number> {
+  const response = await fetch(`${url}/rest/v1/${table}?select=*`, {
+    method: 'HEAD',
+    headers: { apikey: key, Authorization: `Bearer ${key}`, Prefer: 'count=exact' },
+  });
+  if (!response.ok) throw new Error(`count ${table}: ${response.status}`);
+  return Number(response.headers.get('content-range')?.split('/')[1]);
+}
+
+/** What one invoice's lines bought, by description: the kind and the linked product's name. */
+export async function readLinesBought(
+  number: string
+): Promise<Record<string, { kind: string; product: string | null }>> {
+  const [invoice] = await rest<{ id: string }[]>(
+    'GET',
+    'invoices',
+    `select=id&invoice_number=eq.${encodeURIComponent(number)}`
+  );
+  const lines = await rest<
+    { description: string; line_kind: string; product: { name: string } | null }[]
+  >(
+    'GET',
+    'invoice_line_items',
+    `select=description,line_kind,product:product_id(name)&invoice_id=eq.${invoice.id}`
+  );
+  return Object.fromEntries(
+    lines.map(l => [l.description, { kind: l.line_kind, product: l.product?.name ?? null }])
+  );
 }
 
 async function removeStoredFile(bucket: string, path: string): Promise<void> {

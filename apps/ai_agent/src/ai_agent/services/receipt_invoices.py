@@ -316,6 +316,7 @@ async def _file_invoice(
         extracted.line_items,
         chart_of_accounts=coa,
         invoice_type="PURCHASE",
+        entity_id=entity_id,
     )
     try:
         await invoice_service.link_payment(

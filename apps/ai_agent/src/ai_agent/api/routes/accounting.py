@@ -851,6 +851,15 @@ async def unlink_invoice_payment(invoice_id: str, transaction_id: str, entity_id
 # =============================================================================
 
 
+class LineItemUpdate(BaseModel):
+    """What a line bought: a product (optionally linked), a sample, or neither."""
+
+    line_kind: Optional[Literal["product", "sample", "other"]] = None
+    product_id: Optional[str] = Field(
+        None, description="A product of this business; only on a 'product' line"
+    )
+
+
 class UpdateInvoiceRequest(BaseModel):
     entity_id: str = Field(..., description="Entity the invoice belongs to")
     invoice_type: Optional[str] = Field(
@@ -861,11 +870,18 @@ class UpdateInvoiceRequest(BaseModel):
         None,
         description="Map of line_item_id → gl_account_id (or null to clear)",
     )
+    line_items: Optional[Dict[str, LineItemUpdate]] = Field(
+        None,
+        description=(
+            "Map of line_item_id → what the line bought. Shown in the drawer only: "
+            "nothing is written to products or stock."
+        ),
+    )
 
 
 @router.patch("/invoices/{invoice_id}", dependencies=[Depends(owned_invoice)])
 async def update_invoice(invoice_id: str, request: UpdateInvoiceRequest):
-    """Update editable invoice fields (type, notes) and line item GL accounts.
+    """Update editable invoice fields (type, notes), line GL accounts and what lines bought.
 
     Financial amounts are immutable through this endpoint.
     """
@@ -887,6 +903,14 @@ async def update_invoice(invoice_id: str, request: UpdateInvoiceRequest):
             UUID(invoice_id),
             updates,
             line_item_gl_updates=request.line_item_gl_accounts,
+            line_item_updates=(
+                {
+                    line_id: update.model_dump(exclude_unset=True)
+                    for line_id, update in request.line_items.items()
+                }
+                if request.line_items
+                else None
+            ),
         )
     except InvoiceRuleError as e:
         raise HTTPException(status_code=409, detail=str(e))
@@ -894,58 +918,6 @@ async def update_invoice(invoice_id: str, request: UpdateInvoiceRequest):
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         logger.error(f"Error updating invoice: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-# =============================================================================
-# STOCK DECISIONS FOR A PURCHASE INVOICE
-# =============================================================================
-
-
-class StockDecision(BaseModel):
-    line_item_id: str
-    action: Literal["expense", "link", "new", "track"] = Field(
-        ...,
-        description=(
-            "expense: no stock record. link: set an existing product's cost from this line. "
-            "new: create a draft product. track: record stock without a catalogue product."
-        ),
-    )
-    product_id: Optional[str] = Field(None, description="Required for 'link'")
-    name: Optional[str] = Field(
-        None, description="Product name for 'new' (defaults to the line)"
-    )
-    sku: Optional[str] = None
-    asset_account_id: Optional[str] = None
-    cogs_account_id: Optional[str] = None
-
-
-class StockDecisionsRequest(BaseModel):
-    entity_id: str
-    decisions: List[StockDecision] = Field(..., min_length=1)
-
-
-@router.post("/invoices/{invoice_id}/stock", dependencies=[Depends(owned_invoice)])
-async def apply_stock_decisions(invoice_id: str, request: StockDecisionsRequest):
-    """Decide how each line of a purchase invoice is treated as stock, in one call.
-
-    Replaces the separate create-products, link-to-products and inventory-movements
-    endpoints. Validated up front (nothing is written if any line is invalid) and
-    idempotent per line. Returns one result per line, with whether a purchase movement
-    now exists for it.
-    """
-    try:
-        return await invoice_service.apply_stock_decisions(
-            UUID(request.entity_id),
-            UUID(invoice_id),
-            [d.model_dump() for d in request.decisions],
-        )
-    except InvoiceRuleError as e:
-        raise HTTPException(status_code=409, detail=str(e))
-    except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
-    except Exception as e:
-        logger.error(f"Error applying stock decisions: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 

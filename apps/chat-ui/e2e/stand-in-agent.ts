@@ -5,8 +5,7 @@
  *   POST   /accounting/inventory/disposal          record a gift or write-off (Inventory)
  *   POST   /accounting/invoices/process            "read" an uploaded invoice into a draft
  *   PATCH  /accounting/invoices/{id}/status        move an invoice through its lifecycle
- *   PATCH  /accounting/invoices/{id}               notes, direction, line accounts
- *   POST   /accounting/invoices/{id}/stock         record stock movements for purchase lines
+ *   PATCH  /accounting/invoices/{id}               notes, direction, line accounts, what lines bought
  *   DELETE /accounting/invoices/{id}               remove a draft
  *   POST   /accounting/invoices/{id}/payments      match a bank transaction as its payment
  *   DELETE /accounting/invoices/{id}/payments/{t}  remove that match
@@ -234,6 +233,7 @@ async function updateInvoice(
     notes?: string;
     invoice_type?: string;
     line_item_gl_accounts?: Record<string, string | null>;
+    line_items?: Record<string, { line_kind?: string; product_id?: string | null }>;
   }>(req);
   const patch: Record<string, unknown> = {};
   if (body.notes !== undefined) patch.notes = body.notes;
@@ -246,74 +246,20 @@ async function updateInvoice(
       .eq('id', lineId)
       .eq('invoice_id', id);
   }
-  send(res, 200, { id });
-}
-
-async function applyStock(
-  req: import('node:http').IncomingMessage,
-  res: import('node:http').ServerResponse,
-  id: string
-) {
-  const { decisions } = await readJson<{
-    entity_id: string;
-    decisions: { line_item_id: string; action: string; sku?: string }[];
-  }>(req);
-  const invoice = await invoiceWithLines(id);
-  if (!invoice) return send(res, 404, { detail: `Invoice not found: ${id}` });
-  const lines = new Map(
-    (
-      invoice.invoice_line_items as {
-        id: string;
-        description: string;
-        quantity: number;
-        unit_cost: number;
-      }[]
-    ).map(l => [l.id, l])
-  );
-  const results = [];
-  for (const d of decisions) {
-    const line = lines.get(d.line_item_id);
-    let recorded = false;
-    if (line && d.action !== 'expense' && line.quantity > 0) {
-      const sku = d.sku || `e2e-${d.line_item_id.slice(0, 8)}`;
-      const { data: item } = await supabase
-        .from('inventory_items')
-        .upsert(
-          {
-            entity_id: invoice.entity_id,
-            provider: 'manual',
-            quantity_source: 'ledger',
-            variant_external_id: sku,
-            sku,
-            description: line.description,
-            unit_cost: line.unit_cost,
-          },
-          { onConflict: 'entity_id,provider,variant_external_id' }
-        )
-        .select('id')
-        .single();
-      if (item) {
-        await supabase.from('inventory_movements').insert({
-          inventory_item_id: item.id,
-          transaction_type: 'PURCHASE',
-          quantity: line.quantity,
-          unit_cost: line.unit_cost,
-          reference_id: d.line_item_id,
-          reference_table: 'invoice_line_items',
-          notes: STAND_IN_NOTE,
-        });
-        recorded = true;
-      }
-    }
-    results.push({ line_item_id: d.line_item_id, action: d.action, recorded });
+  // What a line bought, as the agent records it (InvoiceService._line_patches): a product
+  // makes it a product line, a sample or other line has no product. Only the line is written.
+  for (const [lineId, u] of Object.entries(body.line_items ?? {})) {
+    const patch = u.product_id
+      ? { line_kind: 'product', product_id: u.product_id }
+      : u.line_kind === 'sample' || u.line_kind === 'other'
+        ? { line_kind: u.line_kind, product_id: null }
+        : {
+            ...(u.line_kind === 'product' ? { line_kind: 'product' } : {}),
+            ...('product_id' in u ? { product_id: null } : {}),
+          };
+    await supabase.from('invoice_line_items').update(patch).eq('id', lineId).eq('invoice_id', id);
   }
-  send(res, 200, {
-    results,
-    recorded: results.filter(r => r.recorded).length,
-    not_recorded: results
-      .filter(r => r.action !== 'expense' && !r.recorded)
-      .map(r => r.line_item_id),
-  });
+  send(res, 200, { id });
 }
 
 async function deleteInvoice(res: import('node:http').ServerResponse, id: string) {
@@ -489,7 +435,7 @@ createServer(async (req, res) => {
   }
 
   const invoiceRoute =
-    /^\/accounting\/invoices\/([0-9a-f-]{36})(\/status|\/stock|\/payments(?:\/[0-9a-f-]{36})?)?(\?.*)?$/.exec(
+    /^\/accounting\/invoices\/([0-9a-f-]{36})(\/status|\/payments(?:\/[0-9a-f-]{36})?)?(\?.*)?$/.exec(
       req.url ?? ''
     );
   if (req.method === 'POST' && req.url === '/accounting/invoices/process') {
@@ -498,7 +444,6 @@ createServer(async (req, res) => {
   if (invoiceRoute) {
     const [, id, suffix] = invoiceRoute;
     if (req.method === 'PATCH' && suffix === '/status') return setStatus(req, res, id);
-    if (req.method === 'POST' && suffix === '/stock') return applyStock(req, res, id);
     if (req.method === 'PATCH' && !suffix) return updateInvoice(req, res, id);
     if (req.method === 'DELETE' && !suffix) return deleteInvoice(res, id);
     if (req.method === 'POST' && suffix === '/payments') return linkPayment(req, res, id);

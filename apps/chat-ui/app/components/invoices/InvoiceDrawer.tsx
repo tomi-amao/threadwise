@@ -35,10 +35,10 @@ import { Drawer } from '~/components/ui/drawer';
 import { Eyebrow } from '~/components/ui/eyebrow';
 import { FIELD_TRIGGER_CLASS, SearchableSelect } from '~/components/ui/searchable-select';
 import { Textarea } from '~/components/ui/textarea';
-import type { InvoiceDetail, InvoiceStatus, StockDecision } from '~/types/invoice';
+import type { InvoiceDetail, InvoiceStatus, LineUpdate } from '~/types/invoice';
 import { cn } from '~/lib/utils';
 import { PaymentMatch } from './PaymentMatch';
-import { StockSection, looksLikeStock } from './StockSection';
+import { BoughtSection } from './BoughtSection';
 import {
   DIRECTION,
   DOCUMENT_ACTION,
@@ -61,8 +61,6 @@ type Load =
 interface Result {
   ok: boolean;
   error?: string;
-  recorded?: number;
-  notRecorded?: string[];
   url?: string;
 }
 
@@ -291,7 +289,7 @@ function Body({
     return result;
   };
 
-  const { invoice, lines, matched_transaction_id, stocked_line_ids } = detail;
+  const { invoice, lines, matched_transaction_id } = detail;
   const { gl_accounts, products } = detail;
   const status = invoice.status;
   const shown = shownStatus(invoice, today);
@@ -308,8 +306,7 @@ function Body({
   const accountOf = (lineId: string, saved: string | null) => coding[lineId] ?? saved ?? '';
   const uncoded = lines.filter(l => !accountOf(l.id, l.gl_account_id)).length;
   const codingDirty = lines.some(l => accountOf(l.id, l.gl_account_id) !== (l.gl_account_id ?? ''));
-  const stockLines = lines.filter(looksLikeStock);
-  const stockOpen = stockLines.filter(l => !stocked_line_ids.includes(l.id)).length;
+  const unlinkedProducts = lines.filter(l => l.line_kind === 'product' && !l.product).length;
 
   const accountOptions = gl_accounts
     .filter(a =>
@@ -342,18 +339,10 @@ function Body({
       () => 'Accounts saved'
     ).then(r => r.ok && setCoding({}));
 
-  const applyStock = (decisions: StockDecision[]) =>
-    run('stock', { intent: 'stock', decisions: JSON.stringify(decisions) }, r =>
-      r.notRecorded?.length
-        ? null
-        : `Stock recorded for ${r.recorded ?? decisions.length} ${r.recorded === 1 ? 'line' : 'lines'}`
-    ).then(r => {
-      if (r.ok && r.notRecorded?.length) {
-        toast.warning(
-          `${r.notRecorded.length} ${r.notRecorded.length === 1 ? 'line' : 'lines'} could not be recorded as stock (they need a quantity and a unit cost).`
-        );
-      }
-    });
+  const saveBought = (updates: Record<string, LineUpdate>) =>
+    run('bought', { intent: 'update', lineKinds: JSON.stringify(updates) }, () => 'Saved').then(
+      r => r.ok
+    );
 
   const openDocument = async () => {
     setBusy('document');
@@ -457,11 +446,9 @@ function Body({
                   ? 'Every line has an account.'
                   : `${uncoded} ${uncoded === 1 ? 'line has' : 'lines have'} no account yet.`}
               </li>
-              {!isSale && stockLines.length > 0 && (
-                <li className={stockOpen > 0 ? 'text-accent-text' : 'text-text-2'}>
-                  {stockOpen === 0
-                    ? 'Stock is tracked for the lines that need it.'
-                    : `${stockOpen} ${stockOpen === 1 ? 'line looks' : 'lines look'} like stock and ${stockOpen === 1 ? "isn't" : "aren't"} tracked yet.`}
+              {!isSale && unlinkedProducts > 0 && (
+                <li className="text-text-2">
+                  {`${unlinkedProducts} product ${unlinkedProducts === 1 ? 'line is' : 'lines are'} not linked to a product (optional).`}
                 </li>
               )}
             </ul>
@@ -620,16 +607,14 @@ function Body({
         )}
       </section>
 
-      {!isSale && !dead && lines.length > 0 && (
-        <StockSection
-          key={`${stocked_line_ids.length}-${lines.length}`}
+      {!isSale && lines.length > 0 && (
+        <BoughtSection
           lines={lines}
-          stockedIds={stocked_line_ids}
           currency={invoice.currency}
           products={products}
-          accounts={gl_accounts}
-          busy={busy === 'stock'}
-          onApply={applyStock}
+          busy={busy === 'bought'}
+          disabled={dead || busy !== null}
+          onSave={saveBought}
         />
       )}
 

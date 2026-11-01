@@ -38,6 +38,12 @@ export interface InvoiceContact {
   contact_type: 'supplier' | 'customer' | 'both';
 }
 
+/**
+ * What a line bought: a product the business sells, a sample (never a product), or something
+ * else (freight, fees, services). Shown on the invoice only; it never changes stock.
+ */
+export type LineKind = 'product' | 'sample' | 'other';
+
 export interface InvoiceLineItem {
   id: string;
   invoice_id: string;
@@ -51,6 +57,16 @@ export interface InvoiceLineItem {
   line_net: number | null;
   line_vat: number | null;
   line_gross: number | null;
+  line_kind: LineKind;
+  /** The product a product line bought, when it is linked to one. */
+  product: ProductOption | null;
+}
+
+/** A change to what a line bought, sent to the agent with the invoice update. */
+export interface LineUpdate {
+  line_kind?: LineKind;
+  /** A product of this business; null unlinks it. Only on a product line. */
+  product_id?: string | null;
 }
 
 /** An invoice as the list shows it: no line items. */
@@ -105,21 +121,7 @@ export interface InvoiceDetail {
   matched_transaction_id: string | null;
   /** Bank transactions that could be this invoice's payment, nearest in amount first. */
   payment_candidates: PaymentCandidate[];
-  /** Line items that already have a purchase movement recorded. */
-  stocked_line_ids: string[];
   gl_accounts: GlAccountOption[];
+  /** The business's products (not archived), to link a line to. */
   products: ProductOption[];
-}
-
-/** One line's stock handling, sent to the agent (see POST /accounting/invoices/{id}/stock). */
-export type StockAction = 'expense' | 'link' | 'new' | 'track';
-
-export interface StockDecision {
-  line_item_id: string;
-  action: StockAction;
-  product_id?: string;
-  name?: string;
-  sku?: string;
-  asset_account_id?: string;
-  cogs_account_id?: string;
 }

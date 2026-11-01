@@ -146,10 +146,16 @@ Uploaded on the Invoices page. `services/invoice_service.py`:
    (`DEFAULT_CHAT_MODEL`).
 2. Upsert the contact (supplier or customer).
 3. Create the invoice and its line items. Each line can carry a GL account, which says what it
-   was for; nothing is posted from it.
+   was for; nothing is posted from it. Each line also says what it bought (`line_kind`: a
+   product, a sample or something else, proposed by the extraction) and, for a product, the
+   business's product it matches (`product_id`: by SKU, then exact name; `match_product`).
 
-Stock decisions for a purchase's lines (`POST /accounting/invoices/{id}/stock`) record inventory
-movements, whose unit cost feeds the cost of goods sold journal when the stock sells.
+Invoices do not touch stock. What a purchase bought is shown in the invoice drawer and can be
+corrected there (`PATCH /accounting/invoices/{id}` with `line_items`), but nothing is written to
+`products`, `inventory_items` or `inventory_movements`: stock levels and stock value come from
+the stock records. (A Stock section that created products and purchase movements from invoice
+lines was removed; the 67 movements it made in production stay as plain stock records, and
+migration `20261102000000_invoice_line_products` copied what they bought onto their lines.)
 
 The lifecycle is in `services/invoice_rules.py` (pure functions, no I/O; tested in
 `tests/test_invoice_rules.py`):

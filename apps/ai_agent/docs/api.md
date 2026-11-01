@@ -49,7 +49,6 @@ Router guard: **entity**, except `/health-checks` (**internal**).
 | POST   | `/invoices/{invoice_id}/payments`                  | owned; match a transaction as its payment     |
 | DELETE | `/invoices/{invoice_id}/payments/{transaction_id}` | owned; remove that match                      |
 | DELETE | `/invoices/{invoice_id}`                           | owned                                         |
-| POST   | `/invoices/{invoice_id}/stock`                     | owned                                         |
 | GET    | `/contacts`                                        |                                               |
 | POST   | `/contacts`                                        |                                               |
 | GET    | `/transactions`                                    |                                               |

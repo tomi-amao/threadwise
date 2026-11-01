@@ -98,7 +98,8 @@ export async function getInvoiceDetail(
     .select(
       `${LIST_COLUMNS}, contacts:counterparty_id(${CONTACT_COLUMNS}), ` +
         'invoice_line_items(id, invoice_id, description, sku, quantity, unit_cost, ' +
-        'gl_account_id, tax_code, vat_rate, line_net, line_vat, line_gross)'
+        'gl_account_id, tax_code, vat_rate, line_net, line_vat, line_gross, line_kind, ' +
+        'product:product_id(id, name))'
     )
     .eq('id', invoiceId)
     .maybeSingle();
@@ -123,12 +124,8 @@ export async function getInvoiceDetail(
     .sort((a, b) => a.id.localeCompare(b.id));
 
   const entityId = invoice.entity_id;
-  const [matched, stocked, accounts, products, candidates] = await Promise.all([
+  const [matched, accounts, products, candidates] = await Promise.all([
     findMatchingTransaction(user, invoiceId),
-    readStockedLines(
-      user,
-      lines.map(l => l.id)
-    ),
     readGlAccounts(user),
     readProducts(user, entityId),
     findPaymentCandidates(user, invoice),
@@ -139,22 +136,9 @@ export async function getInvoiceDetail(
     lines,
     matched_transaction_id: matched,
     payment_candidates: matched ? [] : candidates,
-    stocked_line_ids: stocked,
     gl_accounts: accounts,
     products,
   };
-}
-
-async function readStockedLines(supabase: SupabaseClient, lineIds: string[]): Promise<string[]> {
-  if (lineIds.length === 0) return [];
-  const { data, error } = await supabase
-    .from('inventory_movements')
-    .select('reference_id')
-    .eq('reference_table', 'invoice_line_items')
-    .eq('transaction_type', 'PURCHASE')
-    .in('reference_id', lineIds);
-  if (error) throw new Error(`Failed to load stock movements: ${error.message}`);
-  return [...new Set((data ?? []).map(r => r.reference_id as string))];
 }
 
 /** The chart of accounts is shared by every business (it has no entity column). */

@@ -33,7 +33,7 @@ import {
 } from '~/lib/api/invoices.server';
 import { requestAccessToken } from '~/lib/api/agent-auth.server';
 import { getServerSupabaseClient } from '~/lib/supabase';
-import type { StockDecision } from '~/types/invoice';
+import type { LineUpdate } from '~/types/invoice';
 
 const MAX_FILE_BYTES = 10 * 1024 * 1024;
 const STATUSES = ['DRAFT', 'OPEN', 'PAID', 'PARTIALLY_PAID', 'OVERDUE', 'CANCELLED', 'VOID'];
@@ -96,8 +96,6 @@ export async function action({ request }: ActionFunctionArgs) {
         return await setStatus(request, invoice, form);
       case 'update':
         return await update(request, invoice, form);
-      case 'stock':
-        return await stock(request, invoice, form);
       case 'delete':
         return await remove(request, invoice);
       case 'attachOriginal':
@@ -260,6 +258,12 @@ async function update(request: Request, invoice: OwnedInvoice, form: FormData) {
     return fail('The line accounts were not understood', 400);
   }
   if (coding) body.line_item_gl_accounts = coding;
+  // What each line bought: shown on the invoice only, it changes no product or stock.
+  const kinds = parseJson<Record<string, LineUpdate>>(form.get('lineKinds'));
+  if (form.get('lineKinds') !== null && !kinds) {
+    return fail('What the lines bought was not understood', 400);
+  }
+  if (kinds) body.line_items = kinds;
 
   await callAgent(
     `/accounting/invoices/${invoice.id}`,
@@ -267,19 +271,6 @@ async function update(request: Request, invoice: OwnedInvoice, form: FormData) {
     jsonInit('PATCH', body)
   );
   return json({ ok: true });
-}
-
-async function stock(request: Request, invoice: OwnedInvoice, form: FormData) {
-  const decisions = parseJson<StockDecision[]>(form.get('decisions'));
-  if (!decisions || decisions.length === 0)
-    return fail('Choose how at least one line is handled', 400);
-
-  const result = await callAgent<{ recorded: number; not_recorded: string[] }>(
-    `/accounting/invoices/${invoice.id}/stock`,
-    await requestAccessToken(request),
-    jsonInit('POST', { entity_id: invoice.entity_id, decisions })
-  );
-  return json({ ok: true, recorded: result.recorded, notRecorded: result.not_recorded });
 }
 
 async function remove(request: Request, invoice: OwnedInvoice) {

@@ -8,6 +8,8 @@ import type { Page } from '@playwright/test';
 import { test, expect, readManifest } from './fixtures';
 import {
   addReceiptInvoice,
+  readLinesBought,
+  tableSize,
   borrowTransaction,
   readInvoice,
   readTxnInvoiceId,
@@ -18,6 +20,7 @@ import {
 } from './helpers/db';
 
 const inv = readManifest().invoices;
+const STOCK_TABLES = ['products', 'inventory_items', 'inventory_movements'];
 const gbp0 = (n: number) =>
   new Intl.NumberFormat('en-GB', {
     style: 'currency',
@@ -336,20 +339,28 @@ test.describe('editing an invoice', () => {
   });
 });
 
-test.describe('stock from a purchase invoice', () => {
-  test('a line can be tracked as stock, and then shows as recorded', async ({ page }) => {
+test.describe('what a purchase bought', () => {
+  test('a line can be linked to a product, and stock is left alone', async ({ page }) => {
+    const stockBefore = await Promise.all(STOCK_TABLES.map(tableSize));
     const drawer = await openInvoice(page, inv.draftPurchase, 'review');
-    await drawer.getByLabel('Stock handling for Merino yarn 4-ply').selectOption('track');
-    await drawer.getByRole('button', { name: 'Apply 1 decision' }).click();
+    const bought = drawer.getByRole('region', { name: 'What this invoice bought' });
+    await bought.getByRole('button', { name: 'Change' }).click();
+    await bought.getByRole('button', { name: /Product for Merino yarn 4-ply/ }).click();
+    await page.getByRole('option', { name: 'Merino Scarf' }).click();
+    await bought.getByLabel('What Heavy knit swatches is').selectOption('other');
+    await bought.getByRole('button', { name: 'Save' }).click();
+    await expect(page.getByText('Saved')).toBeVisible();
 
-    await expect(page.getByText('Stock recorded for 1 line')).toBeVisible();
-    const stock = drawer.getByRole('region', { name: 'Stock' });
-    await expect(stock.locator('li', { hasText: 'Merino yarn 4-ply' })).toContainText(
-      'Stock recorded'
-    );
-    // The other lines are still open to decide on.
-    await expect(drawer.getByLabel('Stock handling for Heavy knit swatches')).toBeVisible();
-    await expect(drawer.getByLabel('Stock handling for Merino yarn 4-ply')).toHaveCount(0);
+    await expect(bought.getByRole('link', { name: 'Merino Scarf' })).toBeVisible();
+    await expect(bought).toContainText('1 product, 40 units');
+    await expect(bought).not.toContainText('sample');
+    expect(await readLinesBought(inv.draftPurchase)).toEqual({
+      'Merino yarn 4-ply': { kind: 'product', product: 'Merino Scarf' },
+      'Heavy knit swatches': { kind: 'other', product: null },
+      Delivery: { kind: 'other', product: null },
+    });
+    // Information only: no product, stock item or movement was written.
+    expect(await Promise.all(STOCK_TABLES.map(tableSize))).toEqual(stockBefore);
   });
 });
 
