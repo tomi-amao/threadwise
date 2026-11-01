@@ -218,7 +218,11 @@ export function SyncProgressToast({
     return Array.from(endpointProgress.values()).every(p => p.status === 'completed');
   }, [endpointProgress]);
 
-  const isCompleted = overallStatus?.status === 'completed' || allEndpointsCompleted;
+  // A full sync publishes an overall status, and only that knows about the steps that run after
+  // the endpoints (Revolut's receipts and invoices), so it alone says when the run is over: the
+  // endpoints seen so far can all be done minutes earlier. A single-endpoint sync publishes
+  // progress only, so there the endpoint's own completion is the end.
+  const isCompleted = overallStatus ? overallStatus.status === 'completed' : allEndpointsCompleted;
   const hasError = overallStatus?.status === 'error' || state === 'error';
 
   // Calculate totals
@@ -402,7 +406,9 @@ function EndpointProgressCard({
       {/* Content */}
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2">
-          <span className="text-sm font-medium text-foreground capitalize">{endpoint}</span>
+          <span className="text-sm font-medium text-foreground capitalize">
+            {endpoint.replace(/_/g, ' ')}
+          </span>
           <StatusIndicator status={progress.status} />
         </div>
         <div className="flex items-center gap-3 mt-0.5">

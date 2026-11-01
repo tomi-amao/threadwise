@@ -68,6 +68,8 @@ Router guard: **entity**, except `/entities` (**internal**).
 | GET      | `/sources/{source_id}`                    | owned                            |
 | DELETE   | `/sources/{source_id}`                    | owned                            |
 | PUT      | `/sources/{source_id}/api-key`            | owned                            |
+| PUT      | `/sources/{source_id}/merchant-key`       | owned; Revolut, saves and checks |
+| DELETE   | `/sources/{source_id}/merchant-key`       | owned; Revolut                   |
 | POST     | `/sources/{source_id}/sync`               | owned; sends the sync event      |
 | POST     | `/sources/{source_id}/validate`           | owned                            |
 | GET      | `/sources/{source_id}/stats`              | owned                            |

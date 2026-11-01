@@ -230,6 +230,16 @@ is Inngest-orchestrated, under `integrations/inngest/`:
   purpose, but `CanonicalFinancialTransaction.base_amount` and the `financial_transactions` column
   are required, so those rows fail validation. Marked with a `type: ignore` in
   `normalization/paypal_normalizer.py`; it needs a decision on how to convert them to GBP.
+- Two Revolut syncs bypass raw events and normalisation on purpose and write straight to
+  app tables: receipts (`revolut_sync_receipts` → `transaction_attachments`) and the
+  invoices sent from Revolut (`revolut_merchant_sync`, the Revolut integration's
+  `payment_requests` endpoint → `invoices` with `origin = 'revolut_merchant'`, plus
+  `invoice_payments`). Its Merchant API key is a second key on the Revolut integration,
+  stored as a child source row (provider `revolut_merchant`, `external_account_id` = the
+  Revolut row's id) because each row holds one Vault key.
+  The services they call import `integrations.*`, whose `__init__` loads every Inngest
+  function, so a sync function imports such a service inside its body, not at module top.
+  Details: `docs/data-pipeline.md`.
 - `normalization/inngest_functions.py` — the canonical processing path: consumes
   raw events, dispatches to the provider-specific normalizer, persists canonical
   records. Chained via `normalize_after_<provider>_sync` triggers.

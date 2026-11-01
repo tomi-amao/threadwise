@@ -25,6 +25,7 @@ from ..normalization.persistence import persistence_service
 from ..normalization.utils import extract_row, extract_rows
 from .invoice_rules import (
     PAYABLE,
+    SYNCED_ORIGINS,
     InvoiceRuleError,
     check_deletable,
     check_editable,
@@ -1017,7 +1018,13 @@ class InvoiceService:
         return extract_rows(result)
 
     async def _settle_from_payments(self, invoice: Dict[str, Any]) -> Dict[str, Any]:
-        """Write the status the invoice's links imply, if it differs."""
+        """Write the status the invoice's links imply, if it differs.
+
+        Not for a synced invoice: its status is the provider's (a Revolut payment request
+        that Revolut says is paid stays paid while its bank transaction is not linked yet).
+        """
+        if (invoice.get("origin") or "upload") in SYNCED_ORIGINS:
+            return invoice
         payments = await self.list_payments(UUID(invoice["id"]))
         current = normalise_status(invoice.get("status"))
         target = status_from_payments(

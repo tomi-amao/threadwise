@@ -1,11 +1,12 @@
 /**
  * IntegrationCard: one connected source. The top says whether it is healthy; anything that needs
  * a person (a rejected key, failed events, uncategorised transactions) is a callout with the
- * action beside it; the bottom is the routine: sync, load data, remove.
+ * action beside it; the bottom is the routine: sync, load data, remove. A Revolut card also holds
+ * the Merchant key, which syncs the invoices sent from Revolut (see MerchantKeySection).
  */
 
 import { useState } from 'react';
-import { ArrowsClockwise, Database, Sparkle, Trash, Warning } from 'phosphor-react';
+import { ArrowsClockwise, Database, Receipt, Sparkle, Trash, Warning } from 'phosphor-react';
 import { Button } from '~/components/ui/button';
 import { Chip } from '~/components/ui/chip';
 import { Field } from '~/components/ui/field';
@@ -18,6 +19,8 @@ import { cn } from '~/lib/utils';
 import {
   ENDPOINT_ICON,
   KEY_STATUS,
+  MERCHANT_ENDPOINT,
+  MERCHANT_KEY_HELP,
   SYNC_STATUS,
   int,
   prettyEndpoint,
@@ -34,6 +37,10 @@ export interface CardHandlers {
   onReprocessFailed: () => void;
   onRemove: () => void;
   onViewUncategorized: () => void;
+  /** Revolut only: add or replace, check and remove the Merchant key. */
+  onSaveMerchantKey?: (apiKey: string) => void;
+  onCheckMerchantKey?: () => void;
+  onRemoveMerchantKey?: () => void;
 }
 
 export interface CardState {
@@ -43,6 +50,8 @@ export interface CardState {
   isNormalizing: boolean;
   isReprocessing: boolean;
   isRemoving: boolean;
+  /** Saving, checking or removing the Merchant key. */
+  isBusyMerchantKey?: boolean;
 }
 
 function Callout({
@@ -150,6 +159,123 @@ function CredentialsForm({
         </Button>
       </div>
     </form>
+  );
+}
+
+/**
+ * The Merchant key of a Revolut integration. The invoices sent from Revolut are Merchant API
+ * payment requests, and that API has its own secret key; the agent keeps it as its own row and
+ * the Revolut sync uses it for the payment_requests endpoint.
+ */
+function MerchantKeySection({
+  integration,
+  handlers,
+  busy,
+}: {
+  integration: IntegrationSummary;
+  handlers: CardHandlers;
+  busy: boolean;
+}) {
+  const merchant = integration.merchant ?? null;
+  const [editing, setEditing] = useState(false);
+  const [confirming, setConfirming] = useState(false);
+  const [key, setKey] = useState('');
+  const status = merchant
+    ? (KEY_STATUS[merchant.api_key_status] ?? KEY_STATUS.pending)
+    : { label: 'No Merchant key', tone: 'plain' as const };
+
+  return (
+    <section
+      aria-label="Invoices from Revolut"
+      className="space-y-3 rounded-xl border bg-background p-4"
+    >
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="flex min-w-0 flex-1 basis-64 items-start gap-3">
+          <Receipt size={18} weight="light" aria-hidden className="mt-0.5 shrink-0 text-text-2" />
+          <div>
+            <h3 className="text-[15px] font-medium">Invoices</h3>
+            <p className="mt-0.5 text-[14px] text-text-2">
+              {merchant
+                ? 'The invoices you send from Revolut are kept on the Invoices page and matched to the payments that settle them.'
+                : 'Add your Merchant key to keep the invoices you send from Revolut on the Invoices page.'}
+            </p>
+          </div>
+        </div>
+        <Chip tone={status.tone}>{status.label}</Chip>
+      </div>
+
+      {merchant?.api_key_status === 'invalid' && merchant.api_key_error && (
+        <p className="text-[14px] text-destructive">{merchant.api_key_error}</p>
+      )}
+
+      {editing ? (
+        <form
+          className="space-y-3"
+          onSubmit={e => {
+            e.preventDefault();
+            if (!key.trim()) return;
+            handlers.onSaveMerchantKey?.(key.trim());
+            setKey('');
+            setEditing(false);
+          }}
+        >
+          <Field label="Merchant secret key" hint={MERCHANT_KEY_HELP}>
+            <PasswordInput value={key} onChange={e => setKey(e.target.value)} autoComplete="off" />
+          </Field>
+          <div className="flex gap-2">
+            <Button type="submit" size="sm" disabled={!key.trim() || busy}>
+              Save and check
+            </Button>
+            <Button type="button" size="sm" variant="ghost" onClick={() => setEditing(false)}>
+              Cancel
+            </Button>
+          </div>
+        </form>
+      ) : (
+        <div className="flex flex-wrap gap-2">
+          <Button size="sm" variant="outline" disabled={busy} onClick={() => setEditing(true)}>
+            {merchant ? 'Replace key' : 'Add Merchant key'}
+          </Button>
+          {merchant && (
+            <>
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={busy}
+                onClick={handlers.onCheckMerchantKey}
+                aria-label="Check the Merchant key"
+              >
+                <ArrowsClockwise size={13} aria-hidden className={cn(busy && 'animate-spin')} />
+                {busy ? 'Checking…' : 'Check'}
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                className="text-text-2 hover:text-destructive"
+                disabled={busy}
+                onClick={() => setConfirming(true)}
+              >
+                Remove key
+              </Button>
+            </>
+          )}
+        </div>
+      )}
+
+      <ConfirmRemove
+        open={confirming}
+        title="Remove the Merchant key?"
+        description="Invoices already synced from Revolut stay. New ones stop coming in until you add a key again."
+        confirmLabel="Remove key"
+        busy={busy}
+        error={null}
+        onCancel={() => setConfirming(false)}
+        onConfirm={() => {
+          handlers.onRemoveMerchantKey?.();
+          setConfirming(false);
+        }}
+      />
+    </section>
   );
 }
 
@@ -317,16 +443,19 @@ export function IntegrationCard({
                 const stat = integration.stats?.[endpoint];
                 const last = integration.endpoint_sync_state?.[endpoint];
                 const failed = last?.last_run_status === 'error';
+                const needsKey = endpoint === MERCHANT_ENDPOINT && !integration.merchant;
                 return (
                   <button
                     key={endpoint}
                     type="button"
                     onClick={() => handlers.onSyncEndpoint(endpoint)}
-                    disabled={syncActive || busy}
+                    disabled={syncActive || busy || needsKey}
                     title={
-                      last
-                        ? `Last synced ${relativeTime(last.last_synced_at)}${failed ? `. Last attempt failed: ${last.last_run_error || 'unknown error'}` : ''}`
-                        : 'Never synced on its own: the next sync fetches the full history'
+                      needsKey
+                        ? 'Add a Merchant key below to sync the invoices you send from Revolut'
+                        : last
+                          ? `Last synced ${relativeTime(last.last_synced_at)}${failed ? `. Last attempt failed: ${last.last_run_error || 'unknown error'}` : ''}`
+                          : 'Never synced on its own: the next sync fetches the full history'
                     }
                     className={cn(
                       'inline-flex items-center gap-2 rounded-full border px-3.5 py-1.5 text-[14px] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50',
@@ -358,6 +487,14 @@ export function IntegrationCard({
               })}
             </div>
           </div>
+        )}
+
+        {integration.provider === 'revolut' && (
+          <MerchantKeySection
+            integration={integration}
+            handlers={handlers}
+            busy={!!state.isBusyMerchantKey}
+          />
         )}
 
         <div className="flex flex-wrap items-center justify-between gap-3 border-t pt-5">

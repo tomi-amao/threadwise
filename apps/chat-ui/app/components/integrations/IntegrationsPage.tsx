@@ -22,6 +22,8 @@ import {
   validateApiKey,
   reprocessFailedEvents,
   deleteExternalSource,
+  saveMerchantKey,
+  removeMerchantKey,
   type IntegrationSummary,
 } from '~/lib/api/integrations';
 import { SyncProgressToast } from '~/components/integrations/SyncProgressToast';
@@ -40,6 +42,8 @@ export function IntegrationsPage() {
   const [syncingIds, setSyncingIds] = useState<Set<string>>(new Set());
   const [syncingEndpoints, setSyncingEndpoints] = useState<Map<string, string>>(new Map());
   const [validatingIds, setValidatingIds] = useState<Set<string>>(new Set());
+  // Revolut integrations whose Merchant key is being saved, checked or removed.
+  const [merchantBusyIds, setMerchantBusyIds] = useState<Set<string>>(new Set());
   const [normalizingIds, setNormalizingIds] = useState<Set<string>>(new Set());
   const [reprocessingIds, setReprocessingIds] = useState<Set<string>>(new Set());
   const [removingIds, setRemovingIds] = useState<Set<string>>(new Set());
@@ -270,6 +274,43 @@ export function IntegrationsPage() {
     }
   };
 
+  /** Run a Merchant key action for a Revolut integration, then refresh its card. */
+  const withMerchantBusy = async (sourceId: string, action: () => Promise<void>) => {
+    setMerchantBusyIds(prev => new Set([...prev, sourceId]));
+    try {
+      await action();
+      await fetchData();
+    } finally {
+      setMerchantBusyIds(prev => {
+        const next = new Set(prev);
+        next.delete(sourceId);
+        return next;
+      });
+    }
+  };
+
+  const handleSaveMerchantKey = (sourceId: string, apiKey: string) =>
+    withMerchantBusy(sourceId, async () => {
+      const result = await saveMerchantKey(sourceId, apiKey);
+      if (!result) toast.error('The Merchant key could not be saved');
+      else if (result.status === 'valid') toast.success(result.message);
+      else toast.warning(`Merchant key saved, but Revolut did not accept it: ${result.message}`);
+    });
+
+  const handleCheckMerchantKey = (sourceId: string, merchantSourceId: string) =>
+    withMerchantBusy(sourceId, async () => {
+      const result = await validateApiKey(merchantSourceId);
+      if (!result) toast.error('The Merchant key could not be checked');
+      else if (result.status === 'valid') toast.success('Merchant key works');
+      else toast.warning(`Merchant key rejected: ${result.message}`);
+    });
+
+  const handleRemoveMerchantKey = (sourceId: string) =>
+    withMerchantBusy(sourceId, async () => {
+      if (await removeMerchantKey(sourceId)) toast.success('Merchant key removed');
+      else toast.error('The Merchant key could not be removed');
+    });
+
   // Handle reprocessing failed events
   const handleReprocessFailed = async (sourceId: string) => {
     setReprocessingIds(prev => new Set([...prev, sourceId]));
@@ -442,6 +483,11 @@ export function IntegrationsPage() {
                   onLoadData: mode => handleLoadData(integration.id, mode),
                   onReprocessFailed: () => handleReprocessFailed(integration.id),
                   onRemove: () => handleRemove(integration.id),
+                  onSaveMerchantKey: apiKey => handleSaveMerchantKey(integration.id, apiKey),
+                  onCheckMerchantKey: () =>
+                    integration.merchant &&
+                    handleCheckMerchantKey(integration.id, integration.merchant.source_id),
+                  onRemoveMerchantKey: () => handleRemoveMerchantKey(integration.id),
                 }}
                 state={{
                   isSyncing: syncingIds.has(integration.id),
@@ -450,6 +496,7 @@ export function IntegrationsPage() {
                   isNormalizing: normalizingIds.has(integration.id),
                   isReprocessing: reprocessingIds.has(integration.id),
                   isRemoving: removingIds.has(integration.id),
+                  isBusyMerchantKey: merchantBusyIds.has(integration.id),
                 }}
               />
             ))}

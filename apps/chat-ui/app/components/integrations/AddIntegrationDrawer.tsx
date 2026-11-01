@@ -1,19 +1,25 @@
 /**
  * AddIntegrationDrawer: connect a new source. Pick the provider, say which account, give it its
  * credentials. Zoho Calendar is different: it signs in through Zoho, so there is nothing to type.
+ * Revolut takes a second, optional key: the Merchant key, for the invoices sent from Revolut.
  */
 
 import { useState } from 'react';
 import { CalendarBlank, Warning } from 'phosphor-react';
+import { toast } from 'sonner';
 import { Button, buttonVariants } from '~/components/ui/button';
 import { Drawer } from '~/components/ui/drawer';
 import { Field } from '~/components/ui/field';
 import { Input } from '~/components/ui/input';
 import { PasswordInput } from '~/components/ui/password-input';
-import { createExternalSource, ZOHO_CALENDAR_CONNECT_PATH } from '~/lib/api/integrations';
+import {
+  createExternalSource,
+  saveMerchantKey,
+  ZOHO_CALENDAR_CONNECT_PATH,
+} from '~/lib/api/integrations';
 import { cn } from '~/lib/utils';
 import { useAuth } from '~/providers/AuthProvider';
-import { PROVIDERS, type ProviderKey } from './model';
+import { MERCHANT_KEY_HELP, PROVIDERS, type ProviderKey } from './model';
 
 export function AddIntegrationDrawer({
   open,
@@ -46,6 +52,7 @@ function Form({ onDone }: { onDone: () => void }) {
   const [apiKey, setApiKey] = useState('');
   const [clientId, setClientId] = useState('');
   const [secret, setSecret] = useState('');
+  const [merchantKey, setMerchantKey] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
 
@@ -77,8 +84,18 @@ function Form({ onDone }: { onDone: () => void }) {
         display_name: displayName.trim() || undefined,
         api_key: credential,
       });
-      if (result) onDone();
-      else setError('That could not be connected. Check the details and try again.');
+      if (!result) {
+        setError('That could not be connected. Check the details and try again.');
+        return;
+      }
+      // The integration exists now, so close either way: a rejected Merchant key shows on its
+      // card with the reason, and a failed save can be retried there.
+      if (provider === 'revolut' && merchantKey.trim()) {
+        const saved = await saveMerchantKey(result.id, merchantKey.trim());
+        if (!saved) toast.error('Revolut is connected, but the Merchant key was not saved.');
+        else if (saved.status !== 'valid') toast.warning(`Merchant key: ${saved.message}`);
+      }
+      onDone();
     } catch {
       setError('That could not be connected. Check the details and try again.');
     } finally {
@@ -179,6 +196,15 @@ function Form({ onDone }: { onDone: () => void }) {
               <PasswordInput
                 value={apiKey}
                 onChange={e => setApiKey(e.target.value)}
+                autoComplete="off"
+              />
+            </Field>
+          )}
+          {provider === 'revolut' && (
+            <Field label="Merchant secret key, for invoices (optional)" hint={MERCHANT_KEY_HELP}>
+              <PasswordInput
+                value={merchantKey}
+                onChange={e => setMerchantKey(e.target.value)}
                 autoComplete="off"
               />
             </Field>

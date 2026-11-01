@@ -12,8 +12,10 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
 from ...integrations.inngest import get_client
+from ...integrations.revolut.merchant import PROVIDER as MERCHANT_PROVIDER
 from ...normalization.inngest_functions import trigger_source_normalization
 from ...services.external_sync_service import sync_service
+from ...services.revolut_invoice_sync import merchant_source_for
 from ..deps import (
     CurrentUser,
     authorize_entity,
@@ -121,6 +123,15 @@ class SyncStatsResponse(BaseModel):
     stats: dict
 
 
+class MerchantKeySummary(BaseModel):
+    """The Revolut Merchant key held for a Revolut integration (its own source row)."""
+
+    source_id: str
+    api_key_status: Optional[str] = "pending"
+    api_key_last_validated_at: Optional[str] = None
+    api_key_error: Optional[str] = None
+
+
 class IntegrationSummary(BaseModel):
     """Summary of an integration for UI display."""
 
@@ -140,6 +151,8 @@ class IntegrationSummary(BaseModel):
     failed_events_count: int = 0
     uncategorized_transactions_count: int = 0
     endpoint_sync_state: Optional[Dict[str, Dict[str, Any]]] = None
+    # Revolut only: the Merchant key that syncs the invoices sent from Revolut.
+    merchant: Optional[MerchantKeySummary] = None
 
 
 class ValidateApiKeyResponse(BaseModel):
@@ -316,9 +329,13 @@ async def get_external_source(source_id: str):
 async def delete_external_source(source_id: str):
     """Delete an external source and all associated data.
 
-    Cascades: raw events, Vault API key, source record.
+    Cascades: raw events, Vault API key, source record, and for Revolut the Merchant key's
+    own source row.
     """
     try:
+        merchant = await merchant_source_for(source_id)
+        if merchant:
+            await sync_service.delete_external_source(merchant["id"])
         result = await sync_service.delete_external_source(source_id)
 
         if result is None:
@@ -374,6 +391,107 @@ async def update_api_key(source_id: str, request: UpdateApiKeyRequest):
         raise
     except Exception as e:
         logger.error(f"Error updating API key: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)
+        )
+
+
+class MerchantKeyResponse(BaseModel):
+    """The Merchant key after saving it, checked against Revolut."""
+
+    source_id: str
+    status: str
+    message: str
+
+
+@router.put(
+    "/sources/{source_id}/merchant-key",
+    dependencies=[Depends(owned_source)],
+    response_model=MerchantKeyResponse,
+)
+async def save_merchant_key(source_id: str, request: UpdateApiKeyRequest):
+    """Add or replace the Revolut Merchant key of a Revolut integration, and check it.
+
+    The key is kept in its own source row (provider ``revolut_merchant``, with this
+    integration's id as its account id), in Vault like every key. It lets the Revolut sync
+    copy the invoices sent from Revolut (the ``payment_requests`` endpoint).
+    """
+    try:
+        source = await sync_service.get_external_source(source_id)
+        if not source:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"External source not found: {source_id}",
+            )
+        if source.get("provider") != "revolut":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="A Merchant key belongs to a Revolut integration",
+            )
+
+        merchant = await merchant_source_for(source_id)
+        if merchant:
+            merchant_id = merchant["id"]
+            await sync_service.update_api_key(merchant_id, request.api_key)
+        else:
+            created = await sync_service.create_external_source(
+                entity_id=source["entity_id"],
+                provider=MERCHANT_PROVIDER,
+                external_account_id=source_id,
+                credentials={"api_key": request.api_key},
+                display_name="Revolut invoices",
+            )
+            if not created:
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="Could not store the Merchant key",
+                )
+            merchant_id = created["id"]
+
+        is_valid, error_message = await _validate_revolut_merchant_api_key(
+            request.api_key
+        )
+        if is_valid:
+            await sync_service.update_api_key_status(merchant_id, "valid")
+            return MerchantKeyResponse(
+                source_id=merchant_id,
+                status="valid",
+                message="Merchant key saved and working",
+            )
+        await sync_service.update_api_key_status(merchant_id, "invalid", error_message)
+        return MerchantKeyResponse(
+            source_id=merchant_id,
+            status="invalid",
+            message=error_message or "Revolut did not accept the Merchant key",
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error saving Merchant key: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)
+        )
+
+
+@router.delete(
+    "/sources/{source_id}/merchant-key", dependencies=[Depends(owned_source)]
+)
+async def remove_merchant_key(source_id: str):
+    """Remove a Revolut integration's Merchant key. Invoices already synced stay."""
+    try:
+        merchant = await merchant_source_for(source_id)
+        if not merchant:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="This integration has no Merchant key",
+            )
+        await sync_service.delete_external_source(merchant["id"])
+        return {"source_id": source_id, "removed": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error removing Merchant key: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)
         )
@@ -513,6 +631,8 @@ async def validate_api_key(source_id: str):
             is_valid, error_message = await _validate_squarespace_api_key(api_key)
         elif provider == "revolut":
             is_valid, error_message = await _validate_revolut_api_key(api_key)
+        elif provider == "revolut_merchant":
+            is_valid, error_message = await _validate_revolut_merchant_api_key(api_key)
         elif provider == "paypal":
             is_valid, error_message = await _validate_paypal_api_key(api_key)
         elif provider == "shopify":
@@ -606,6 +726,44 @@ async def _validate_revolut_api_key(api_key: str) -> tuple[bool, Optional[str]]:
                 return False, "Invalid API key - authentication failed"
             elif response.status_code == 403:
                 return False, "API key lacks required permissions"
+            else:
+                return False, f"API returned status {response.status_code}"
+    except httpx.TimeoutException:
+        return False, "Request timed out - check your network connection"
+    except Exception as e:
+        return False, f"Connection error: {str(e)}"
+
+
+async def _validate_revolut_merchant_api_key(
+    api_key: str,
+) -> tuple[bool, Optional[str]]:
+    """Validate a Revolut Merchant secret key by listing one order."""
+    import httpx
+
+    from ...integrations.revolut.merchant import API_VERSION, MERCHANT_BASE_URL
+
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                f"{MERCHANT_BASE_URL}/api/orders",
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Revolut-Api-Version": API_VERSION,
+                    "User-Agent": "ThreadWise/1.0",
+                },
+                params={"limit": 1},
+                timeout=10.0,
+            )
+
+            if response.status_code == 200:
+                return True, None
+            elif response.status_code == 401:
+                return False, (
+                    "Invalid key - use the Production secret key from "
+                    "Merchant, APIs in Revolut Business"
+                )
+            elif response.status_code == 403:
+                return False, "Key lacks access to orders"
             else:
                 return False, f"API returned status {response.status_code}"
     except httpx.TimeoutException:
@@ -1431,8 +1589,17 @@ async def get_integrations_summary(user: CurrentUser, entity_id: Optional[str] =
             entity_id=authorize_entity(user, entity_id)
         )
 
+        # A Merchant key's row is shown on its Revolut integration, not as its own card.
+        merchants = {
+            s["external_account_id"]: s
+            for s in sources
+            if s.get("provider") == MERCHANT_PROVIDER
+        }
+        sources = [s for s in sources if s.get("provider") != MERCHANT_PROVIDER]
+
         summaries = []
         for source in sources:
+            merchant = merchants.get(source["id"])
             # Get stats for each source
             try:
                 stats = await sync_service.get_sync_stats(source["id"])
@@ -1510,6 +1677,18 @@ async def get_integrations_summary(user: CurrentUser, entity_id: Optional[str] =
                     failed_events_count=failed_count,
                     uncategorized_transactions_count=uncategorized_count,
                     endpoint_sync_state=endpoint_sync_state,
+                    merchant=(
+                        MerchantKeySummary(
+                            source_id=merchant["id"],
+                            api_key_status=merchant.get("api_key_status", "pending"),
+                            api_key_last_validated_at=merchant.get(
+                                "api_key_last_validated_at"
+                            ),
+                            api_key_error=merchant.get("api_key_error"),
+                        )
+                        if merchant
+                        else None
+                    ),
                 )
             )
 

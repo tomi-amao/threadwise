@@ -581,3 +581,18 @@ class TestSyncedInvoices:
             run(editor.update_invoice(ENTITY, INVOICE, {"invoice_type": "SALE"}))
         # Notes stay the business's own.
         run(editor.update_invoice(ENTITY, INVOICE, {"notes": "from Revolut"}))
+
+
+class TestSyncedPayments:
+    def test_linking_a_synced_invoice_keeps_revoluts_status(
+        self, monkeypatch, journals
+    ):
+        service, state = TestPaymentLinks()._linking(
+            monkeypatch, status="PAID", invoice_type="SALE", txn={"direction": "in"}
+        )
+        state["invoice"]["origin"] = "revolut_merchant"
+        run(service.link_payment(ENTITY, INVOICE, state["txn_id"], "sync"))
+        assert state["tables"]["invoice_payments"][0]["matched_by"] == "sync"
+        # Unlinking does not reopen it either: Revolut says it is paid.
+        run(service.unlink_payment(ENTITY, INVOICE, state["txn_id"]))
+        assert state["status_writes"] == []
