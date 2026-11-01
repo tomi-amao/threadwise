@@ -19,7 +19,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 
 from ...normalization.utils import extract_rows
-from ...services import invoice_matching
+from ...services import invoice_matching, invoice_split
 from ...services.invoice_rules import VALID_STATUSES, InvoiceRuleError
 from ...services.invoice_service import DuplicateInvoiceError, invoice_service
 from ...services.journal_service import JournalError, journal_service
@@ -841,6 +841,66 @@ async def invoice_payment_candidates(invoice_id: str, entity_id: str):
         return {"candidates": candidates}
     except Exception as e:
         logger.error(f"Error finding payment candidates: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/invoices/{invoice_id}/split", dependencies=[Depends(owned_invoice)])
+async def invoice_split_proposals(invoice_id: str, entity_id: str):
+    """For each payment matched to the invoice: how its journal would be split by the
+    invoice's lines (``ready``), or that it already is (``applied``), or why it cannot be
+    (``not_journaled``, ``unsupported``). Reads only: nothing is stored until it is applied.
+    """
+    try:
+        proposals = await invoice_split.proposals_for(UUID(entity_id), UUID(invoice_id))
+        return {"proposals": proposals}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error working out invoice splits: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class ApplySplitRequest(BaseModel):
+    entity_id: str
+    transaction_id: str
+
+
+@router.post("/invoices/{invoice_id}/split", dependencies=[Depends(owned_invoice)])
+async def apply_invoice_split(invoice_id: str, request: ApplySplitRequest):
+    """Replace one payment's journal with its split by the invoice, in one step.
+
+    Refused with a 409 when the payment cannot be split, is already split, or is in a locked
+    accounting period; 404 when the invoice or transaction is not the business's.
+    """
+    try:
+        return await invoice_split.apply_split(
+            UUID(request.entity_id), UUID(invoice_id), UUID(request.transaction_id)
+        )
+    except InvoiceRuleError as e:  # before ValueError: it is a subclass
+        raise HTTPException(status_code=409, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error applying an invoice split: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete(
+    "/invoices/{invoice_id}/split/{transaction_id}",
+    dependencies=[Depends(owned_invoice)],
+)
+async def undo_invoice_split(invoice_id: str, transaction_id: str, entity_id: str):
+    """Take the split off one payment and put its previous journal back."""
+    try:
+        return await invoice_split.undo_split(
+            UUID(entity_id), UUID(invoice_id), UUID(transaction_id)
+        )
+    except InvoiceRuleError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error undoing an invoice split: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 

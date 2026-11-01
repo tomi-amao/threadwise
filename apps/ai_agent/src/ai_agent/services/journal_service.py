@@ -3441,7 +3441,7 @@ class JournalService:
         Excludes:
         - fx_conversion, reserve_hold, reserve_release (not expenses)
         - Declined transactions (metadata.state == "declined")
-        - Transactions already journaled as expenses
+        - Transactions already journaled as expenses, or split by an invoice
         - Transactions with excluded_reason set (cross-provider duplicates)
 
         A transaction linked to an invoice is journaled like any other: invoices are
@@ -3489,7 +3489,9 @@ class JournalService:
                 .select("source_id")
                 .eq("entity_id", str(entity_id))
                 .eq("source_type", "financial_transaction")
-                .in_("journal_type", ["expense", "refund_settlement"])
+                # A payment split by its invoice is journaled: its expense journal
+                # was replaced (services/invoice_split.py), not lost.
+                .in_("journal_type", ["expense", "refund_settlement", "invoice_split"])
                 .neq("status", "reversed")
                 .execute()
             )

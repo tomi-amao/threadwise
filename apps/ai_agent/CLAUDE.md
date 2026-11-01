@@ -347,7 +347,10 @@ Double-entry journals are generated from normalized records:
   `inventory_movements` (`tests/test_invoice_line_products.py` guards it). An upload is matched
   to its payment by `services/invoice_matching.py` (automatically only on invoice number + exact
   amount, `matched_by = 'auto'`), on upload and after each Revolut or PayPal sync
-  (`match_invoice_payments`); a duplicate upload is refused with a 409. Details:
+  (`match_invoice_payments`); a duplicate upload is refused with a 409. Once matched, a
+  purchase's lines can split its payment's expense journal (`services/invoice_split.py`,
+  journal type `invoice_split`), applied and undone atomically by `apply_invoice_split` /
+  `undo_invoice_split` after a person approves; nothing is stored before that. Details:
   `docs/accounting.md`.
 - Also: funding (inbound personal transfer), sales receipt (direct PayPal sale), refund
   and refund reversal, FX conversion, inventory cost of goods sold, and stock disposal.

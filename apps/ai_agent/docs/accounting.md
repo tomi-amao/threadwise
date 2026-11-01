@@ -32,6 +32,7 @@ Code: `services/journal_service.py` (`JournalService`, the journals), `services/
 | FX conversion      | A currency conversion between accounts                                                                                            | `create_fx_conversion_journal`   |
 | Expense            | An outbound bank transaction: debit the resolved expense account, credit cash                                                     | `create_expense_journal`         |
 | Cost of goods sold | A fulfilled order                                                                                                                 | `create_inventory_cogs_journal`  |
+| Invoice split      | A payment's expense journal re-cut by the lines of the invoice it paid (approved by a person; see below)                          | `invoice_split.apply_split`      |
 | Disposal           | A gift or write-off of stock: one dated movement plus its journal (a sample: the movement only, as samples are never valued)      | `record_inventory_disposal`      |
 
 A Revolut merchant payment (`reserve_release`) is a funding journal, and carries Revolut's fee
@@ -41,6 +42,31 @@ revenue with what the customer paid (`merchant_fee`; a foreign payment's fee is 
 amount). The settlement and payout that take the money on to the main account are moves between
 the business's own accounts, excluded at normalisation, so the one journal is the whole of it.
 Each journal stands on its own, so the order the three arrive in does not matter.
+
+### Splitting a payment's journal by its invoice
+
+A payment is journaled on its own, usually before its invoice arrives, to one account. Once an
+invoice is matched to it, `services/invoice_split.py` works out how its journal would be re-cut
+by the invoice's lines (`GET /accounting/invoices/{id}/split`), and a person approves it
+(`POST .../split`, undone with `DELETE .../split/{transaction_id}`). The journal stays the
+transaction's: same date, same cash line, journal type `invoice_split`.
+
+- The debit side becomes one line per invoice line, on that line's account, or on the account the
+  payment was journaled to when the line has none.
+- Lines are weighted by their gross and scaled to add up exactly to the payment (rounding on the
+  largest line), so a part payment, a currency difference and a fee are all the same rule. In a
+  non-GBP journal each line's GBP equivalent is its share of the GBP the payment was booked at.
+- VAT is folded into each line (the business is not VAT registered); each line's VAT share is kept
+  in the journal's `metadata.lines`.
+- Only a payment journaled as one expense (posted, or an uncategorised draft) can be split, and
+  purchases only for now.
+
+Applying is one database call (`apply_invoice_split`): it voids the journal it replaces, posts the
+split and records what it replaced in `metadata.replaces`, so the books never hold both or
+neither. `undo_invoice_split` puts the replaced journal back as it was. Both are refused in a
+locked accounting period. A split payment counts as journaled, so journal generation does not
+make it a second expense journal. Changing the transaction's account in its drawer reverses the
+split and journals it afresh, as for any journal.
 
 Every journal comes from a money movement (a payment, a bank transaction, a stock movement) or a
 manual adjustment. Invoices are not a source: see [Invoices](#invoices).
