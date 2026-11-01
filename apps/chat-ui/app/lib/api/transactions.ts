@@ -114,11 +114,23 @@ export interface TransactionAttachment {
   created_at: string;
 }
 
+/** One side of a move between the business's own accounts (metadata.legs). */
+export interface MoveSide {
+  account_id: string;
+  /** Negative for the account the money left. */
+  amount: number;
+  currency: string;
+  /** The synced account's name, or null when Revolut does not list it (a merchant account). */
+  name: string | null;
+}
+
 export interface TransactionDetailResponse {
   transaction: FinancialTransaction;
   journal: TransactionJournal | null;
   /** Absent from responses that predate attachments (the e2e stand-in); treat as none. */
   attachments?: TransactionAttachment[];
+  /** For an internal move: where the money went from and to. Absent otherwise. */
+  moved?: MoveSide[];
 }
 
 export interface UpdateTransactionPayload {

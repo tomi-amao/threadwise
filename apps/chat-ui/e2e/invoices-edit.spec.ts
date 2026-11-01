@@ -7,6 +7,7 @@
 import type { Page } from '@playwright/test';
 import { test, expect, readManifest } from './fixtures';
 import {
+  addReceiptInvoice,
   borrowTransaction,
   readInvoice,
   readTxnInvoiceId,
@@ -152,7 +153,7 @@ test.describe('moving an invoice through its lifecycle', () => {
   test('finalising a draft opens it, and the owed-to-you total follows', async ({ page }) => {
     const drawer = await openInvoice(page, inv.draftSale, 'review');
     await drawer.getByRole('button', { name: 'Finalise invoice' }).click();
-    await expect(page.getByText('Invoice finalised and posted to your books')).toBeVisible();
+    await expect(page.getByText('Invoice finalised', { exact: true })).toBeVisible();
 
     // Now open, due in the future: the next step is payment.
     await expect(drawer.getByRole('button', { name: 'Mark as received' })).toBeVisible();
@@ -164,56 +165,31 @@ test.describe('moving an invoice through its lifecycle', () => {
     await expect(tile(page, 'To review')).toContainText(String(inv.toReview - 1));
   });
 
-  test('an invoice the agent refuses to finalise stays a draft and says why', async ({ page }) => {
-    const drawer = await openInvoice(page, inv.priorPeriodDraft, 'review');
-    await drawer.getByRole('button', { name: 'Finalise invoice' }).click();
-    await expect(page.getByText(/before the 2026-01-01 accounting cutoff/)).toBeVisible();
-    await expect(drawer.getByRole('button', { name: 'Finalise invoice' })).toBeVisible();
-    expect((await readInvoice(inv.priorPeriodDraft))?.status).toBe('DRAFT');
-  });
-
-  test('marking paid without a matched bank payment asks first', async ({ page }) => {
+  test('marking paid does not need a matched bank payment', async ({ page }) => {
     const drawer = await openInvoice(page, inv.overduePurchase, 'open');
     await drawer.getByRole('button', { name: 'Mark as paid' }).click();
-
-    const confirm = page.getByRole('dialog').filter({ hasText: 'without a matched payment' });
-    await expect(confirm).toBeVisible();
-    await confirm.getByRole('button', { name: 'Cancel' }).click();
-    expect((await readInvoice(inv.overduePurchase))?.status).toBe('OPEN');
-
-    await drawer.getByRole('button', { name: 'Mark as paid' }).click();
-    await page
-      .getByRole('dialog')
-      .filter({ hasText: 'without a matched payment' })
-      .getByRole('button', { name: 'Mark paid anyway' })
-      .click();
     await expect(page.getByText('Marked as paid')).toBeVisible();
     expect((await readInvoice(inv.overduePurchase))?.status).toBe('PAID');
+    await expect(drawer.getByRole('region', { name: 'Next step' })).toContainText(
+      'No bank transaction is matched to it yet'
+    );
 
-    // Wait for the confirmation to be gone, then close the drawer with its own button: Escape goes
-    // to the topmost layer, which can still be the confirmation while it animates out.
-    await expect(
-      page.getByRole('dialog').filter({ hasText: 'without a matched payment' })
-    ).toHaveCount(0);
     await drawer.getByRole('button', { name: 'Close' }).click();
     await expect(tile(page, 'Overdue')).toContainText(String(inv.overdueCount - 1));
     await expect(tile(page, 'You owe')).toContainText(`${inv.youOweCount - 1} unpaid`);
   });
 
-  test('an invoice with a matched bank payment is marked paid without asking', async ({ page }) => {
+  test('an invoice with a matched bank payment says so once paid', async ({ page }) => {
     const drawer = await openInvoice(page, inv.matchedPurchase, 'open');
     await drawer.getByRole('button', { name: 'Mark as paid' }).click();
     await expect(page.getByText('Marked as paid')).toBeVisible();
-    await expect(
-      page.getByRole('dialog').filter({ hasText: 'without a matched payment' })
-    ).toHaveCount(0);
     await expect(drawer.getByRole('region', { name: 'Next step' })).toContainText(
       'matched to a bank transaction'
     );
     expect((await readInvoice(inv.matchedPurchase))?.status).toBe('PAID');
   });
 
-  test('a bank payment can be matched to an invoice from the drawer, and unmatched again', async ({
+  test('matching a bank payment marks the invoice paid, and unmatching undoes it', async ({
     page,
   }) => {
     // INV-PP-3001 is £180 with no payment matched: make one transaction look like its payment.
@@ -227,14 +203,46 @@ test.describe('moving an invoice through its lifecycle', () => {
       await expect(match).toContainText('Matched to a bank transaction');
       expect(await readTxnInvoiceId(borrowed.id)).toBe(inv.overduePurchase);
 
-      // With a payment matched, marking paid no longer asks first.
-      await drawer.getByRole('button', { name: 'Mark as paid' }).click();
-      await expect(page.getByText('Marked as paid')).toBeVisible();
+      // The payment covers the invoice, so it is paid without being marked by hand.
+      await expect(drawer.getByRole('region', { name: 'Next step' })).toContainText(
+        'matched to a bank transaction'
+      );
+      await expect(drawer.getByRole('button', { name: 'Mark as paid' })).toHaveCount(0);
       expect((await readInvoice(inv.overduePurchase))?.status).toBe('PAID');
 
       await match.getByRole('button', { name: 'Remove match' }).click();
       await expect(match).not.toContainText('Matched to a bank transaction');
       expect(await readTxnInvoiceId(borrowed.id)).toBeUndefined();
+      expect((await readInvoice(inv.overduePurchase))?.status).toBe('OPEN');
+    } finally {
+      await borrowed.restore();
+    }
+  });
+
+  test('a payment for less than the invoice marks it part paid', async ({ page }) => {
+    const borrowed = await borrowTransaction('out', 90, 'ParcelPost Ltd');
+    try {
+      const drawer = await openInvoice(page, inv.overduePurchase, 'open');
+      const match = drawer.getByRole('region', { name: 'Payment match' });
+      await match.getByRole('button', { name: 'Match a payment' }).click();
+      // Candidates are within 10% of the total, so a half payment is not offered: match it
+      // the way a sync or reconciliation would, through the same action.
+      await expect(
+        match.getByRole('button', { name: /^Match ParcelPost Ltd for £90/ })
+      ).toHaveCount(0);
+      const invoice = await readInvoice(inv.overduePurchase);
+      const status = await page.evaluate(
+        async ([id, transactionId]) => {
+          const body = new FormData();
+          body.set('intent', 'matchPayment');
+          body.set('invoiceId', id);
+          body.set('transactionId', transactionId);
+          return (await fetch('/api/invoices', { method: 'POST', body })).status;
+        },
+        [invoice!.id, borrowed.id]
+      );
+      expect(status).toBe(200);
+      expect((await readInvoice(inv.overduePurchase))?.status).toBe('PARTIALLY_PAID');
     } finally {
       await borrowed.restore();
     }
@@ -255,8 +263,10 @@ test.describe('moving an invoice through its lifecycle', () => {
     await drawer.getByRole('button', { name: 'Void invoice' }).click();
     const confirm = page.getByRole('dialog').filter({ hasText: 'Void this invoice?' });
     await confirm.getByRole('button', { name: 'Void invoice' }).click();
-    await expect(page.getByText('Invoice voided and reversed in your books')).toBeVisible();
-    await expect(drawer.getByRole('region', { name: 'Next step' })).toContainText('no effect');
+    await expect(page.getByText('Invoice voided', { exact: true })).toBeVisible();
+    await expect(drawer.getByRole('region', { name: 'Next step' })).toContainText(
+      'It stays on record'
+    );
     expect((await readInvoice(inv.openSale))?.status).toBe('VOID');
 
     await page.keyboard.press('Escape');
@@ -340,5 +350,32 @@ test.describe('stock from a purchase invoice', () => {
     // The other lines are still open to decide on.
     await expect(drawer.getByLabel('Stock handling for Heavy knit swatches')).toBeVisible();
     await expect(drawer.getByLabel('Stock handling for Merino yarn 4-ply')).toHaveCount(0);
+  });
+});
+
+test.describe('synced invoices', () => {
+  test('an original added to a Revolut invoice replaces the printable copy', async ({ page }) => {
+    const drawer = await openInvoice(page, inv.revolutRequest, 'paid');
+    await expect(drawer.getByRole('button', { name: 'Print invoice' })).toBeVisible();
+    await drawer.getByLabel('Original document').setInputFiles(pdf('INV-RV-5.pdf'));
+    await expect(page.getByText('Original added')).toBeVisible();
+    await expect(drawer.getByRole('button', { name: 'View document' })).toBeVisible();
+    await expect(drawer.getByRole('button', { name: 'Add the original' })).toHaveCount(0);
+
+    const response = page.waitForResponse(r => r.url().includes('document=1'));
+    await drawer.getByRole('button', { name: 'View document' }).click();
+    const { url } = (await (await response).json()) as { url: string };
+    expect(url).toContain('/storage/v1/object/sign/invoices/');
+  });
+
+  test('a receipt read as an invoice by mistake can be removed', async ({ page }) => {
+    const number = await addReceiptInvoice(inv.receiptInvoice);
+    const drawer = await openInvoice(page, number, 'paid');
+    await drawer.getByRole('button', { name: 'Not an invoice' }).click();
+    const confirm = page.getByRole('dialog', { name: 'Remove this invoice?' });
+    await confirm.getByRole('button', { name: 'Remove invoice' }).click();
+    await expect(page.getByText('Invoice removed')).toBeVisible();
+    await expect(page).not.toHaveURL(/invoice=/);
+    expect(await readInvoice(number)).toBeNull();
   });
 });

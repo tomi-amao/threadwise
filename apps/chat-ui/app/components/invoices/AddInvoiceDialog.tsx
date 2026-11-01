@@ -2,9 +2,9 @@
  * AddInvoiceDialog
  *
  * Drop in PDFs or photos of invoices. Each one is stored, read by the AI agent and saved as a
- * draft ("To review"); nothing is posted to the ledger until someone finalises it. The agent
- * works out whether an invoice is owed to you or by you from your business details, so the
- * default is to let it; the choice is there for when a document is ambiguous.
+ * draft ("To review"). Invoices never post to the ledger; the payment that settles one does.
+ * The agent works out whether an invoice is owed to you or by you from your business details,
+ * so the default is to let it; the choice is there for when a document is ambiguous.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';

@@ -1,37 +1,38 @@
 /**
  * Invoice API route
  *
- * GET  ?id=<invoice>            the invoice with its lines, journals, matched payment and pickers
- * GET  ?id=<invoice>&document=1 a short-lived signed URL for the uploaded document
+ * GET  ?id=<invoice>            the invoice with its lines, matched payment and pickers
+ * GET  ?id=<invoice>&document=1 where to open its document: a short-lived signed URL for the
+ *                               upload or the receipt it was read from, or the printable copy
  * POST intent=upload            store the file, have the agent extract it into a DRAFT invoice
- * POST intent=setStatus         move the invoice through its lifecycle (the agent posts journals)
+ * POST intent=attachOriginal    keep a file as the document of an invoice that has no upload
+ *                               (a Revolut payment request's original, say); it is not read
+ * POST intent=setStatus         move the invoice through its lifecycle (nothing is posted)
  * POST intent=update            notes, direction (drafts only) and the GL account of each line
  * POST intent=stock             decide, per purchase line, how it is tracked as stock
  * POST intent=delete            remove a draft, cancelled or void invoice
- * POST intent=matchPayment      link a bank transaction as the invoice's payment (unmatchPayment undoes it)
+ * POST intent=matchPayment      link a bank transaction as the invoice's payment (unmatchPayment undoes
+ *                               it); the agent then sets paid or part paid from what is linked
  *
  * Every invoice is first fetched as the signed-in user (row-level security), so one user can
  * never read or change another's by guessing an id. Rules about *what* may change (lifecycle,
- * deletion, direction) are enforced by the agent, which owns the ledger; this route does not
- * duplicate them, it only shows the agent's refusal.
+ * deletion, direction) are enforced by the agent; this route does not duplicate them, it only
+ * shows the agent's refusal.
  */
 
 import type { ActionFunctionArgs, LoaderFunctionArgs } from 'react-router';
 import {
   AgentError,
   callAgent,
-  findMatchingTransaction,
-  getDocumentUrl,
+  documentUrlFor,
   getInvoiceDetail,
   getOwnedInvoice,
   getUserEntity,
   jsonInit,
-  setPaymentMatch,
   type OwnedInvoice,
 } from '~/lib/api/invoices.server';
 import { requestAccessToken } from '~/lib/api/agent-auth.server';
 import { getServerSupabaseClient } from '~/lib/supabase';
-import { getRequestSupabaseClient } from '~/lib/supabase-server';
 import type { StockDecision } from '~/types/invoice';
 
 const MAX_FILE_BYTES = 10 * 1024 * 1024;
@@ -44,8 +45,7 @@ function json(data: unknown, status = 200) {
   });
 }
 
-const fail = (error: string, status: number, extra: Record<string, unknown> = {}) =>
-  json({ ok: false, error, ...extra }, status);
+const fail = (error: string, status: number) => json({ ok: false, error }, status);
 
 const parseJson = <T,>(value: FormDataEntryValue | null): T | null => {
   if (typeof value !== 'string') return null;
@@ -65,8 +65,9 @@ export async function loader({ request }: LoaderFunctionArgs) {
     if (url.searchParams.get('document')) {
       const invoice = await getOwnedInvoice(request, id);
       if (!invoice) return fail('Invoice not found', 404);
-      if (!invoice.file_path) return fail('No document is attached to this invoice', 404);
-      return json({ ok: true, url: await getDocumentUrl(invoice.file_path) });
+      const documentUrl = await documentUrlFor(request, invoice);
+      if (!documentUrl) return fail('No document is attached to this invoice', 404);
+      return json({ ok: true, url: documentUrl });
     }
 
     const detail = await getInvoiceDetail(request, id);
@@ -99,16 +100,11 @@ export async function action({ request }: ActionFunctionArgs) {
         return await stock(request, invoice, form);
       case 'delete':
         return await remove(request, invoice);
+      case 'attachOriginal':
+        return await attachOriginal(invoice, form);
       case 'matchPayment':
-      case 'unmatchPayment': {
-        const result = await setPaymentMatch(
-          getRequestSupabaseClient(request),
-          invoice,
-          String(form.get('transactionId') ?? ''),
-          intent === 'matchPayment'
-        );
-        return result.ok ? json(result) : fail(result.error, 400);
-      }
+      case 'unmatchPayment':
+        return await matchPayment(request, invoice, form, intent === 'matchPayment');
       default:
         return fail('Unknown action', 400);
     }
@@ -122,18 +118,14 @@ export async function action({ request }: ActionFunctionArgs) {
 // ─── Actions ──────────────────────────────────────────────────────────
 
 async function upload(request: Request, form: FormData) {
-  const file = form.get('file');
-  if (!(file instanceof File)) return fail('No file was provided', 400);
-  if (file.type !== 'application/pdf' && !file.type.startsWith('image/')) {
-    return fail('Only PDF and image files can be added', 400);
-  }
-  if (file.size > MAX_FILE_BYTES) return fail('That file is over the 10 MB limit', 400);
+  const file = fileFrom(form);
+  if (typeof file === 'string') return fail(file, 400);
 
   const entityId = (await getUserEntity(request))?.id;
   if (!entityId) return fail('Sign in to add invoices', 401);
 
   const bytes = new Uint8Array(await file.arrayBuffer());
-  const storagePath = `${entityId}/${Date.now()}-${file.name.replace(/[^a-zA-Z0-9.-]/g, '_')}`;
+  const storagePath = storagePathFor(entityId, file);
   const storage = getServerSupabaseClient().storage.from('invoices');
 
   const { error: storageError } = await storage.upload(storagePath, bytes, {
@@ -173,44 +165,88 @@ async function upload(request: Request, form: FormData) {
   }
 }
 
+/** The file, checked: a PDF or image under the size limit. */
+function fileFrom(form: FormData): File | string {
+  const file = form.get('file');
+  if (!(file instanceof File)) return 'No file was provided';
+  if (file.type !== 'application/pdf' && !file.type.startsWith('image/')) {
+    return 'Only PDF and image files can be added';
+  }
+  if (file.size > MAX_FILE_BYTES) return 'That file is over the 10 MB limit';
+  return file;
+}
+
+const storagePathFor = (entityId: string, file: File) =>
+  `${entityId}/${Date.now()}-${file.name.replace(/[^a-zA-Z0-9.-]/g, '_')}`;
+
+/**
+ * Keep a file as an invoice's document. Only for an invoice with no upload yet: an upload's own
+ * file was read into it, so replacing it would leave the two disagreeing. The file is stored
+ * and pointed at, not read: the invoice's figures stay what they are.
+ *
+ * `invoices` has no write policy for users, so the service role writes `file_path`, and only
+ * after `invoice` was read as the user (the caller does that).
+ */
+async function attachOriginal(invoice: OwnedInvoice, form: FormData) {
+  if (invoice.file_path) return fail('This invoice already has its document', 409);
+  const file = fileFrom(form);
+  if (typeof file === 'string') return fail(file, 400);
+
+  const service = getServerSupabaseClient();
+  const storagePath = storagePathFor(invoice.entity_id, file);
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  const { error: storageError } = await service.storage
+    .from('invoices')
+    .upload(storagePath, bytes, { contentType: file.type, upsert: false });
+  if (storageError) return fail(`The file could not be stored: ${storageError.message}`, 500);
+
+  const { error } = await service
+    .from('invoices')
+    .update({ file_path: storagePath })
+    .eq('id', invoice.id)
+    .eq('entity_id', invoice.entity_id)
+    .is('file_path', null);
+  if (error) {
+    await service.storage.from('invoices').remove([storagePath]);
+    return fail(`The document could not be saved: ${error.message}`, 500);
+  }
+  return json({ ok: true });
+}
+
 async function setStatus(request: Request, invoice: OwnedInvoice, form: FormData) {
   const status = String(form.get('status') ?? '').toUpperCase();
   if (!STATUSES.includes(status)) return fail('Unknown status', 400);
 
-  // Marking paid clears the payable against the bank. Without an imported payment the agent
-  // cannot say which account the money left, so ask for a deliberate go-ahead.
-  if (status === 'PAID' && invoice.status !== 'PAID' && form.get('confirmUnmatched') !== '1') {
-    const matched = await findMatchingTransaction(
-      getRequestSupabaseClient(request),
-      invoice.invoice_number,
-      invoice.entity_id
-    );
-    if (!matched) {
-      return fail(
-        'No bank payment has been matched to this invoice yet. Import the payment first, or ' +
-          'mark it paid anyway.',
-        409,
-        { code: 'no_matching_payment' }
-      );
-    }
-  }
-
-  const result = await callAgent<{
-    warnings?: string[];
-    voided_journals?: unknown[];
-    purchase_journal?: unknown;
-  }>(
+  await callAgent(
     `/accounting/invoices/${invoice.id}/status`,
     await requestAccessToken(request),
     jsonInit('PATCH', { entity_id: invoice.entity_id, status })
   );
-  return json({
-    ok: true,
-    status,
-    posted: !!result.purchase_journal,
-    voided: result.voided_journals?.length ?? 0,
-    warnings: result.warnings ?? [],
-  });
+  return json({ ok: true, status });
+}
+
+async function matchPayment(
+  request: Request,
+  invoice: OwnedInvoice,
+  form: FormData,
+  match: boolean
+) {
+  const transactionId = String(form.get('transactionId') ?? '');
+  if (!transactionId) return fail('A transaction id is required', 400);
+  const token = await requestAccessToken(request);
+  const path = `/accounting/invoices/${invoice.id}/payments`;
+  await (match
+    ? callAgent(
+        path,
+        token,
+        jsonInit('POST', { entity_id: invoice.entity_id, transaction_id: transactionId })
+      )
+    : callAgent(
+        `${path}/${encodeURIComponent(transactionId)}?entity_id=${encodeURIComponent(invoice.entity_id)}`,
+        token,
+        { method: 'DELETE' }
+      ));
+  return json({ ok: true });
 }
 
 async function update(request: Request, invoice: OwnedInvoice, form: FormData) {

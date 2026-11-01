@@ -16,6 +16,7 @@ import type {
   TransactionAttachment,
   JournalLineItemWithAccount,
   ListTransactionsResponse,
+  MoveSide,
   TransactionDetailResponse,
   TransactionJournal,
 } from './transactions';
@@ -53,7 +54,13 @@ export async function listTransactions(
   if (query.source) q = q.eq('source', query.source);
   if (query.direction) q = q.eq('direction', query.direction);
   if (query.transactionType) q = q.eq('transaction_type', query.transactionType);
-  if (query.txnStatus === 'excluded') q = q.not('excluded_reason', 'is', null);
+  // A move between the business's own accounts is stored excluded (it never reaches the
+  // ledger) but is its own status here, so "Excluded" means left out by a rule or a person.
+  if (query.txnStatus === 'internal') q = q.eq('metadata->>internal_move', 'true');
+  else if (query.txnStatus === 'excluded')
+    q = q
+      .not('excluded_reason', 'is', null)
+      .or('metadata->>internal_move.is.null,metadata->>internal_move.neq.true');
   else if (query.txnStatus === 'active') q = q.is('excluded_reason', null);
   if (query.dateFrom) q = q.gte('occurred_at', query.dateFrom);
   if (query.dateTo) q = q.lte('occurred_at', query.dateTo);
@@ -162,6 +169,37 @@ export async function getTransactionDetail(
     transaction,
     journal,
     attachments: (files.data ?? []) as unknown as TransactionAttachment[],
+    ...(await movedBetween(supabase, entityId, transaction)),
+  };
+}
+
+/** The two sides of an internal move, each named from the business's synced accounts. */
+async function movedBetween(
+  supabase: SupabaseClient,
+  entityId: string,
+  transaction: FinancialTransaction
+): Promise<{ moved?: MoveSide[] }> {
+  const legs = transaction.metadata?.legs;
+  if (transaction.metadata?.internal_move !== true || !Array.isArray(legs)) return {};
+  const sides = (legs as Omit<MoveSide, 'name'>[]).filter(l => l && l.account_id);
+  const { data, error } = await supabase
+    .from('bank_accounts')
+    .select('external_account_id, name')
+    .eq('entity_id', entityId)
+    .eq('source', transaction.source)
+    .in(
+      'external_account_id',
+      sides.map(s => s.account_id)
+    );
+  if (error) throw new Error(`Failed to load its accounts: ${error.message}`);
+  const names = new Map((data ?? []).map(a => [a.external_account_id as string, a.name]));
+  return {
+    moved: sides.map(s => ({
+      account_id: s.account_id,
+      amount: Number(s.amount),
+      currency: s.currency,
+      name: (names.get(s.account_id) as string | null | undefined) ?? null,
+    })),
   };
 }
 

@@ -18,8 +18,9 @@ This service does three distinct jobs:
    (Shopify, Revolut, PayPal, Squarespace) via Inngest, normalizes them into a
    canonical schema, and persists them to Supabase/Postgres. Zoho Calendar is
    the one provider that also goes the other way — see "OAuth providers" below.
-3. **Accounting engine** — turns normalized payments/transactions/invoices into
-   double-entry journals against a chart of accounts.
+3. **Accounting engine** — turns normalized payments and transactions into
+   double-entry journals against a chart of accounts. Invoices are documents and
+   never post.
 
 Longer explanations for people are in `docs/` (start at `docs/README.md`): architecture,
 security, chat agent, data pipeline, accounting, the route list, development. Update the matching
@@ -229,6 +230,20 @@ is Inngest-orchestrated, under `integrations/inngest/`:
   purpose, but `CanonicalFinancialTransaction.base_amount` and the `financial_transactions` column
   are required, so those rows fail validation. Marked with a `type: ignore` in
   `normalization/paypal_normalizer.py`; it needs a decision on how to convert them to GBP.
+- Two Revolut syncs bypass raw events and normalisation on purpose and write straight to
+  app tables: receipts (`revolut_sync_receipts` → `transaction_attachments`) and the
+  invoices sent from Revolut (`revolut_merchant_sync`, the Revolut integration's
+  `payment_requests` endpoint → `invoices` with `origin = 'revolut_merchant'`, plus
+  `invoice_payments`). Its Merchant API key is a second key on the Revolut integration,
+  stored as a child source row (provider `revolut_merchant`, `external_account_id` = the
+  Revolut row's id) because each row holds one Vault key.
+  The services they call import `integrations.*`, whose `__init__` loads every Inngest
+  function, so a sync function imports such a service inside its body, not at module top.
+  Details: `docs/data-pipeline.md`.
+- A Revolut transaction whose legs are all the business's own accounts (`revolut_normalizer.
+internal_move_legs`) is stored excluded with `metadata.internal_move`: the normaliser keeps
+  one leg, and from one leg a move between accounts looks like money leaving. A merchant
+  payment's fee is on its leg (`metadata.fee`) and is journaled on the payment itself.
 - `normalization/inngest_functions.py` — the canonical processing path: consumes
   raw events, dispatches to the provider-specific normalizer, persists canonical
   records. Chained via `normalize_after_<provider>_sync` triggers.
@@ -318,10 +333,18 @@ Double-entry journals are generated from normalized records:
   — debits cash, credits clearing. No fee entry (fees are captured at accrual time).
 - **Expense journal**: from an outbound financial transaction — debits the resolved
   expense account, credits cash.
-- Purchase/Sale/Payment journals are created from invoices.
+- Invoices are **not** a journal source: the transaction that settles an invoice is what
+  is journaled, so an invoice's status, edits or deletion never touch the ledger. Keep it
+  that way; a second path from invoices is how the same expense gets counted twice.
+  Which transaction paid an invoice is `invoice_payments` (written only by
+  `InvoiceService.link_payment`/`unlink_payment`, which also set the status), not
+  `financial_transactions.metadata.invoice_id`: that field is the provider's own reference.
+  Synced invoices (`origin` other than `upload`) are read-only for status and direction
+  (`invoice_rules.LOCKED`); a Revolut payment request cannot be deleted, an invoice read from a
+  receipt (`revolut_expense`, `services/receipt_invoices.py`) can. Details: `docs/accounting.md`.
 - Also: funding (inbound personal transfer), sales receipt (direct PayPal sale), refund
   and refund reversal, FX conversion, inventory cost of goods sold, and stock disposal.
-  All 13 types, with their `JournalService` methods, are in `docs/accounting.md`.
+  All 10 types, with their `JournalService` methods, are in `docs/accounting.md`.
 - Journals follow the same rules throughout: debits equal credits, one journal per source
   record (idempotent), and `reverse_journal` is a soft void (`status = 'reversed'`), not an
   opposite entry.

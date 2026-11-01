@@ -5,7 +5,6 @@
  * - Accrue payments (revenue recognition)
  * - Settle gateway payouts (cash recognition)
  * - Journal categorized expenses
- * - Journal invoices (purchase/sale/payment)
  * - List journals
  */
 

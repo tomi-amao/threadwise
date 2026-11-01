@@ -32,6 +32,12 @@ interface Source {
       last_run_error: string | null;
     }
   > | null;
+  merchant?: {
+    source_id: string;
+    api_key_status: 'pending' | 'valid' | 'invalid' | 'expired';
+    api_key_last_validated_at: string | null;
+    api_key_error: string | null;
+  } | null;
 }
 
 const base = (over: Partial<Source>): Source => ({
@@ -128,6 +134,30 @@ async function mockAgent(page: Page, initial: Source[] = SOURCES) {
         /* no body */
       }
       calls.push({ method: request.method(), path: url.pathname, body });
+      // Revolut's Merchant key: saved and checked in one call, kept on the Revolut card.
+      const merchantKey = /^\/integrations\/sources\/([^/]+)\/merchant-key$/.exec(url.pathname);
+      if (merchantKey) {
+        const [, id] = merchantKey;
+        const merchant =
+          request.method() === 'PUT'
+            ? {
+                source_id: 'src-merchant',
+                api_key_status: 'valid' as const,
+                api_key_last_validated_at: new Date().toISOString(),
+                api_key_error: null,
+              }
+            : null;
+        sources = sources.map(s => (s.id === id ? { ...s, merchant } : s));
+        return json(
+          merchant
+            ? {
+                source_id: 'src-merchant',
+                status: 'valid',
+                message: 'Merchant key saved and working',
+              }
+            : { source_id: id, removed: true }
+        );
+      }
       if (request.method() === 'DELETE') {
         const id = url.pathname.split('/').pop();
         sources = sources.filter(s => s.id !== id);
@@ -256,6 +286,99 @@ test.describe('integrations', () => {
         external_account_id: 'site-123',
         api_key: 'secret-key',
       });
+  });
+
+  test('Revolut takes a Merchant key on its card, for the invoices sent from Revolut', async ({
+    page,
+  }) => {
+    const agent = await mockAgent(page);
+    await page.goto('/integrations');
+    const bank = page.getByRole('article', { name: 'Revolut Business' });
+    const invoices = bank.getByRole('region', { name: 'Invoices from Revolut' });
+    await expect(invoices).toContainText('No Merchant key');
+    // Without the key, the invoices cannot be synced on their own.
+    await expect(bank.getByRole('button', { name: /^payment requests/i })).toBeDisabled();
+
+    await invoices.getByRole('button', { name: 'Add Merchant key' }).click();
+    await invoices.getByLabel('Merchant secret key').fill('sk_merchant');
+    await invoices.getByRole('button', { name: 'Save and check' }).click();
+    await expect(invoices).toContainText('Key works');
+    await expect(bank.getByRole('button', { name: /^payment requests/i })).toBeEnabled();
+    expect(
+      agent.calls.find(c => c.path === '/integrations/sources/src-bank/merchant-key')
+    ).toMatchObject({ method: 'PUT', body: { api_key: 'sk_merchant' } });
+
+    // Checking it again asks the agent about the Merchant key's own row.
+    await invoices.getByRole('button', { name: 'Check the Merchant key' }).click();
+    await expect
+      .poll(() => agent.calls.some(c => c.path === '/integrations/sources/src-merchant/validate'))
+      .toBe(true);
+  });
+
+  test('the Merchant key can be removed, after confirming, and the card stays', async ({
+    page,
+  }) => {
+    const agent = await mockAgent(
+      page,
+      SOURCES.map(s =>
+        s.id === 'src-bank'
+          ? {
+              ...s,
+              merchant: {
+                source_id: 'src-merchant',
+                api_key_status: 'valid',
+                api_key_last_validated_at: null,
+                api_key_error: null,
+              },
+            }
+          : s
+      )
+    );
+    await page.goto('/integrations');
+    const bank = page.getByRole('article', { name: 'Revolut Business' });
+    const invoices = bank.getByRole('region', { name: 'Invoices from Revolut' });
+    await expect(invoices).toContainText('Key works');
+    await invoices.getByRole('button', { name: 'Remove key' }).click();
+    await page
+      .getByRole('dialog')
+      .filter({ hasText: 'Remove the Merchant key?' })
+      .getByRole('button', { name: 'Remove key' })
+      .click();
+    await expect(invoices).toContainText('No Merchant key');
+    await expect(bank).toBeVisible();
+    expect(
+      agent.calls.find(c => c.path === '/integrations/sources/src-bank/merchant-key')?.method
+    ).toBe('DELETE');
+  });
+
+  test('connecting Revolut can take the Merchant key at the same time', async ({ page }) => {
+    const agent = await mockAgent(page);
+    await page.goto('/integrations');
+    await page.getByRole('button', { name: 'Add integration' }).first().click();
+    const d = page.getByRole('dialog');
+    await d.getByRole('radio', { name: /Revolut/ }).click();
+    await d.getByLabel(/Business ID/).fill('biz-2');
+    await d.getByLabel(/^API key/).fill('business-token');
+    await d.getByLabel(/Merchant secret key/).fill('sk_merchant');
+    await d.getByRole('button', { name: 'Connect' }).click();
+    await expect(d).toBeHidden();
+    await expect
+      .poll(() => agent.calls.find(c => c.path === '/integrations/sources/new/merchant-key'))
+      .toMatchObject({ method: 'PUT', body: { api_key: 'sk_merchant' } });
+    expect(
+      agent.calls.find(c => c.path === '/integrations/sources' && c.method === 'POST')?.body
+    ).toMatchObject({ provider: 'revolut', api_key: 'business-token' });
+  });
+
+  test('no other provider asks for a Merchant key', async ({ page }) => {
+    await mockAgent(page);
+    await page.goto('/integrations');
+    // Only the Revolut card has an Invoices section (three sources are listed).
+    await expect(page.getByRole('region', { name: 'Invoices from Revolut' })).toHaveCount(1);
+    await page.getByRole('button', { name: 'Add integration' }).first().click();
+    const d = page.getByRole('dialog');
+    await d.getByRole('radio', { name: /Squarespace/ }).click();
+    await expect(d.getByLabel(/Merchant secret key/)).toHaveCount(0);
   });
 
   test('Zoho signs in through Zoho instead of asking for a key', async ({ page }) => {

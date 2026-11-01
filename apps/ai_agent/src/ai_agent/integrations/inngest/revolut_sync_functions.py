@@ -1,13 +1,18 @@
 """Inngest functions for Revolut data synchronization.
 
 Orchestrates bulk loading from Revolut Business API endpoints
-with paginated extraction and raw event storage.
+with paginated extraction and raw event storage. Two more steps write straight to app tables:
+receipts (``revolut_sync_receipts``) and the invoices sent from Revolut, which are Merchant API
+payment requests (``revolut_merchant_sync``, the ``payment_requests`` endpoint). Stored receipts
+are then read in the background (``revolut_read_receipts``), and the supplier invoices among
+them are added to the invoice register.
 """
 
 import logging
 from dataclasses import asdict
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
+from uuid import UUID
 
 import httpx
 import inngest
@@ -16,6 +21,8 @@ from inngest.experimental import realtime
 from ...core.supabase_client import get_supabase_client
 from ...integrations.common import resolve_sync_since
 from ...integrations.revolut import ENDPOINTS, RevolutAdapter
+from ...integrations.revolut.merchant import ENDPOINT as MERCHANT_ENDPOINT
+from ...integrations.revolut.merchant import MerchantAdapter, is_invoice
 from ...integrations.revolut.receipts import (
     ReceiptRef,
     known_receipt_ids,
@@ -39,6 +46,12 @@ RECEIPTS_SYNC_KEY = "receipts"
 RECEIPT_LOOKBACK = timedelta(days=90)
 RECEIPTS_PER_STEP = 10
 
+# Reading receipts: each file is one or two model calls, so a step reads a few and a run reads
+# at most READS_PER_RUN, then starts the next run if more are waiting.
+READ_RECEIPTS_EVENT = "revolut/receipts.read"
+READS_PER_STEP = 5
+READS_PER_RUN = 100
+
 
 @inngest_client.create_function(
     fn_id="revolut_sync_all",
@@ -46,7 +59,16 @@ RECEIPTS_PER_STEP = 10
     retries=3,
 )
 async def revolut_sync_all(ctx: inngest.Context) -> Dict[str, Any]:
-    """Orchestrate a full Revolut sync for all endpoints."""
+    """Orchestrate a full Revolut sync: the endpoints, then receipts, then invoices.
+
+    The overall status counts every step (receipts, and invoices when there is a Merchant
+    key, as well as the endpoints), and ends with "completed": the progress toast waits for
+    that, since the endpoints finish minutes before the steps after them.
+    """
+    # Imported here: the service imports integrations.revolut.merchant, and importing any
+    # integrations module loads this one through the package's __init__.
+    from ...services.revolut_invoice_sync import merchant_source_for
+
     source_id: str = ""
 
     try:
@@ -63,19 +85,48 @@ async def revolut_sync_all(ctx: inngest.Context) -> Dict[str, Any]:
         )
 
         channel = get_sync_channel(source_id)
-        await realtime.publish(
-            client=inngest_client,
-            channel=channel,
-            topic="status",
-            data=SyncStatusData(
-                status="syncing",
-                endpoints_completed=0,
-                endpoints_total=len(ENDPOINTS),
-                total_items=0,
-                error=None,
-                timestamp=datetime.now().isoformat(),
-            ),
-        )
+
+        async def _has_merchant_key() -> bool:
+            return bool(await merchant_source_for(source_id))
+
+        has_merchant_key = await ctx.step.run("has-merchant-key", _has_merchant_key)
+        # Endpoints, receipts, and invoices when there is a key to read them with.
+        steps_total = len(ENDPOINTS) + 1 + int(has_merchant_key)
+
+        async def _status(status: str, done: int, items: int) -> None:
+            await realtime.publish(
+                client=inngest_client,
+                channel=channel,
+                topic="status",
+                data=SyncStatusData(
+                    status=status,
+                    endpoints_completed=done,
+                    endpoints_total=steps_total,
+                    total_items=items,
+                    error=None,
+                    timestamp=datetime.now().isoformat(),
+                ),
+            )
+
+        async def _receipts_progress(
+            status: str, items: int = 0, error: Optional[str] = None
+        ) -> None:
+            await realtime.publish(
+                client=inngest_client,
+                channel=channel,
+                topic="progress",
+                data=SyncProgressData(
+                    endpoint=RECEIPTS_SYNC_KEY,
+                    status=status,
+                    items_stored=items,
+                    pages_processed=0,
+                    total_items=items if status == "completed" else None,
+                    error=error,
+                    timestamp=datetime.now().isoformat(),
+                ),
+            )
+
+        await _status("syncing", 0, 0)
 
         await ctx.step.run(
             "update-sync-status",
@@ -98,32 +149,51 @@ async def revolut_sync_all(ctx: inngest.Context) -> Dict[str, Any]:
             results[endpoint] = endpoint_result
             completed_count += 1
 
-            await realtime.publish(
-                client=inngest_client,
-                channel=channel,
-                topic="status",
-                data=SyncStatusData(
-                    status="syncing",
-                    endpoints_completed=completed_count,
-                    endpoints_total=len(ENDPOINTS),
-                    total_items=sum(r.get("items_stored", 0) for r in results.values()),
-                    error=None,
-                    timestamp=datetime.now().isoformat(),
-                ),
+            await _status(
+                "syncing",
+                completed_count,
+                sum(r.get("items_stored", 0) for r in results.values()),
             )
 
             await ctx.step.sleep(f"delay-after-{endpoint}", timedelta(seconds=2))
 
         # Attachments are extra: a business without the Expenses API, or a failed download,
-        # must not fail the sync of its transactions.
+        # must not fail the sync of its transactions. The step publishes nothing itself, so
+        # its progress is reported from here.
+        await _receipts_progress("starting")
         try:
-            results["receipts"] = await ctx.step.invoke(
+            receipts = await ctx.step.invoke(
                 "sync-receipts",
                 function=revolut_sync_receipts,
                 data={"source_id": source_id, "force_full": force_full},
             )
+            results["receipts"] = receipts
+            await _receipts_progress(
+                "completed", int(receipts.get("receipts_stored", 0))
+            )
         except inngest.StepError as e:
             ctx.logger.warning(f"Revolut receipts not synced for {source_id}: {e}")
+            await _receipts_progress("error", error=str(e))
+        completed_count += 1
+        await _status(
+            "syncing",
+            completed_count,
+            sum(r.get("items_stored", 0) for r in results.values()),
+        )
+
+        # Invoices sent from Revolut, after transactions so their payments can be linked in
+        # this run. Only with a Merchant key; a failure does not fail the sync. The step
+        # reports its own progress (as payment_requests) on this channel.
+        if has_merchant_key:
+            try:
+                results[MERCHANT_ENDPOINT] = await ctx.step.invoke(
+                    "sync-payment-requests",
+                    function=revolut_merchant_sync,
+                    data={"source_id": source_id},
+                )
+            except inngest.StepError as e:
+                ctx.logger.warning(f"Revolut invoices not synced for {source_id}: {e}")
+            completed_count += 1
 
         await ctx.step.run(
             "update-sync-status",
@@ -131,20 +201,7 @@ async def revolut_sync_all(ctx: inngest.Context) -> Dict[str, Any]:
         )
 
         total_items = sum(r.get("items_stored", 0) for r in results.values())
-
-        await realtime.publish(
-            client=inngest_client,
-            channel=channel,
-            topic="status",
-            data=SyncStatusData(
-                status="completed",
-                endpoints_completed=len(ENDPOINTS),
-                endpoints_total=len(ENDPOINTS),
-                total_items=total_items,
-                error=None,
-                timestamp=datetime.now().isoformat(),
-            ),
-        )
+        await _status("completed", steps_total, total_items)
 
         await ctx.step.run(
             "trigger-normalization",
@@ -224,6 +281,14 @@ async def revolut_sync_endpoint(ctx: inngest.Context) -> Dict[str, Any]:
 
         if not source_id or endpoint == "unknown":
             raise ValueError("source_id and endpoint are required")
+
+        if endpoint == MERCHANT_ENDPOINT:
+            invoices: Dict[str, Any] = await ctx.step.invoke(
+                "sync-payment-requests",
+                function=revolut_merchant_sync,
+                data={"source_id": source_id},
+            )
+            return invoices
 
         if endpoint not in ENDPOINTS:
             raise ValueError(f"Unknown endpoint: {endpoint}")
@@ -527,6 +592,12 @@ async def revolut_sync_receipts(ctx: inngest.Context) -> Dict[str, Any]:
             source_id, RECEIPTS_SYNC_KEY, status="completed", synced_at=run_started_at
         ),
     )
+    # Reading them takes a while (a model call per file), so it runs on its own and the sync
+    # does not wait. It also picks up files an earlier run stored but did not read.
+    await ctx.step.send_event(
+        "read-receipts",
+        inngest.Event(name=READ_RECEIPTS_EVENT, data={"source_id": source_id}),
+    )
     ctx.logger.info(
         f"Revolut receipts for {source_id}: {stored} stored, {missing} no longer in Revolut"
     )
@@ -537,8 +608,241 @@ async def revolut_sync_receipts(ctx: inngest.Context) -> Dict[str, Any]:
     }
 
 
+@inngest_client.create_function(
+    fn_id="revolut_read_receipts",
+    trigger=inngest.TriggerEvent(event=READ_RECEIPTS_EVENT),
+    # One reader per integration: two would read the same files.
+    concurrency=[inngest.Concurrency(limit=1, key="event.data.source_id")],
+    retries=3,
+)
+async def revolut_read_receipts(ctx: inngest.Context) -> Dict[str, Any]:
+    """Classify stored receipts and file the supplier invoices among them (see
+    ``services/receipt_invoices.py``).
+
+    Started by ``revolut_sync_receipts`` after each run. Reads up to READS_PER_RUN unread
+    files, READS_PER_STEP to a step, and starts itself again when that many were read, so a
+    first run over a long history finishes in several runs rather than one very long one.
+    """
+    # Imported here, like the Merchant sync's service, so this module loads on its own.
+    from ...services.receipt_invoices import read_attachment, unread_attachments
+
+    event_data: Dict[str, Any] = dict(ctx.event.data)
+    source_id: str = event_data.get("source_id") or ""
+    if not source_id:
+        raise ValueError("source_id is required")
+
+    source = await ctx.step.run(
+        "get-source", lambda: sync_service.get_external_source(source_id)
+    )
+    if not source or not source.get("entity_id"):
+        raise inngest.NonRetriableError(
+            f"Source not found or has no business: {source_id}"
+        )
+    entity_id = str(source["entity_id"])
+
+    unread = await ctx.step.run(
+        "find-unread", lambda: unread_attachments(entity_id, READS_PER_RUN)
+    )
+    outcomes: Dict[str, int] = {}
+    for start in range(0, len(unread), READS_PER_STEP):
+        chunk = unread[start : start + READS_PER_STEP]
+
+        async def _read(chunk: List[Dict[str, Any]] = chunk) -> List[str]:
+            return [
+                (await read_attachment(UUID(entity_id), row))["outcome"]
+                for row in chunk
+            ]
+
+        for outcome in await ctx.step.run(f"read-{start // READS_PER_STEP}", _read):
+            outcomes[outcome] = outcomes.get(outcome, 0) + 1
+
+    # A full batch means more may be waiting. (Files whose transaction is not in yet are
+    # never in the batch: they are read on a run after the transaction arrives.)
+    read = len(unread) - outcomes.get("waiting", 0)
+    if len(unread) == READS_PER_RUN:
+        await ctx.step.send_event(
+            "read-more",
+            inngest.Event(name=READ_RECEIPTS_EVENT, data={"source_id": source_id}),
+        )
+    ctx.logger.info(f"Revolut receipts read for {source_id}: {outcomes}")
+    return {"status": "completed", "read": read, "outcomes": outcomes}
+
+
+INVOICES_PER_STEP = 20
+LINKS_PER_STEP = 10
+
+
+@inngest_client.create_function(
+    fn_id="revolut_merchant_sync",
+    trigger=inngest.TriggerEvent(event="revolut/sync.payment_requests"),
+    retries=3,
+)
+async def revolut_merchant_sync(ctx: inngest.Context) -> Dict[str, Any]:
+    """The Revolut integration's ``payment_requests`` endpoint: invoices sent from Revolut.
+
+    Invoked by ``revolut_sync_all`` after receipts (so the Business transactions the payments
+    are matched to are in first) and by ``revolut_sync_endpoint`` for "Sync one thing". It
+    runs under the Revolut integration's id, reads the Merchant key from that integration's
+    ``revolut_merchant`` row, and is skipped when no key was added.
+
+    Revolut has few of these and their state changes after they are created (a request is
+    paid days later), so every run reads the whole list rather than what is new since a
+    watermark; storing is an upsert. Paid invoices with no payment linked yet are then read
+    in full (the list has no payments) and linked to their "Merchant payment" transaction; a
+    missing one is tried again next run. Nothing is posted: the transaction is journaled on
+    its own.
+    """
+    # Imported here: the service imports integrations.revolut.merchant, and importing any
+    # integrations module loads this one through the package's __init__.
+    from ...services.revolut_invoice_sync import (
+        link_order_payments,
+        merchant_source_for,
+        store_payment_request,
+    )
+
+    event_data: Dict[str, Any] = dict(ctx.event.data)
+    source_id: str = event_data.get("source_id") or ""
+    if not source_id:
+        raise ValueError("source_id is required")
+    channel = get_sync_channel(source_id)
+
+    async def _progress(status: str, items: int, error: Optional[str] = None):
+        await realtime.publish(
+            client=inngest_client,
+            channel=channel,
+            topic="progress",
+            data=SyncProgressData(
+                endpoint=MERCHANT_ENDPOINT,
+                status=status,
+                items_stored=items,
+                pages_processed=0,
+                total_items=items if status == "completed" else None,
+                error=error,
+                timestamp=datetime.now().isoformat(),
+            ),
+        )
+
+    merchant = await ctx.step.run(
+        "get-merchant-source", lambda: merchant_source_for(source_id)
+    )
+    if not merchant:
+        ctx.logger.info(f"No Revolut Merchant key for {source_id}: invoices skipped")
+        return {"status": "skipped", "reason": "no merchant key", "items_stored": 0}
+
+    try:
+        await _progress("starting", 0)
+        run_started_at = datetime.fromisoformat(
+            await ctx.step.run("get-run-start-time", utc_now_iso)
+        )
+        if not merchant.get("entity_id"):
+            raise inngest.NonRetriableError(f"Source has no business: {source_id}")
+        entity_id = UUID(str(merchant["entity_id"]))
+
+        api_key = await sync_service.get_api_key(merchant["id"])
+        if not api_key:
+            raise inngest.NonRetriableError(
+                "Merchant key not found - add it on the Revolut integration"
+            )
+        adapter = MerchantAdapter(api_key)
+
+        async def _list() -> List[Dict[str, Any]]:
+            return [o async for o in adapter.list_orders() if is_invoice(o)]
+
+        orders = await ctx.step.run("list-payment-requests", _list)
+
+        created = 0
+        to_link: List[Dict[str, str]] = []
+        for start in range(0, len(orders), INVOICES_PER_STEP):
+            chunk = orders[start : start + INVOICES_PER_STEP]
+
+            async def _store(chunk: List[Dict[str, Any]] = chunk) -> Dict[str, Any]:
+                made = 0
+                pending: List[Dict[str, str]] = []
+                for order in chunk:
+                    result = await store_payment_request(entity_id, order)
+                    made += int(result["created"])
+                    if result["needs_link"]:
+                        pending.append(
+                            {
+                                "order_id": order["id"],
+                                "invoice_id": result["invoice"]["id"],
+                            }
+                        )
+                return {"created": made, "to_link": pending}
+
+            stored = await ctx.step.run(
+                f"store-invoices-{start // INVOICES_PER_STEP}", _store
+            )
+            created += stored["created"]
+            to_link.extend(stored["to_link"])
+
+        linked = 0
+        for start in range(0, len(to_link), LINKS_PER_STEP):
+            chunk_ids = to_link[start : start + LINKS_PER_STEP]
+
+            async def _link(chunk: List[Dict[str, str]] = chunk_ids) -> int:
+                done = 0
+                for item in chunk:
+                    order = await adapter.get_order(item["order_id"])
+                    done += await link_order_payments(
+                        entity_id, UUID(item["invoice_id"]), order
+                    )
+                return done
+
+            linked += await ctx.step.run(
+                f"link-payments-{start // LINKS_PER_STEP}", _link
+            )
+
+        await ctx.step.run(
+            "set-sync-watermark",
+            lambda: sync_service.set_sync_watermark(
+                source_id,
+                MERCHANT_ENDPOINT,
+                status="completed",
+                synced_at=run_started_at,
+            ),
+        )
+        await _progress("completed", len(orders))
+        ctx.logger.info(
+            f"Revolut payment requests for {source_id}: {len(orders)} synced "
+            f"({created} new), {linked} payments linked, "
+            f"{len(to_link) - linked} waiting for their bank transaction"
+        )
+        return {
+            "status": "completed",
+            "items_stored": len(orders),
+            "created": created,
+            "payments_linked": linked,
+            "payments_waiting": len(to_link) - linked,
+        }
+
+    except Exception as e:
+        error_text = str(e)
+        ctx.logger.error(f"Error syncing Revolut payment requests: {error_text}")
+        await ctx.step.run(
+            "set-sync-watermark-error",
+            lambda: sync_service.set_sync_watermark(
+                source_id, MERCHANT_ENDPOINT, status="error", error=error_text
+            ),
+        )
+        try:
+            await _progress("error", 0, error_text)
+        except Exception as pub_err:
+            ctx.logger.error(f"Failed to publish error status: {pub_err}")
+        if isinstance(e, httpx.HTTPStatusError) and e.response.status_code in (
+            401,
+            403,
+        ):
+            raise inngest.NonRetriableError(
+                f"Revolut Merchant API authentication failed: {e}"
+            ) from e
+        raise
+
+
 REVOLUT_SYNC_FUNCTIONS = [
     revolut_sync_all,
     revolut_sync_endpoint,
     revolut_sync_receipts,
+    revolut_read_receipts,
+    revolut_merchant_sync,
 ]

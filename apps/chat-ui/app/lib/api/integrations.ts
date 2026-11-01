@@ -37,6 +37,24 @@ export interface IntegrationSummary {
       last_run_error: string | null;
     }
   > | null;
+  /**
+   * Revolut only: the Merchant key that syncs the invoices sent from Revolut (the
+   * payment_requests endpoint). The agent keeps it as its own row; null until one is added.
+   */
+  merchant?: MerchantKey | null;
+}
+
+export interface MerchantKey {
+  source_id: string;
+  api_key_status: 'pending' | 'valid' | 'invalid' | 'expired';
+  api_key_last_validated_at: string | null;
+  api_key_error: string | null;
+}
+
+export interface SaveMerchantKeyResponse {
+  source_id: string;
+  status: 'valid' | 'invalid';
+  message: string;
 }
 
 // Sync trigger response
@@ -275,6 +293,56 @@ export async function updateApiKey(
   } catch (error) {
     console.error('Error updating API key:', error);
     return null;
+  }
+}
+
+/**
+ * Add or replace the Revolut Merchant key of a Revolut integration. The agent stores it in
+ * Vault and checks it straight away, so the response says whether Revolut accepted it.
+ *
+ * @param sourceId - The Revolut integration's source ID
+ * @param apiKey - The Merchant secret key
+ */
+export async function saveMerchantKey(
+  sourceId: string,
+  apiKey: string
+): Promise<SaveMerchantKeyResponse | null> {
+  const baseUrl = getApiBaseUrl();
+
+  try {
+    const response = await agentFetch(`${baseUrl}/integrations/sources/${sourceId}/merchant-key`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ api_key: apiKey }),
+    });
+
+    if (!response.ok) {
+      console.error('Failed to save Merchant key:', response.status, await response.text());
+      return null;
+    }
+
+    return await response.json();
+  } catch (error) {
+    console.error('Error saving Merchant key:', error);
+    return null;
+  }
+}
+
+/** Remove a Revolut integration's Merchant key. Invoices already synced stay. */
+export async function removeMerchantKey(sourceId: string): Promise<boolean> {
+  const baseUrl = getApiBaseUrl();
+
+  try {
+    const response = await agentFetch(`${baseUrl}/integrations/sources/${sourceId}/merchant-key`, {
+      method: 'DELETE',
+    });
+    if (!response.ok) {
+      console.error('Failed to remove Merchant key:', response.status, await response.text());
+    }
+    return response.ok;
+  } catch (error) {
+    console.error('Error removing Merchant key:', error);
+    return false;
   }
 }
 

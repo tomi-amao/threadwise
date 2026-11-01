@@ -27,7 +27,7 @@ const INVOICE = readManifest().invoices.openSale;
 const PAY_PROPOSAL = {
   action: 'set_invoice_status',
   title: `Mark invoice ${INVOICE} as paid`,
-  description: 'Northgate Boutique, GBP 2,400.00. Posts the payment journal.',
+  description: 'Northgate Boutique, GBP 2,400.00.',
   changes: [{ label: 'Status', before: 'Open', after: 'Paid' }],
   link: '/invoices?tab=open',
   approve_label: 'Mark as paid',

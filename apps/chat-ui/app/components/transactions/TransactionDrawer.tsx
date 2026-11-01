@@ -10,6 +10,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import {
   ArrowSquareOut,
+  ArrowsLeftRight,
   CaretDown,
   CaretUp,
   CircleNotch,
@@ -32,6 +33,7 @@ import {
   getTransaction,
   updateTransaction,
   type FinancialTransaction,
+  type MoveSide,
   type TransactionAttachment,
   type JournalLineItemWithAccount,
   type TransactionJournal,
@@ -40,11 +42,14 @@ import {
 import { cn } from '~/lib/utils';
 import {
   FILING,
+  INTERNAL_MOVE_REASON,
   SOURCE_LABEL,
   baseAmount,
   dateTime,
   fileSize,
+  feeOf,
   filingOf,
+  isInternalMove,
   money,
   shortDate,
   typeLabel,
@@ -55,6 +60,13 @@ const JOURNAL_STATUS: Record<string, { label: string; tone: ChipTone }> = {
   draft: { label: 'Draft', tone: 'active' },
   reversed: { label: 'Reversed', tone: 'plain' },
 };
+
+/** "Main (GBP)", or a short id for an account Revolut does not list, such as a merchant account. */
+function accountLabel(side: MoveSide): string {
+  return side.name
+    ? `${side.name} (${side.currency})`
+    : `Revolut ${side.currency} account ··${side.account_id.slice(-4)}`;
+}
 
 function Detail({ label, children }: { label: string; children: React.ReactNode }) {
   return (
@@ -167,6 +179,7 @@ function EditForm({
   const [expenseCategory, setExpenseCategory] = useState(
     (txn.metadata?.expense_category as string) ?? ''
   );
+  const internal = isInternalMove(txn);
   const [isExcluded, setIsExcluded] = useState(!!txn.excluded_reason);
   const [excludeReason, setExcludeReason] = useState(txn.excluded_reason ?? '');
 
@@ -194,8 +207,8 @@ function EditForm({
     };
     if (accountCode) payload.account_code = accountCode;
     if (expenseCategory) payload.expense_category = expenseCategory;
-    // '' means "un-exclude" to the API.
-    payload.excluded_reason = isExcluded ? excludeReason || 'Manually excluded' : '';
+    // '' means "un-exclude" to the API. An internal move stays out of the ledger.
+    if (!internal) payload.excluded_reason = isExcluded ? excludeReason || 'Manually excluded' : '';
     await onSave(payload);
   };
 
@@ -227,30 +240,37 @@ function EditForm({
         )}
       </div>
 
-      <div className="grid gap-3 rounded-xl border p-4">
-        <label className="flex cursor-pointer items-start gap-3">
-          <input
-            type="checkbox"
-            checked={isExcluded}
-            onChange={e => setIsExcluded(e.target.checked)}
-            className="mt-1 size-4 accent-[var(--primary)]"
-          />
-          <span>
-            Exclude from the ledger
-            <span className="block text-[13px] text-muted-foreground">
-              Excluded transactions are not journalled, and any existing journal is reversed.
+      {internal ? (
+        <p className="rounded-xl border p-4 text-[13px] text-text-2">
+          This moved money between your own accounts, so it stays out of the ledger. Revolut lists
+          both sides of it; the next sync would mark it the same way.
+        </p>
+      ) : (
+        <div className="grid gap-3 rounded-xl border p-4">
+          <label className="flex cursor-pointer items-start gap-3">
+            <input
+              type="checkbox"
+              checked={isExcluded}
+              onChange={e => setIsExcluded(e.target.checked)}
+              className="mt-1 size-4 accent-[var(--primary)]"
+            />
+            <span>
+              Exclude from the ledger
+              <span className="block text-[13px] text-muted-foreground">
+                Excluded transactions are not journalled, and any existing journal is reversed.
+              </span>
             </span>
-          </span>
-        </label>
-        {isExcluded && (
-          <Input
-            value={excludeReason}
-            onChange={e => setExcludeReason(e.target.value)}
-            placeholder="Reason, e.g. Internal transfer"
-            aria-label="Reason for exclusion"
-          />
-        )}
-      </div>
+          </label>
+          {isExcluded && (
+            <Input
+              value={excludeReason}
+              onChange={e => setExcludeReason(e.target.value)}
+              placeholder="Reason, e.g. Internal transfer"
+              aria-label="Reason for exclusion"
+            />
+          )}
+        </div>
+      )}
 
       <Button type="submit" disabled={isSaving} className="w-full">
         {isSaving ? (
@@ -282,6 +302,7 @@ export function TransactionDrawer({
 }: TransactionDrawerProps) {
   const [txn, setTxn] = useState<FinancialTransaction | null>(null);
   const [attachments, setAttachments] = useState<TransactionAttachment[]>([]);
+  const [moved, setMoved] = useState<MoveSide[]>([]);
   const [journal, setJournal] = useState<TransactionJournal | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
@@ -292,6 +313,7 @@ export function TransactionDrawer({
       setTxn(null);
       setJournal(null);
       setAttachments([]);
+      setMoved([]);
       return;
     }
     let current = true;
@@ -303,6 +325,7 @@ export function TransactionDrawer({
         setTxn(data.transaction);
         setJournal(data.journal);
         setAttachments(data.attachments ?? []);
+        setMoved(data.moved ?? []);
       })
       .catch(err => toast.error(`Failed to load transaction: ${err.message}`))
       .finally(() => current && setIsLoading(false));
@@ -351,6 +374,7 @@ export function TransactionDrawer({
   );
 
   const filing = txn ? filingOf(txn) : null;
+  const fee = txn ? feeOf(txn) : null;
   const foreign = !!txn && !!txn.base_currency_code && txn.currency_code !== txn.base_currency_code;
   const title = txn ? txn.counterparty_name || txn.description || 'Transaction' : 'Transaction';
 
@@ -383,10 +407,23 @@ export function TransactionDrawer({
             <div
               className={cn(
                 'font-serif text-[52px] leading-[1.05] tabular-nums',
-                txn.direction === 'in' && !txn.excluded_reason && 'text-income'
+                txn.direction === 'in' && !txn.excluded_reason && 'text-income',
+                filing === 'internal' && 'text-muted-foreground'
               )}
             >
-              {txn.direction === 'in' ? '+' : '−'}
+              {filing === 'internal' ? (
+                <ArrowsLeftRight
+                  role="img"
+                  aria-label="Moved"
+                  size={36}
+                  weight="light"
+                  className="mr-2 inline align-baseline"
+                />
+              ) : txn.direction === 'in' ? (
+                '+'
+              ) : (
+                '−'
+              )}
               {money(baseAmount(txn), txn.base_currency_code ?? 'GBP')}
             </div>
             {foreign && (
@@ -396,10 +433,13 @@ export function TransactionDrawer({
               </div>
             )}
             <div className="mt-3.5 flex flex-wrap gap-2">
-              <Chip tone={txn.direction === 'in' ? 'income' : 'plain'}>
-                {txn.direction === 'in' ? 'Inbound' : 'Outbound'}
-              </Chip>
-              <Chip tone={FILING[filing].tone} dot>
+              {filing !== 'internal' && (
+                <Chip tone={txn.direction === 'in' ? 'income' : 'plain'}>
+                  {txn.direction === 'in' ? 'Inbound' : 'Outbound'}
+                </Chip>
+              )}
+              <Chip tone={FILING[filing].tone} dot={filing !== 'internal'}>
+                {filing === 'internal' && <ArrowsLeftRight aria-hidden size={12} weight="bold" />}
                 {filing === 'pending' ? 'Not journalled' : FILING[filing].label}
               </Chip>
             </div>
@@ -414,12 +454,41 @@ export function TransactionDrawer({
                 {txn.external_transaction_id}
               </span>
             </Detail>
+            {fee && (
+              <Detail label="Fee">
+                {money(fee.amount, fee.currency)}
+                <span className="block text-[13px] text-muted-foreground">
+                  {/* What reached the account, when the fee is in the amount's own currency. */}
+                  {txn.transaction_type === 'reserve_release' &&
+                  fee.currency === (txn.base_currency_code ?? txn.currency_code)
+                    ? `Kept by ${SOURCE_LABEL[txn.source] ?? txn.source}: ${money(
+                        baseAmount(txn) - fee.amount,
+                        fee.currency
+                      )} reached the account`
+                    : `Charged by ${SOURCE_LABEL[txn.source] ?? txn.source}`}
+                </span>
+              </Detail>
+            )}
             {!!txn.metadata?.account_code && (
               <Detail label="Ledger account">
                 <span className="font-mono">{String(txn.metadata.account_code)}</span>
               </Detail>
             )}
-            {txn.excluded_reason && <Detail label="Excluded because">{txn.excluded_reason}</Detail>}
+            {moved.length > 0 && (
+              <Detail label="Moved">
+                {moved.map(side => (
+                  <div key={side.account_id}>
+                    {side.amount < 0 ? 'From' : 'To'} {accountLabel(side)}
+                  </div>
+                ))}
+              </Detail>
+            )}
+            {txn.excluded_reason && filing !== 'internal' && (
+              <Detail label="Excluded because">{txn.excluded_reason}</Detail>
+            )}
+            {filing === 'internal' && txn.excluded_reason !== INTERNAL_MOVE_REASON && (
+              <Detail label="Note">{txn.excluded_reason}</Detail>
+            )}
           </dl>
 
           {attachments.length > 0 && (
@@ -451,9 +520,11 @@ export function TransactionDrawer({
               </>
             ) : (
               <p className="mt-3 text-text-2">
-                {filing === 'excluded'
-                  ? 'Excluded transactions never reach the ledger.'
-                  : 'No journal entry exists for this transaction yet.'}
+                {filing === 'internal'
+                  ? 'Nothing to journal: the money moved between your own accounts and stayed in the business.'
+                  : filing === 'excluded'
+                    ? 'Excluded transactions never reach the ledger.'
+                    : 'No journal entry exists for this transaction yet.'}
               </p>
             )}
           </div>

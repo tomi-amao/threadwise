@@ -6,7 +6,7 @@ Provides endpoints for:
 - Invoice matching
 - Journal creation (accrual + settlement + expense + purchase + sale)
 - Journal listing and reversal
-- Invoice ingestion (AI extraction → contacts → invoices → journals)
+- Invoice ingestion (AI extraction → contacts → invoices)
 - Contacts management
 """
 
@@ -64,36 +64,6 @@ class PostDraftJournalRequest(BaseModel):
 
 class DetectDuplicatesRequest(BaseModel):
     entity_id: str
-    auto_journal: bool = Field(
-        False,
-        description="If true, auto-create payment journals for invoices matched to PAID status",
-    )
-
-
-class PurchaseInvoiceRequest(BaseModel):
-    entity_id: str
-    invoice_id: str = Field(
-        ..., description="PURCHASE invoice UUID to create COGS journal for"
-    )
-    create_payment: bool = Field(
-        False,
-        description="If true and invoice status is 'PAID', also create a payment journal",
-    )
-
-
-class SaleInvoiceRequest(BaseModel):
-    entity_id: str
-    invoice_id: str = Field(
-        ..., description="SALE invoice UUID to create AR journal for"
-    )
-
-
-class InvoicePaymentRequest(BaseModel):
-    entity_id: str
-    invoice_id: str = Field(
-        ...,
-        description="Invoice UUID to settle. Invoice status must already be PAID.",
-    )
 
 
 class UpsertContactRequest(BaseModel):
@@ -117,13 +87,6 @@ class UpdateInvoiceStatusRequest(BaseModel):
     status: str = Field(
         ...,
         description="New status: DRAFT, OPEN, PAID, PARTIALLY_PAID, OVERDUE, CANCELLED, VOID",
-    )
-    allow_prior_period: bool = Field(
-        False,
-        description=(
-            "Permit finalising an invoice dated before the accounting cutoff. "
-            "Posts a prior-year journal and moves the restated opening balance."
-        ),
     )
 
 
@@ -467,39 +430,13 @@ async def detect_duplicates(request: DetectDuplicatesRequest):
 
     Finds transactions that appear in both Revolut and PayPal, enriches
     the Revolut transaction with PayPal details (invoice_id, cart, payer,
-    shipping), and auto-updates matching invoice statuses.
-
-    If auto_journal=true, also creates payment journals for invoices
-    that are matched to PAID status.
+    shipping), and auto-updates matching invoice statuses. Invoices post nothing:
+    the matched transaction is what is journaled.
     """
     try:
-        result = await reconciliation_service.detect_cross_provider_duplicates(
+        return await reconciliation_service.detect_cross_provider_duplicates(
             UUID(request.entity_id)
         )
-
-        # Auto-create payment journals for newly PAID invoices
-        if request.auto_journal and result.get("invoice_updates"):
-            journals_created = 0
-            journal_errors = []
-            for inv in result["invoice_updates"]:
-                if inv["new_status"] == "PAID":
-                    try:
-                        await journal_service.create_invoice_payment_journal(
-                            UUID(request.entity_id), UUID(inv["invoice_id"])
-                        )
-                        journals_created += 1
-                    except (JournalError, Exception) as e:
-                        journal_errors.append(
-                            {
-                                "invoice_id": inv["invoice_id"],
-                                "error": str(e),
-                            }
-                        )
-            result["journals_created"] = journals_created
-            if journal_errors:
-                result["journal_errors"] = journal_errors
-
-        return result
     except Exception as e:
         logger.error(f"Error detecting duplicates: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -655,42 +592,6 @@ async def post_draft_journal(journal_id: str, request: PostDraftJournalRequest):
 # =============================================================================
 
 
-@router.post("/journals/purchase-invoice")
-async def create_purchase_invoice_journal(request: PurchaseInvoiceRequest):
-    """Create a COGS journal from a supplier invoice.
-
-    Purchase journal:
-    - DEBIT  5000 Product Purchase Cost  = invoice total
-    - CREDIT 2000 Accounts Payable       = invoice total
-
-    If create_payment=true and invoice status is 'paid', also creates:
-    - DEBIT  2000 Accounts Payable  = invoice total
-    - CREDIT 1000 Cash (Revolut)    = invoice total
-    """
-    try:
-        purchase = await journal_service.create_purchase_journal(
-            UUID(request.entity_id), UUID(request.invoice_id)
-        )
-        result: Dict[str, Any] = {"purchase_journal": purchase, "payment_journal": None}
-
-        if request.create_payment:
-            try:
-                payment = await journal_service.create_invoice_payment_journal(
-                    UUID(request.entity_id), UUID(request.invoice_id)
-                )
-                result["payment_journal"] = payment
-            except JournalError as e:
-                # Payment journal may fail if invoice is not yet paid
-                result["payment_note"] = str(e)
-
-        return result
-    except JournalError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        logger.error(f"Error creating purchase journal: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
 @router.post("/journals/expense")
 async def create_expense_journals(request: ExpenseJournalRequest):
     """Batch-create expense journals for bank transactions.
@@ -762,58 +663,6 @@ async def generate_all_journals(request: GenerateAllJournalsRequest):
 
 
 # =============================================================================
-# SALE INVOICE JOURNAL
-# =============================================================================
-
-
-@router.post("/journals/sale-invoice")
-async def create_sale_invoice_journal(request: SaleInvoiceRequest):
-    """Create an Accounts Receivable journal from a SALE invoice.
-
-    Sale journal:
-    - DEBIT  1300 Accounts Receivable  = gross_amount
-    - CREDIT 4000 Revenue              = net_amount
-    - CREDIT 2100 Tax Payable          = tax_amount
-    """
-    try:
-        journal = await journal_service.create_sale_journal(
-            UUID(request.entity_id), UUID(request.invoice_id)
-        )
-        return {"sale_journal": journal}
-    except JournalError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        logger.error(f"Error creating sale journal: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.post("/journals/invoice-payment")
-async def create_invoice_payment(request: InvoicePaymentRequest):
-    """Create a payment settlement journal for a paid invoice.
-
-    Called automatically when an invoice status is set to PAID.
-
-    PURCHASE invoice (we paid a supplier):
-    - DEBIT  2000 Accounts Payable    = gross total
-    - CREDIT 1000 Cash                = gross total
-
-    SALE invoice (customer paid us):
-    - DEBIT  1000 Cash                = gross total
-    - CREDIT 1300 Accounts Receivable = gross total
-    """
-    try:
-        journal = await journal_service.create_invoice_payment_journal(
-            UUID(request.entity_id), UUID(request.invoice_id)
-        )
-        return {"payment_journal": journal}
-    except JournalError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        logger.error(f"Error creating invoice payment journal: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-# =============================================================================
 # INVOICE INGESTION (AI EXTRACTION PIPELINE)
 # =============================================================================
 
@@ -823,7 +672,6 @@ async def process_invoice(
     entity_id: str = Form(...),
     file: UploadFile = File(...),
     file_path: str = Form(""),
-    create_journal: bool = Form(False),
     invoice_type: Optional[str] = Form(None),
 ):
     """Process an uploaded invoice document end-to-end.
@@ -835,11 +683,10 @@ async def process_invoice(
     4. Invoice record created (source = AI-detected platform e.g. 'paypal', 'revolut')
     5. Invoice line items created (with GL account resolved from chart of accounts)
 
-    The invoice is created as a DRAFT and nothing is posted to the ledger: the journal
-    belongs at finalisation (PATCH /invoices/{id}/status). ``create_journal=true`` posts
-    it at upload instead and exists only for scripted backfills.
+    The invoice is created as a DRAFT. Invoices never post to the ledger; the
+    transaction that pays one is what gets journaled.
 
-    Returns full result object with invoice, contact, line items, and journal.
+    Returns the invoice, contact, line items and extraction summary.
     """
     try:
         content = await file.read()
@@ -852,7 +699,6 @@ async def process_invoice(
             mime_type=mime_type,
             file_name=file_name,
             file_path=file_path,
-            create_journal=create_journal,
             invoice_type_override=invoice_type,
         )
         return result
@@ -904,27 +750,11 @@ async def get_invoice(invoice_id: str):
 
 @router.patch("/invoices/{invoice_id}/status", dependencies=[Depends(owned_invoice)])
 async def update_invoice_status(invoice_id: str, request: UpdateInvoiceStatusRequest):
-    """Move an invoice through its lifecycle, posting the journals it implies.
+    """Move an invoice through its lifecycle.
 
-    DRAFT → OPEN finalises a purchase invoice:
-    - DEBIT  each line item's own GL account (stock → 1033/1034/1035,
-             freight and fees → their expense accounts)
-    - CREDIT 2010 Accounts Payable = invoice gross
-
-    → PAID additionally clears the payable:
-    - DEBIT  2010 Accounts Payable
-    - CREDIT the cash account the payment came from
-
-    Both journals are idempotent, so repeating a transition will not double-post.
-    If the purchase journal fails the status does not move.
-
-    PAID → OPEN voids the payment journal; CANCELLED and VOID void every journal the
-    invoice posted. Moves the lifecycle does not allow (see ``invoice_rules``) are
-    refused with a 409.
-
-    Invoices dated before the accounting cutoff are refused with a 400 — their
-    journal would be dated in a restated period. CANCELLED and VOID are never
-    blocked by that rule.
+    Moves the lifecycle does not allow (see ``invoice_rules``) are refused with a 409.
+    Nothing is posted or reversed: invoices are documents, and the money they describe
+    reaches the ledger through its transaction.
     """
     if request.status.upper() not in VALID_STATUSES:
         raise HTTPException(
@@ -933,19 +763,12 @@ async def update_invoice_status(invoice_id: str, request: UpdateInvoiceStatusReq
         )
     try:
         return await invoice_service.set_invoice_status(
-            UUID(request.entity_id),
-            UUID(invoice_id),
-            request.status,
-            allow_prior_period=request.allow_prior_period,
+            UUID(request.entity_id), UUID(invoice_id), request.status
         )
     except InvoiceRuleError as e:  # before ValueError: it is a subclass
         raise HTTPException(status_code=409, detail=str(e))
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
-    except JournalError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except HTTPException:
-        raise
     except Exception as e:
         logger.error(f"Error updating invoice status: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -955,8 +778,8 @@ async def update_invoice_status(invoice_id: str, request: UpdateInvoiceStatusReq
 async def delete_invoice(invoice_id: str, entity_id: str):
     """Delete a draft, cancelled or void invoice, its line items and its stored document.
 
-    Refused (409) for an invoice that is open or paid, or that still has posted journals:
-    void it instead, which reverses them.
+    Refused (409) for an invoice that is open or paid: void it instead, which keeps
+    the record.
     """
     try:
         result = await invoice_service.delete_invoice(UUID(entity_id), UUID(invoice_id))
@@ -967,6 +790,59 @@ async def delete_invoice(invoice_id: str, entity_id: str):
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         logger.error(f"Error deleting invoice: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# =============================================================================
+# INVOICE PAYMENTS (which transactions settled an invoice)
+# =============================================================================
+
+
+class LinkPaymentRequest(BaseModel):
+    entity_id: str
+    transaction_id: str = Field(
+        ..., description="The financial transaction that paid it"
+    )
+
+
+@router.post("/invoices/{invoice_id}/payments", dependencies=[Depends(owned_invoice)])
+async def link_invoice_payment(invoice_id: str, request: LinkPaymentRequest):
+    """Match a transaction to the invoice as its payment; returns the updated invoice.
+
+    The status then follows what the linked payments cover (paid, part paid). Refused
+    with a 409 for a transaction in the wrong direction, left out of the books or already
+    paying another invoice, and 404 if the transaction is not the business's. Posts
+    nothing: the transaction is journaled on its own.
+    """
+    try:
+        return await invoice_service.link_payment(
+            UUID(request.entity_id), UUID(invoice_id), UUID(request.transaction_id)
+        )
+    except InvoiceRuleError as e:  # before ValueError: it is a subclass
+        raise HTTPException(status_code=409, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error linking invoice payment: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete(
+    "/invoices/{invoice_id}/payments/{transaction_id}",
+    dependencies=[Depends(owned_invoice)],
+)
+async def unlink_invoice_payment(invoice_id: str, transaction_id: str, entity_id: str):
+    """Remove a transaction's match to the invoice; returns the updated invoice."""
+    try:
+        return await invoice_service.unlink_payment(
+            UUID(entity_id), UUID(invoice_id), UUID(transaction_id)
+        )
+    except InvoiceRuleError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error unlinking invoice payment: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

@@ -3,7 +3,8 @@
  *
  * invoices: invoice_number (required), net/tax/gross_amount, currency, invoice_date, due_date,
  *   status (invoice_status enum), invoice_type (SALE | PURCHASE), counterparty_id, source,
- *   file_path (the uploaded document in storage), notes.
+ *   file_path (the uploaded document in storage), notes, origin (where the record came from),
+ *   attachment_id (the transaction attachment it was read from).
  * invoice_line_items: quantity, unit_cost, vat_rate (a fraction: 0.2 is 20%), gl_account_id,
  *   and generated line_net / line_vat / line_gross.
  *
@@ -11,6 +12,20 @@
  */
 
 export type InvoiceType = 'SALE' | 'PURCHASE';
+
+/**
+ * Where the record came from: an upload, a payment request sent from Revolut, or a supplier
+ * invoice read from a receipt on a Revolut expense. Synced ones (not uploads) have a status and
+ * direction the app does not set.
+ */
+export type InvoiceOrigin = 'upload' | 'revolut_merchant' | 'revolut_expense';
+
+/**
+ * The document behind an invoice: the uploaded file, the receipt it was read from, or a
+ * printable copy made from the invoice itself (Revolut offers no file for a payment request).
+ * An uploaded original always wins.
+ */
+export type DocumentSource = 'upload' | 'receipt' | 'generated';
 
 export type InvoiceStatus =
   'DRAFT' | 'OPEN' | 'PAID' | 'PARTIALLY_PAID' | 'OVERDUE' | 'CANCELLED' | 'VOID';
@@ -54,7 +69,9 @@ export interface InvoiceRow {
   source: string | null;
   notes: string | null;
   created_at: string;
-  has_document: boolean;
+  origin: InvoiceOrigin;
+  /** The document to show, or null if there is none. */
+  document: DocumentSource | null;
   contacts: InvoiceContact | null;
 }
 
@@ -84,8 +101,6 @@ export interface PaymentCandidate {
 export interface InvoiceDetail {
   invoice: InvoiceRow & { contacts: InvoiceContact | null };
   lines: InvoiceLineItem[];
-  /** Journals posted for this invoice (accrual and payment). */
-  journals: { id: string; journal_type: string; journal_date: string; status: string }[];
   /** A bank transaction already matched to this invoice, if any. */
   matched_transaction_id: string | null;
   /** Bank transactions that could be this invoice's payment, nearest in amount first. */

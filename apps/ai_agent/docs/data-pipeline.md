@@ -42,24 +42,26 @@ one channel per source), which the frontend subscribes to with a token from
 
 ## Inngest functions
 
-All are registered on `/api/inngest` (29 in total).
+All are registered on `/api/inngest` (31 in total).
 
-| Group         | Function                                                                                | Trigger                                                                    |
-| ------------- | --------------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
-| Shopify       | `shopify_sync_all`, `shopify_sync_endpoint`, `shopify_sync_order_transactions`          | `shopify/sync.requested`, `.endpoint`, `.order_transactions.requested`     |
-| Revolut       | `revolut_sync_all`, `revolut_sync_endpoint`                                             | `revolut/sync.requested`, `revolut/sync.endpoint`                          |
-|               | `revolut_sync_receipts` (invoked by `revolut_sync_all`)                                 | `revolut/sync.receipts`                                                    |
-| PayPal        | `paypal_sync_all`, `paypal_sync_endpoint`                                               | `paypal/sync.requested`, `paypal/sync.endpoint`                            |
-| Squarespace   | `squarespace_sync_all`, `squarespace_sync_endpoint`, `squarespace_sync_single_endpoint` | `squarespace/sync.requested`, ...                                          |
-| Zoho Calendar | `zoho_calendar_sync_all`, `zoho_calendar_sync_endpoint`                                 | `zoho_calendar/sync.requested`, `.endpoint`                                |
-|               | `zoho_calendar_push_daily`                                                              | cron `0 6 * * *`                                                           |
-| Normalisation | `normalize_raw_event`, `normalize_batch`, `normalize_source`                            | `normalization/event.received`, `batch.requested`, `source.requested`      |
-|               | `normalize_after_sync` (Squarespace), `normalize_after_<provider>_sync`                 | `<provider>/sync.completed`                                                |
-|               | `reprocess_failed_events`                                                               | cron `0 */6 * * *`                                                         |
-|               | `reprocess_stuck_processing_events`                                                     | cron `0 */2 * * *`                                                         |
-|               | `reprocess_failed_manual`                                                               | `normalization/reprocess.requested`                                        |
-| Accounting    | `generate_all_journals`                                                                 | `accounting/journals.generate.requested`                                   |
-| Other         | `process_chat_message`, `process_document_embedding`, `cleanup_old_threads`             | `chat/message.received`, `documents/embedding.completed`, cron `0 2 * * *` |
+| Group         | Function                                                                                 | Trigger                                                                    |
+| ------------- | ---------------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| Shopify       | `shopify_sync_all`, `shopify_sync_endpoint`, `shopify_sync_order_transactions`           | `shopify/sync.requested`, `.endpoint`, `.order_transactions.requested`     |
+| Revolut       | `revolut_sync_all`, `revolut_sync_endpoint`                                              | `revolut/sync.requested`, `revolut/sync.endpoint`                          |
+|               | `revolut_sync_receipts` (invoked by `revolut_sync_all`)                                  | `revolut/sync.receipts`                                                    |
+|               | `revolut_read_receipts` (sent by `revolut_sync_receipts`; one per integration at a time) | `revolut/receipts.read`                                                    |
+|               | `revolut_merchant_sync` (invoices; invoked by `revolut_sync_all` and `_endpoint`)        | `revolut/sync.payment_requests`                                            |
+| PayPal        | `paypal_sync_all`, `paypal_sync_endpoint`                                                | `paypal/sync.requested`, `paypal/sync.endpoint`                            |
+| Squarespace   | `squarespace_sync_all`, `squarespace_sync_endpoint`, `squarespace_sync_single_endpoint`  | `squarespace/sync.requested`, ...                                          |
+| Zoho Calendar | `zoho_calendar_sync_all`, `zoho_calendar_sync_endpoint`                                  | `zoho_calendar/sync.requested`, `.endpoint`                                |
+|               | `zoho_calendar_push_daily`                                                               | cron `0 6 * * *`                                                           |
+| Normalisation | `normalize_raw_event`, `normalize_batch`, `normalize_source`                             | `normalization/event.received`, `batch.requested`, `source.requested`      |
+|               | `normalize_after_sync` (Squarespace), `normalize_after_<provider>_sync`                  | `<provider>/sync.completed`                                                |
+|               | `reprocess_failed_events`                                                                | cron `0 */6 * * *`                                                         |
+|               | `reprocess_stuck_processing_events`                                                      | cron `0 */2 * * *`                                                         |
+|               | `reprocess_failed_manual`                                                                | `normalization/reprocess.requested`                                        |
+| Accounting    | `generate_all_journals`                                                                  | `accounting/journals.generate.requested`                                   |
+| Other         | `process_chat_message`, `process_document_embedding`, `cleanup_old_threads`              | `chat/message.received`, `documents/embedding.completed`, cron `0 2 * * *` |
 
 ## Attachments (Revolut receipts)
 
@@ -79,6 +81,84 @@ for the business by Revolut; without it (401/403) the step stops and the sync of
 carries on. The Transactions drawer lists the files and opens one through
 `/api/transactions?attachment=<id>`, which reads the row as the user and redirects to a
 five-minute signed link.
+
+### Reading receipts into the invoice register
+
+At the end of each run `revolut_sync_receipts` sends `revolut/receipts.read`, and does not wait
+for it: `revolut_read_receipts` (`services/receipt_invoices.py`) reads the stored files in the
+background, at most one run per integration at a time, 5 files a step and 100 a run (a full run
+starts the next). For each file whose transaction has been normalised (the others wait for a
+later run):
+
+- the model classifies it as `invoice` (a supplier's invoice or bill, Revolut's fee invoices
+  included), `receipt` (proof of payment that is not an invoice) or `other`, recorded in
+  `transaction_attachments.document_kind` with `read_at`;
+- an invoice on money going out is read with the same extraction as an upload and stored as a
+  `PURCHASE` invoice with `origin = 'revolut_expense'`, `external_id` = the receipt id,
+  `attachment_id` = the file and status `PAID`, linked to its transaction (`matched_by =
+'sync'`). The register needs a number and a date: a document without them gets `RCPT-<receipt
+id>` and the transaction's date, and one with no readable amounts takes the transaction's;
+- if the transaction already pays an invoice (uploaded, or another file on the same expense),
+  no second one is made: the file becomes that invoice's document if it has none.
+
+A failed read is kept (`read_attempts`, `read_error`) and retried on later runs, three times in
+all. These invoices cannot have their status or direction changed (the transaction paid them),
+but they can be deleted, which is how a misread file is dismissed: the file stays on its
+transaction and is not read again. Bills paid through Revolut BillPay keep their file on the
+bill, which no Revolut API exposes, so they need an upload.
+
+## Invoices sent from Revolut (Merchant payment requests)
+
+An invoice sent from Revolut Business is a Merchant API order of type `payment_request`. The
+Merchant API has its own secret key (Revolut Business, Merchant, APIs), separate from the Business
+API token. The Integrations page shows one Revolut integration with two keys; behind it, because a
+source row holds one Vault key, the Merchant key has its own row: provider `revolut_merchant`,
+`external_account_id` = the Revolut row's id (`PUT`/`DELETE
+/integrations/sources/{id}/merchant-key` add, replace or remove it; saving checks it; removing the
+Revolut integration removes it; `/integrations/summary` folds it into the Revolut card as
+`merchant`).
+
+The invoices are the Revolut integration's `payment_requests` endpoint. `revolut_sync_all` runs it
+after receipts, so the transactions their payments are matched to are already in, and a failure
+there does not fail the sync; "Sync one thing" runs it through `revolut_sync_endpoint`. Both invoke
+`revolut_merchant_sync` with the Revolut source id; it reads the key from the child row, is skipped
+without one, reports progress on the Revolut card's channel and keeps its sync state on the
+Revolut row. It (`integrations/revolut/merchant.py` maps, `services/revolut_invoice_sync.py`
+writes):
+
+- reads the whole order list every run (there are few, and a request is paid long after it is
+  created, so a watermark would miss the change), keeping `payment_request` orders only;
+- upserts each as a SALE invoice with `origin = 'revolut_merchant'`, `external_id` = the order
+  id, its reference as the number, its customer as a contact, and Revolut's state as the status
+  (`pending` open, `completed` paid or part paid, `cancelled`/`failed` cancelled). The order
+  amount is the total: lines describe it but need not add up (a deposit request lists the whole
+  order). Lines are only replaced when Revolut's change, so an account chosen for a line stays;
+- links each paid order's payment to its inbound "Merchant payment" from the Business sync
+  (same gross amount and currency, from 10 minutes before to 2 days after the payment, closest
+  first; observed 2 to 3 seconds after), `matched_by = 'sync'`. A payment whose transaction has
+  not arrived yet is tried again on the next run.
+
+Orders are not raw events and are not normalised, so the card has no "Load data". Revolut
+offers no PDF, due date or tax breakdown for these invoices. The acquiring fee is journaled from
+the Business API's merchant payment, which carries it on its leg (see below), not from the order.
+
+## Moves between the business's own Revolut accounts
+
+The normaliser stores a non-exchange transaction from one leg. A move between two of the
+business's accounts has two legs, so stored from one it read as money leaving: a merchant
+payment's settlement (merchant account to a second merchant account) and payout (to the main
+account) would have been journaled as expenses. `internal_move_legs` recognises such a move on
+its own, whenever it arrives: two or more legs, each on an account, none with a counterparty, in
+one currency, adding up to nothing (every payment to or from someone else has one leg). It is
+stored from the side the money left, excluded (`Moved between your own Revolut accounts`), with
+`metadata.internal_move` and the legs; the Transactions page shows it as an "Internal move", with
+its own status filter. Each leg's `fee` is kept as `metadata.fee`; only merchant payments journal
+it so far (card payments abroad carry one too). Migration `20261101000000_revolut_internal_moves`
+applied the same to what was already stored, leaving any move that already had a journal.
+
+The list endpoint's paging is undocumented; `MerchantAdapter.list_orders` pages backwards on
+`to` = the oldest `created_at` seen and stops when a page brings nothing new. The API version
+is pinned (`Revolut-Api-Version: 2024-09-01`), because the response shape depends on it.
 
 ## Raw events and their state
 

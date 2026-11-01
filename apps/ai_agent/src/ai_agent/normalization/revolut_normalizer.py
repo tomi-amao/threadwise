@@ -12,6 +12,12 @@ Key behaviours:
   ``description`` (the DB no longer has a ``reference`` column).
 - Expense categorisation data (MCC / merchant name) is stored in ``metadata``
   rather than dedicated columns.
+- A move between the business's own accounts (``internal_move_legs``: Revolut lists every
+  side of it) is stored excluded, with ``metadata.internal_move``: the money stays in the
+  business, so it never reaches the ledger. A merchant payment settling into the business's
+  account is the usual case.
+- A leg's ``fee`` is kept as ``metadata.fee``. On a merchant payment the amount is what the
+  customer paid and the fee comes off it; only merchant payments journal it so far.
 """
 
 import logging
@@ -31,6 +37,30 @@ from .models import (
 from .normalizer import FinancialNormalizer, NormalizationResult
 
 logger = logging.getLogger(__name__)
+
+INTERNAL_MOVE_REASON = "Moved between your own Revolut accounts"
+
+
+def _leg_amount(leg: Dict[str, Any]) -> Decimal:
+    return Decimal(str(leg.get("amount") or 0))
+
+
+def internal_move_legs(legs: List[Dict[str, Any]]) -> bool:
+    """Whether a transaction only moves money between the business's own accounts.
+
+    Revolut lists every side of such a move as a leg on one of the business's accounts, with
+    no counterparty, in one currency, adding up to nothing. A payment to or from anyone else
+    has a single leg, so a transaction can be recognised on its own, whenever it arrives.
+    Exchanges also have two legs but change currency, so they are not caught here.
+    """
+    if len(legs) < 2:
+        return False
+    if any(not leg.get("account_id") or leg.get("counterparty") for leg in legs):
+        return False
+    if len({str(leg.get("currency") or "").upper() for leg in legs}) != 1:
+        return False
+    amounts = [_leg_amount(leg) for leg in legs]
+    return sum(amounts, Decimal(0)) == 0 and any(a < 0 for a in amounts)
 
 
 class RevolutNormalizer(FinancialNormalizer):
@@ -285,6 +315,20 @@ class RevolutNormalizer(FinancialNormalizer):
                     external_id, payload, raw_event_id, legs, warnings
                 )
 
+            # A move between the business's own accounts is stored from the side the
+            # money left.
+            if internal_move_legs(legs):
+                outgoing = next(leg for leg in legs if _leg_amount(leg) < 0)
+                return self._normalize_standard_transaction(
+                    external_id,
+                    payload,
+                    raw_event_id,
+                    outgoing,
+                    txn_type,
+                    warnings,
+                    internal_legs=legs,
+                )
+
             # Standard (non-FX) transaction: use primary leg
             return self._normalize_standard_transaction(
                 external_id, payload, raw_event_id, legs[0], txn_type, warnings
@@ -316,8 +360,13 @@ class RevolutNormalizer(FinancialNormalizer):
         primary_leg: Dict[str, Any],
         txn_type: TxnType,
         warnings: List[str],
+        internal_legs: Optional[List[Dict[str, Any]]] = None,
     ) -> NormalizationResult:
-        """Build a single canonical row from the primary leg."""
+        """Build a single canonical row from the primary leg.
+
+        ``internal_legs``: every leg, when the transaction moves money between the
+        business's own accounts; the row is then stored excluded.
+        """
 
         # Amount / currency
         amount_raw = primary_leg.get("amount", 0)
@@ -439,6 +488,25 @@ class RevolutNormalizer(FinancialNormalizer):
             metadata["bill_amount"] = float(abs(bill_amount_raw))
             metadata["bill_currency"] = bill_currency_raw  # already upper-cased
 
+        # Revolut's fee on the leg, in the leg's currency, on top of its amount (a merchant
+        # payment of 1407.89 with a fee of 14.28 leaves 1393.61 in the account). Its currency
+        # is kept too: a card payment abroad is stored in the billed currency, the fee is not.
+        fee_raw = primary_leg.get("fee")
+        if fee_raw:
+            metadata["fee"] = float(abs(Decimal(str(fee_raw))))
+            metadata["fee_currency"] = str(primary_leg.get("currency") or "GBP").upper()
+
+        if internal_legs:
+            metadata["internal_move"] = True
+            metadata["legs"] = [
+                {
+                    "account_id": leg.get("account_id"),
+                    "amount": float(_leg_amount(leg)),
+                    "currency": leg.get("currency"),
+                }
+                for leg in internal_legs
+            ]
+
         # Detect declined / failed transactions and mark for exclusion.
         # We still persist the record so audit trails are complete, but it
         # will never flow into journals or cash-flow reports.
@@ -452,6 +520,9 @@ class RevolutNormalizer(FinancialNormalizer):
             )
             txn_status = TxnStatus.EXCLUDED
             warnings.append(f"Transaction excluded: state={revolut_state}")
+        elif internal_legs:
+            excluded_reason = INTERNAL_MOVE_REASON
+            txn_status = TxnStatus.EXCLUDED
 
         canonical = CanonicalFinancialTransaction(
             provider=self.provider,

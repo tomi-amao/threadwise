@@ -24,38 +24,37 @@ caller's); **owned** = also an `owned_*` check on the id in the path; **internal
 
 Router guard: **entity**, except `/health-checks` (**internal**).
 
-| Method | Path                                | Notes                                         |
-| ------ | ----------------------------------- | --------------------------------------------- |
-| GET    | `/chart-of-accounts`                |                                               |
-| POST   | `/chart-of-accounts/seed`           | Standard chart for a new business             |
-| GET    | `/health-checks`                    | **internal**                                  |
-| POST   | `/inventory/disposal`               | Gift or write-off, with its journal           |
-| POST   | `/clean-paypal`                     |                                               |
-| POST   | `/reconcile-invoices`               | Mark invoices paid from matching transactions |
-| POST   | `/detect-duplicates`                | Cross-provider duplicates                     |
-| GET    | `/journals`                         |                                               |
-| GET    | `/journals/review-summary`          | What needs a person                           |
-| POST   | `/journals/accrue`                  |                                               |
-| POST   | `/journals/suggest-accounts`        | LLM suggestions for drafts                    |
-| POST   | `/journals/{journal_id}/reverse`    | owned                                         |
-| POST   | `/journals/{journal_id}/post-draft` | owned                                         |
-| POST   | `/journals/purchase-invoice`        |                                               |
-| POST   | `/journals/sale-invoice`            |                                               |
-| POST   | `/journals/invoice-payment`         |                                               |
-| POST   | `/journals/expense`                 |                                               |
-| POST   | `/journals/generate-all`            | Synchronous; the UI uses the Inngest job      |
-| POST   | `/invoices/process`                 | Upload and extract                            |
-| GET    | `/invoices`                         |                                               |
-| GET    | `/invoices/{invoice_id}`            | owned                                         |
-| PATCH  | `/invoices/{invoice_id}`            | owned                                         |
-| PATCH  | `/invoices/{invoice_id}/status`     | owned; lifecycle rules, 409 if not allowed    |
-| DELETE | `/invoices/{invoice_id}`            | owned                                         |
-| POST   | `/invoices/{invoice_id}/stock`      | owned                                         |
-| GET    | `/contacts`                         |                                               |
-| POST   | `/contacts`                         |                                               |
-| GET    | `/transactions`                     |                                               |
-| GET    | `/transactions/{transaction_id}`    | Filtered by the guarded `entity_id`           |
-| PATCH  | `/transactions/{transaction_id}`    | Filtered by the guarded `entity_id`           |
+| Method | Path                                               | Notes                                         |
+| ------ | -------------------------------------------------- | --------------------------------------------- |
+| GET    | `/chart-of-accounts`                               |                                               |
+| POST   | `/chart-of-accounts/seed`                          | Standard chart for a new business             |
+| GET    | `/health-checks`                                   | **internal**                                  |
+| POST   | `/inventory/disposal`                              | Gift or write-off, with its journal           |
+| POST   | `/clean-paypal`                                    |                                               |
+| POST   | `/reconcile-invoices`                              | Mark invoices paid from matching transactions |
+| POST   | `/detect-duplicates`                               | Cross-provider duplicates                     |
+| GET    | `/journals`                                        |                                               |
+| GET    | `/journals/review-summary`                         | What needs a person                           |
+| POST   | `/journals/accrue`                                 |                                               |
+| POST   | `/journals/suggest-accounts`                       | LLM suggestions for drafts                    |
+| POST   | `/journals/{journal_id}/reverse`                   | owned                                         |
+| POST   | `/journals/{journal_id}/post-draft`                | owned                                         |
+| POST   | `/journals/expense`                                |                                               |
+| POST   | `/journals/generate-all`                           | Synchronous; the UI uses the Inngest job      |
+| POST   | `/invoices/process`                                | Upload and extract                            |
+| GET    | `/invoices`                                        |                                               |
+| GET    | `/invoices/{invoice_id}`                           | owned                                         |
+| PATCH  | `/invoices/{invoice_id}`                           | owned                                         |
+| PATCH  | `/invoices/{invoice_id}/status`                    | owned; lifecycle rules, 409 if not allowed    |
+| POST   | `/invoices/{invoice_id}/payments`                  | owned; match a transaction as its payment     |
+| DELETE | `/invoices/{invoice_id}/payments/{transaction_id}` | owned; remove that match                      |
+| DELETE | `/invoices/{invoice_id}`                           | owned                                         |
+| POST   | `/invoices/{invoice_id}/stock`                     | owned                                         |
+| GET    | `/contacts`                                        |                                               |
+| POST   | `/contacts`                                        |                                               |
+| GET    | `/transactions`                                    |                                               |
+| GET    | `/transactions/{transaction_id}`                   | Filtered by the guarded `entity_id`           |
+| PATCH  | `/transactions/{transaction_id}`                   | Filtered by the guarded `entity_id`           |
 
 ## Integrations (`/integrations`, `api/routes/integrations.py`)
 
@@ -69,6 +68,8 @@ Router guard: **entity**, except `/entities` (**internal**).
 | GET      | `/sources/{source_id}`                    | owned                            |
 | DELETE   | `/sources/{source_id}`                    | owned                            |
 | PUT      | `/sources/{source_id}/api-key`            | owned                            |
+| PUT      | `/sources/{source_id}/merchant-key`       | owned; Revolut, saves and checks |
+| DELETE   | `/sources/{source_id}/merchant-key`       | owned; Revolut                   |
 | POST     | `/sources/{source_id}/sync`               | owned; sends the sync event      |
 | POST     | `/sources/{source_id}/validate`           | owned                            |
 | GET      | `/sources/{source_id}/stats`              | owned                            |

@@ -8,16 +8,19 @@
  *   PATCH  /accounting/invoices/{id}               notes, direction, line accounts
  *   POST   /accounting/invoices/{id}/stock         record stock movements for purchase lines
  *   DELETE /accounting/invoices/{id}               remove a draft
+ *   POST   /accounting/invoices/{id}/payments      match a bank transaction as its payment
+ *   DELETE /accounting/invoices/{id}/payments/{t}  remove that match
  *   POST   /accounting/journals/{id}/reverse       take a posted journal out of the books (Journals)
  *   POST   /accounting/journals/{id}/post-draft    choose a draft's account and post it
  *   POST   /accounting/journals/suggest-accounts   a guess at the account for each draft
  *
- * The real endpoints also post journals and enforce the lifecycle rules; those are tested in
- * the agent's own suite (tests/test_invoice_rules.py, tests/test_invoice_service.py). This
- * stand-in writes only the rows the pages read back, straight into the local test database,
- * and refuses to run unless Supabase is the local stack. It mimics two refusals so the pages'
- * error handling can be exercised: finalising an invoice dated before the 2026 accounting
- * cutoff, and deleting an invoice that is not a draft.
+ * The real endpoints also enforce the lifecycle rules; those are tested in the agent's own
+ * suite (tests/test_invoice_rules.py, tests/test_invoice_service.py). This stand-in writes only
+ * the rows the pages read back, straight into the local test database, and refuses to run
+ * unless Supabase is the local stack. It mimics the refusals the pages need to show: deleting
+ * an invoice that is not a draft, and matching a transaction that already pays another invoice.
+ * Matching or unmatching a payment sets the status from what is linked, as the agent does
+ * (invoice_rules.status_from_payments, simplified to one currency).
  *
  * Journals: reversing a journal dated inside a closed or filed accounting period is refused with
  * a 409, as the real agent does when the period lock trips.
@@ -52,7 +55,7 @@ async function invoiceWithLines(id: string) {
   const { data } = await supabase
     .from('invoices')
     .select(
-      'id, entity_id, invoice_number, invoice_type, status, invoice_date, invoice_line_items(id, description, quantity, unit_cost, sku)'
+      'id, entity_id, invoice_number, invoice_type, status, origin, invoice_date, invoice_line_items(id, description, quantity, unit_cost, sku)'
     )
     .eq('id', id)
     .maybeSingle();
@@ -142,23 +145,84 @@ async function setStatus(
   const { status } = await readJson<{ entity_id: string; status: string }>(req);
   const invoice = await invoiceWithLines(id);
   if (!invoice) return send(res, 404, { detail: `Invoice not found: ${id}` });
-  const leavingDraft =
-    invoice.status === 'DRAFT' && ['OPEN', 'PAID', 'PARTIALLY_PAID'].includes(status);
-  if (leavingDraft && String(invoice.invoice_date).slice(0, 10) < '2026-01-01') {
-    return send(res, 400, {
-      detail: `Invoice ${invoice.invoice_number} is dated ${String(invoice.invoice_date).slice(0, 10)}, before the 2026-01-01 accounting cutoff.`,
-    });
-  }
   const { error } = await supabase.from('invoices').update({ status }).eq('id', id);
   if (error) return send(res, 500, { detail: error.message });
-  send(res, 200, {
-    invoice: { id, status },
-    previous_status: invoice.status,
-    purchase_journal: leavingDraft ? { id: 'stand-in' } : null,
-    payment_journal: null,
-    voided_journals: [],
-    warnings: [],
-  });
+  send(res, 200, { invoice: { id, status }, previous_status: invoice.status });
+}
+
+/** Set the status the invoice's payment links imply (drafts and dead invoices keep theirs). */
+async function settleFromPayments(id: string) {
+  const { data: invoice } = await supabase
+    .from('invoices')
+    .select('status, gross_amount')
+    .eq('id', id)
+    .single();
+  const { data: links } = await supabase
+    .from('invoice_payments')
+    .select('amount')
+    .eq('invoice_id', id);
+  const current = invoice!.status as string;
+  if (!['OPEN', 'OVERDUE', 'PARTIALLY_PAID', 'PAID'].includes(current)) return current;
+  const paid = (links ?? []).reduce((n, l) => n + Number(l.amount), 0);
+  const status = !links?.length
+    ? current === 'OVERDUE'
+      ? 'OVERDUE'
+      : 'OPEN'
+    : paid >= Number(invoice!.gross_amount) * 0.95
+      ? 'PAID'
+      : 'PARTIALLY_PAID';
+  if (status !== current) await supabase.from('invoices').update({ status }).eq('id', id);
+  return status;
+}
+
+async function linkPayment(
+  req: import('node:http').IncomingMessage,
+  res: import('node:http').ServerResponse,
+  id: string
+) {
+  const { entity_id, transaction_id } = await readJson<{
+    entity_id: string;
+    transaction_id: string;
+  }>(req);
+  const { data: txn } = await supabase
+    .from('financial_transactions')
+    .select('id, amount, currency_code')
+    .eq('id', transaction_id)
+    .maybeSingle();
+  if (!txn) return send(res, 404, { detail: `Transaction not found: ${transaction_id}` });
+  const { data: taken } = await supabase
+    .from('invoice_payments')
+    .select('invoice_id')
+    .eq('financial_transaction_id', transaction_id)
+    .maybeSingle();
+  if (taken && taken.invoice_id !== id) {
+    return send(res, 409, { detail: 'That transaction is already matched to another invoice.' });
+  }
+  if (!taken) {
+    const { error } = await supabase.from('invoice_payments').insert({
+      entity_id,
+      invoice_id: id,
+      financial_transaction_id: transaction_id,
+      amount: Math.abs(Number(txn.amount)),
+      currency_code: txn.currency_code,
+      matched_by: 'user',
+    });
+    if (error) return send(res, 500, { detail: error.message });
+  }
+  send(res, 200, { id, status: await settleFromPayments(id) });
+}
+
+async function unlinkPayment(res: import('node:http').ServerResponse, id: string, txnId: string) {
+  const { data } = await supabase
+    .from('invoice_payments')
+    .delete()
+    .eq('invoice_id', id)
+    .eq('financial_transaction_id', txnId)
+    .select('id');
+  if (!data?.length) {
+    return send(res, 409, { detail: 'That transaction is not matched to this invoice.' });
+  }
+  send(res, 200, { id, status: await settleFromPayments(id) });
 }
 
 async function updateInvoice(
@@ -255,7 +319,17 @@ async function applyStock(
 async function deleteInvoice(res: import('node:http').ServerResponse, id: string) {
   const invoice = await invoiceWithLines(id);
   if (!invoice) return send(res, 404, { detail: `Invoice not found: ${id}` });
-  if (!['DRAFT', 'CANCELLED', 'VOID'].includes(invoice.status)) {
+  // The agent's rules (invoice_rules.check_editable / check_deletable): a Revolut payment
+  // request never goes, an invoice read from a receipt always can.
+  if (invoice.origin === 'revolut_merchant') {
+    return send(res, 409, {
+      detail: 'This invoice is synced from Revolut. It would come back on the next sync.',
+    });
+  }
+  if (
+    invoice.origin !== 'revolut_expense' &&
+    !['DRAFT', 'CANCELLED', 'VOID'].includes(invoice.status)
+  ) {
     return send(res, 409, {
       detail: `A ${invoice.status.toLowerCase()} invoice cannot be deleted. Void it instead.`,
     });
@@ -414,9 +488,10 @@ createServer(async (req, res) => {
     return send(res, 200, { success: true });
   }
 
-  const invoiceRoute = /^\/accounting\/invoices\/([0-9a-f-]{36})(\/status|\/stock)?(\?.*)?$/.exec(
-    req.url ?? ''
-  );
+  const invoiceRoute =
+    /^\/accounting\/invoices\/([0-9a-f-]{36})(\/status|\/stock|\/payments(?:\/[0-9a-f-]{36})?)?(\?.*)?$/.exec(
+      req.url ?? ''
+    );
   if (req.method === 'POST' && req.url === '/accounting/invoices/process') {
     return processInvoice(req, res);
   }
@@ -426,6 +501,10 @@ createServer(async (req, res) => {
     if (req.method === 'POST' && suffix === '/stock') return applyStock(req, res, id);
     if (req.method === 'PATCH' && !suffix) return updateInvoice(req, res, id);
     if (req.method === 'DELETE' && !suffix) return deleteInvoice(res, id);
+    if (req.method === 'POST' && suffix === '/payments') return linkPayment(req, res, id);
+    if (req.method === 'DELETE' && suffix?.startsWith('/payments/')) {
+      return unlinkPayment(res, id, suffix.slice('/payments/'.length));
+    }
   }
 
   if (req.method === 'POST' && req.url === '/accounting/journals/suggest-accounts') {

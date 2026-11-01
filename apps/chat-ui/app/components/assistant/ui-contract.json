@@ -1121,7 +1121,7 @@
             "label": "Status"
           }
         ],
-        "description": "Harbour & Co, \u00a3960.00. Posts the payment journal.",
+        "description": "Harbour & Co, \u00a3960.00.",
         "dismiss_label": "Leave it",
         "kind": "proposal",
         "link": "/invoices?invoice=i-1",

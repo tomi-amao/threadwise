@@ -8,6 +8,7 @@ import {
   Cube,
   FileText,
   Package,
+  Receipt,
   ShoppingBag,
   ShoppingCart,
   Storefront,
@@ -67,8 +68,9 @@ export const PROVIDERS: Record<ProviderKey, Provider> = {
   revolut: {
     name: 'Revolut',
     icon: <Bank {...ICON} />,
-    description: 'Transactions and accounts from Revolut Business.',
-    endpoints: ['transactions', 'accounts'],
+    description:
+      'Transactions, accounts and receipts from Revolut Business, and with a Merchant key the invoices you send from it.',
+    endpoints: ['transactions', 'accounts', 'payment_requests'],
     credential: 'key',
     accountLabel: 'Business ID',
     accountPlaceholder: 'Your Revolut business ID',
@@ -100,6 +102,7 @@ export const ENDPOINT_ICON: Record<string, React.ReactNode> = {
   transactions: <Coins {...E} />,
   balance_transactions: <Coins {...E} />,
   accounts: <Buildings {...E} />,
+  payment_requests: <Receipt {...E} />,
   calendar_events: <CalendarBlank {...E} />,
   tax_deadlines: <CalendarBlank {...E} />,
   collection_launches: <CalendarBlank {...E} />,
@@ -134,3 +137,12 @@ export function relativeTime(value: string | null): string {
 
 export const int = (n: number) => new Intl.NumberFormat('en-GB').format(n);
 export const prettyEndpoint = (e: string) => e.replace(/_/g, ' ');
+
+/**
+ * Revolut's invoices come from its Merchant API, which has its own secret key. It is held for
+ * the Revolut integration (stored as its own row by the agent) and syncs the payment_requests
+ * endpoint; without it that endpoint is skipped.
+ */
+export const MERCHANT_KEY_HELP =
+  'The Production secret key from Revolut Business, Merchant, APIs. It is separate from the Business API token and lets ThreadWise read the invoices you send from Revolut.';
+export const MERCHANT_ENDPOINT = 'payment_requests';

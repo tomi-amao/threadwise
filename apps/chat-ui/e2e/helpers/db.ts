@@ -75,8 +75,23 @@ export async function deleteStandInMovements(): Promise<void> {
 // ─── Invoices ─────────────────────────────────────────────────────────
 
 export interface InvoiceSnapshot {
-  invoices: { id: string; status: string; notes: string | null; invoice_type: string }[];
+  invoices: {
+    id: string;
+    status: string;
+    notes: string | null;
+    invoice_type: string;
+    file_path: string | null;
+  }[];
   lines: { id: string; gl_account_id: string | null }[];
+  payments: {
+    id: string;
+    entity_id: string;
+    invoice_id: string;
+    financial_transaction_id: string;
+    amount: number;
+    currency_code: string;
+    matched_by: string;
+  }[];
 }
 
 /** The seeded invoices a test may change (the 1,020 bulk ones are never touched). */
@@ -84,7 +99,7 @@ export async function snapshotInvoices(): Promise<InvoiceSnapshot> {
   const invoices = await rest<InvoiceSnapshot['invoices']>(
     'GET',
     'invoices',
-    'select=id,status,notes,invoice_type&invoice_number=not.like.INV-BULK-*'
+    'select=id,status,notes,invoice_type,file_path&invoice_number=not.like.INV-BULK-*'
   );
   const ids = invoices.map(i => i.id).join(',');
   const lines = await rest<InvoiceSnapshot['lines']>(
@@ -92,7 +107,12 @@ export async function snapshotInvoices(): Promise<InvoiceSnapshot> {
     'invoice_line_items',
     `select=id,gl_account_id&invoice_id=in.(${ids})`
   );
-  return { invoices, lines };
+  const payments = await rest<InvoiceSnapshot['payments']>(
+    'GET',
+    'invoice_payments',
+    'select=id,entity_id,invoice_id,financial_transaction_id,amount,currency_code,matched_by'
+  );
+  return { invoices, lines, payments };
 }
 
 /** Put every changed invoice and line back, and remove what a test created. */
@@ -106,7 +126,12 @@ export async function restoreInvoices(before: InvoiceSnapshot): Promise<void> {
         status: original.status,
         notes: original.notes,
         invoice_type: original.invoice_type,
+        file_path: original.file_path,
       });
+      // A document a test added: the file goes too.
+      if (row.file_path && row.file_path !== original.file_path) {
+        await removeStoredFile('invoices', row.file_path);
+      }
     }
   }
   const lineWas = new Map(before.lines.map(l => [l.id, l.gl_account_id]));
@@ -117,12 +142,58 @@ export async function restoreInvoices(before: InvoiceSnapshot): Promise<void> {
       });
     }
   }
+  // Payment matches: take away the ones a test made, put back the ones it removed.
+  const linkWas = new Set(before.payments.map(p => p.id));
+  const linkNow = new Set(now.payments.map(p => p.id));
+  const added = now.payments.filter(p => !linkWas.has(p.id)).map(p => p.id);
+  if (added.length) await rest('DELETE', 'invoice_payments', `id=in.(${added.join(',')})`);
+  const removed = before.payments.filter(p => !linkNow.has(p.id));
+  if (removed.length) await rest('POST', 'invoice_payments', '', removed);
   // Invoices made by the stand-in agent when a test uploads a file, and what it created for
   // them (stock items, movements, its two contacts).
   await rest('DELETE', 'invoices', 'invoice_number=like.E2E-UP-*');
   await deleteStandInMovements();
   await rest('DELETE', 'inventory_items', 'sku=like.e2e-*');
   await rest('DELETE', 'contacts', 'name=in.("Stand-in Supplier Ltd","Stand-in Customer Ltd")');
+}
+
+async function removeStoredFile(bucket: string, path: string): Promise<void> {
+  const response = await fetch(`${url}/storage/v1/object/${bucket}/${path}`, {
+    method: 'DELETE',
+    headers: { apikey: key, Authorization: `Bearer ${key}` },
+  });
+  if (!response.ok && response.status !== 404) {
+    throw new Error(`remove ${bucket}/${path}: ${response.status} ${await response.text()}`);
+  }
+}
+
+/**
+ * A throwaway invoice read from a receipt, like the seeded one but safe to delete. Its number
+ * starts E2E-UP-, so restoreInvoices removes it if the test does not.
+ */
+export async function addReceiptInvoice(like: string): Promise<string> {
+  const [model] = await rest<{ entity_id: string; counterparty_id: string }[]>(
+    'GET',
+    'invoices',
+    `select=entity_id,counterparty_id&invoice_number=eq.${encodeURIComponent(like)}`
+  );
+  if (!model) throw new Error(`No invoice ${like}`);
+  const number = `E2E-UP-RCPT-${Date.now() % 1_000_000}`;
+  await rest('POST', 'invoices', '', {
+    entity_id: model.entity_id,
+    counterparty_id: model.counterparty_id,
+    invoice_number: number,
+    invoice_type: 'PURCHASE',
+    status: 'PAID',
+    currency: 'GBP',
+    net_amount: 12,
+    tax_amount: 0,
+    gross_amount: 12,
+    origin: 'revolut_expense',
+    external_id: `e2e-receipt-${number}`,
+    source: 'revolut',
+  });
+  return number;
 }
 
 export async function readInvoice(
@@ -433,7 +504,13 @@ export async function borrowTransaction(
     'financial_transactions',
     `select=id,amount,base_amount,counterparty_name,metadata&direction=eq.${direction}&excluded_reason=is.null&external_transaction_id=like.e2e-txn-*&order=external_transaction_id.desc&limit=40`
   );
-  const row = rows.find(r => !r.metadata?.invoice_id);
+  const links = await rest<{ financial_transaction_id: string }[]>(
+    'GET',
+    'invoice_payments',
+    `select=financial_transaction_id&financial_transaction_id=in.(${rows.map(r => r.id).join(',')})`
+  );
+  const linked = new Set(links.map(l => l.financial_transaction_id));
+  const row = rows.find(r => !r.metadata?.invoice_id && !linked.has(r.id));
   if (!row) throw new Error('No unmatched transaction to borrow');
   await rest('PATCH', 'financial_transactions', `id=eq.${row.id}`, {
     amount,
@@ -443,6 +520,8 @@ export async function borrowTransaction(
   return {
     id: row.id,
     restore: async () => {
+      // A match the test left behind would make the transaction look taken next time.
+      await rest('DELETE', 'invoice_payments', `financial_transaction_id=eq.${row.id}`);
       await rest('PATCH', 'financial_transactions', `id=eq.${row.id}`, {
         amount: row.amount,
         base_amount: row.base_amount,
@@ -453,13 +532,14 @@ export async function borrowTransaction(
   };
 }
 
-export async function readTxnInvoiceId(id: string): Promise<unknown> {
-  const rows = await rest<{ metadata: Record<string, unknown> | null }[]>(
+/** The number of the invoice this transaction is matched to as its payment, if any. */
+export async function readTxnInvoiceId(id: string): Promise<string | undefined> {
+  const rows = await rest<{ invoices: { invoice_number: string } | null }[]>(
     'GET',
-    'financial_transactions',
-    `select=metadata&id=eq.${id}`
+    'invoice_payments',
+    `select=invoices(invoice_number)&financial_transaction_id=eq.${id}`
   );
-  return rows[0]?.metadata?.invoice_id;
+  return rows[0]?.invoices?.invoice_number;
 }
 
 // ─── Collections (for tests that create, edit and remove them) ─────────────────────────────────
@@ -655,4 +735,90 @@ export async function deleteTestFeedback(): Promise<void> {
 
 export async function insertFeedback(row: Record<string, unknown>): Promise<void> {
   await rest('POST', 'assistant_feedback', '', row);
+}
+
+// ─── Transactions ─────────────────────────────────────────────────────
+
+/** The external id of the move addInternalMove writes, so removeInternalMove can find it. */
+export const INTERNAL_MOVE_ID = 'e2e-internal-move';
+
+/**
+ * A move between the seeded business's two bank accounts, stored as the sync stores one:
+ * excluded, flagged internal, with both legs. The newest transaction, so it is the first row.
+ */
+export async function addInternalMove(amount: number): Promise<string> {
+  const accounts = await rest<{ id: string; entity_id: string; external_account_id: string }[]>(
+    'GET',
+    'bank_accounts',
+    'select=id,entity_id,external_account_id&external_account_id=in.(e2e-bank-1,e2e-bank-2)'
+  );
+  const from = accounts.find(a => a.external_account_id === 'e2e-bank-2');
+  const to = accounts.find(a => a.external_account_id === 'e2e-bank-1');
+  if (!from || !to) throw new Error('The seeded bank accounts are missing');
+  await removeInternalMove();
+  const [row] = await rest<{ id: string }[]>('POST', 'financial_transactions', '', {
+    entity_id: from.entity_id,
+    bank_account_id: from.id,
+    source: 'revolut',
+    external_transaction_id: INTERNAL_MOVE_ID,
+    transaction_type: 'transfer',
+    amount,
+    base_amount: amount,
+    currency_code: 'GBP',
+    base_currency_code: 'GBP',
+    direction: 'out',
+    occurred_at: new Date().toISOString(),
+    description: 'Merchant payout to an internal account',
+    status: 'excluded',
+    excluded_reason: 'Moved between your own Revolut accounts',
+    metadata: {
+      state: 'completed',
+      internal_move: true,
+      legs: [
+        { account_id: 'e2e-bank-2', amount: -amount, currency: 'GBP' },
+        { account_id: 'e2e-bank-1', amount, currency: 'GBP' },
+      ],
+    },
+  });
+  return row.id;
+}
+
+/** The external id of the merchant payment addMerchantPayment writes. */
+export const MERCHANT_PAYMENT_ID = 'e2e-merchant-payment';
+
+/** A Revolut merchant payment with the fee Revolut kept, as the sync stores one. */
+export async function addMerchantPayment(amount: number, fee: number): Promise<string> {
+  const [account] = await rest<{ id: string; entity_id: string }[]>(
+    'GET',
+    'bank_accounts',
+    'select=id,entity_id&external_account_id=eq.e2e-bank-1'
+  );
+  if (!account) throw new Error('The seeded bank account is missing');
+  await removeInternalMove();
+  const [row] = await rest<{ id: string }[]>('POST', 'financial_transactions', '', {
+    entity_id: account.entity_id,
+    bank_account_id: account.id,
+    source: 'revolut',
+    external_transaction_id: MERCHANT_PAYMENT_ID,
+    transaction_type: 'reserve_release',
+    amount,
+    base_amount: amount,
+    currency_code: 'GBP',
+    base_currency_code: 'GBP',
+    direction: 'in',
+    occurred_at: new Date().toISOString(),
+    description: 'Merchant payment',
+    status: 'pending',
+    metadata: { state: 'completed', fee, fee_currency: 'GBP' },
+  });
+  return row.id;
+}
+
+/** Removes what addInternalMove and addMerchantPayment wrote. */
+export async function removeInternalMove(): Promise<void> {
+  await rest(
+    'DELETE',
+    'financial_transactions',
+    `external_transaction_id=in.(${INTERNAL_MOVE_ID},${MERCHANT_PAYMENT_ID})`
+  );
 }

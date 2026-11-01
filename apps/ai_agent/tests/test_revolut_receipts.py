@@ -1,11 +1,16 @@
 """Revolut receipts: which to fetch, where they go, and paging through expenses."""
 
 import asyncio
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List
 
 import httpx
 
-from ai_agent.integrations.revolut import EXPENSES_URL, RevolutAdapter
+from ai_agent.integrations.revolut import (
+    EXPENSES_URL,
+    RevolutAdapter,
+    expenses_timestamp,
+)
 from ai_agent.integrations.revolut.receipts import (
     ReceiptRef,
     file_name,
@@ -90,6 +95,36 @@ class TestRevolutAdapterExpenses:
         assert "to" not in calls[0]
         assert calls[1]["to"] == "2026-10-02T00:00:00Z"
 
+    def test_from_is_sent_in_the_format_the_expenses_api_accepts(self, monkeypatch):
+        # A watermark less the lookback, as the sync passes it. Sent as isoformat() it was
+        # 2026-07-31T01:22:46.585282+00:00, which the Expenses API answers with a 400.
+        since = datetime(2026, 7, 31, 1, 22, 46, 585282, tzinfo=timezone.utc)
+        calls: List[Dict[str, Any]] = []
+
+        async def fake_request(url: str, params: Dict[str, Any]) -> Any:
+            calls.append(dict(params))
+            return []
+
+        adapter = RevolutAdapter(api_key="k", page_size=2)
+        monkeypatch.setattr(adapter, "_make_request", fake_request)
+
+        async def collect() -> List[Any]:
+            return [e async for e in adapter.list_expenses(since)]
+
+        asyncio.run(collect())
+        assert calls == [{"count": 2, "from": "2026-07-31T01:22:46.585Z"}]
+
+    def test_expenses_timestamps_are_utc_with_milliseconds(self):
+        two_hours_ahead = timezone(timedelta(hours=2))
+        assert (
+            expenses_timestamp(datetime(2026, 7, 31, 3, 0, 0, 999999, two_hours_ahead))
+            == "2026-07-31T01:00:00.999Z"
+        )
+        assert (
+            expenses_timestamp(datetime(2026, 1, 2, 3, 4, 5))
+            == "2026-01-02T03:04:05.000Z"
+        )
+
     def test_download_receipt_returns_bytes_and_type(self, monkeypatch):
         def handler(request: httpx.Request) -> httpx.Response:
             assert request.url.path.endswith(
@@ -115,3 +150,26 @@ class TestRevolutAdapterExpenses:
 
         assert content == b"%PDF-1.4"
         assert content_type == "application/pdf"
+
+
+class TestRevolutErrors:
+    def test_an_error_carries_revoluts_reason_and_its_status(self, monkeypatch):
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                400, json={"code": 3000, "message": "Invalid 'from' parameter"}
+            )
+
+        real_client = httpx.AsyncClient
+
+        def client_with_mock(**kwargs: Any) -> httpx.AsyncClient:
+            return real_client(transport=httpx.MockTransport(handler), **kwargs)
+
+        monkeypatch.setattr(httpx, "AsyncClient", client_with_mock)
+        adapter = RevolutAdapter(api_key="k")
+        try:
+            asyncio.run(adapter._make_request(EXPENSES_URL, {"count": 1}))
+        except httpx.HTTPStatusError as error:
+            assert error.response.status_code == 400
+            assert "Invalid 'from' parameter" in str(error)
+        else:
+            raise AssertionError("expected an HTTPStatusError")

@@ -8,7 +8,9 @@ Journal types:
   captured at accrual time.
 - **Expense journal**: Created from an outbound financial transaction. Debits the
   resolved expense account, credits cash.
-- **Purchase / Sale / Payment journals**: Created from invoices.
+
+Invoices are not a journal source: they describe the money movements above, and only
+those post to the ledger.
 
 Safety rules:
 - Always validate: total debits == total credits (within tolerance)
@@ -86,6 +88,32 @@ def _compute_gbp_equivalent(txn: dict, native_amount: Decimal) -> Optional[float
     # The individual journal line item carries the same absolute amount as the
     # transaction, so gbp_equivalent == base_amount for simple two-leg journals.
     return round(base_float, 4)
+
+
+def merchant_fee(
+    txn: dict, journal_amount: Decimal, journal_currency: str = "GBP"
+) -> Decimal:
+    """The fee Revolut kept from a merchant payment, in the journal's currency.
+
+    ``metadata.fee`` is in ``metadata.fee_currency`` (the account's). When that is the
+    journal's currency it is used as it is; otherwise (a foreign payment journaled at its GBP
+    base amount) it is scaled by the payment's own rate. A fee that is not less than the
+    payment is not believed and gives 0, so the journal falls back to the gross amount rather
+    than leaving cash at nothing.
+    """
+    meta = txn.get("metadata") or {}
+    fee = Decimal(str(meta.get("fee") or 0))
+    own = Decimal(str(abs(float(txn.get("amount") or 0))))
+    if fee <= 0 or not own:
+        return Decimal(0)
+    fee_currency = str(
+        meta.get("fee_currency") or txn.get("currency_code") or ""
+    ).upper()
+    if fee_currency == journal_currency.upper():
+        scaled = fee.quantize(Decimal("0.01"))
+    else:
+        scaled = (fee * journal_amount / own).quantize(Decimal("0.01"))
+    return scaled if scaled < journal_amount else Decimal(0)
 
 
 class JournalError(Exception):
@@ -536,6 +564,14 @@ class JournalService:
             DEBIT  1014/1019/... Cash    = amount
             CREDIT 4020 Revenue          = amount  (general sales receipt)
 
+        Revolut merchant payment (reserve_release) with a fee on it (metadata.fee): the
+        customer paid the amount and Revolut kept the fee, so
+            DEBIT  1014 Cash                 = amount - fee
+            DEBIT  8020 Bank charges         = fee
+            CREDIT 4030 Wholesale revenue    = amount
+        The settlement and payout that move it on to the main account are internal moves,
+        excluded at normalisation, so this journal is the whole of it.
+
         Args:
             force: If True, (re)create even if a journal already exists —
                 see create_accrual_journal's docstring for why this defaults
@@ -627,11 +663,22 @@ class JournalService:
 
         credit_id = await self._get_account_id(entity_id, credit_code)
 
+        fee = (
+            merchant_fee(txn, amount, currency)
+            if txn_type == "reserve_release" and not is_personal
+            else Decimal(0)
+        )
+        fee_id = (
+            await self._get_account_id(entity_id, accts.BANK_CHARGES) if fee else None
+        )
+
         missing = []
         if not cash_id:
             missing.append(cash_code)
         if not credit_id:
             missing.append(credit_code)
+        if fee and not fee_id:
+            missing.append(accts.BANK_CHARGES)
         if missing:
             raise JournalError(
                 f"Missing chart of accounts ({', '.join(missing)}). "
@@ -641,19 +688,31 @@ class JournalService:
         line_items = [
             {
                 "account_id": str(cash_id),
-                "debit": float(amount),
+                "debit": float(amount - fee),
                 "credit": 0,
                 "currency": currency,
                 "description": f"Cash received: {description_text}",
             },
+        ]
+        if fee:
+            line_items.append(
+                {
+                    "account_id": str(fee_id),
+                    "debit": float(fee),
+                    "credit": 0,
+                    "currency": currency,
+                    "description": "Revolut merchant fee",
+                }
+            )
+        line_items.append(
             {
                 "account_id": str(credit_id),
                 "debit": 0,
                 "credit": float(amount),
                 "currency": currency,
                 "description": credit_label,
-            },
-        ]
+            }
+        )
 
         return await self._create_journal(
             entity_id=entity_id,
@@ -1070,204 +1129,6 @@ class JournalService:
             status="posted",
             line_items=line_items,
         )
-
-    # =========================================================================
-    # PURCHASE JOURNAL (Invoice → COGS)
-    # =========================================================================
-
-    async def create_purchase_journal(
-        self,
-        entity_id: UUID,
-        invoice_id: UUID,
-        force: bool = False,
-        financial_transaction_id: Optional[UUID] = None,
-    ) -> Dict[str, Any]:
-        """Create a purchase journal when a supplier invoice is received.
-
-        When ``financial_transaction_id`` is provided the financial transaction
-        is used as the journal source (single source of truth).  The invoice
-        line items still drive the debit descriptions and amounts; the credit
-        goes to the actual cash / clearing account derived from the transaction
-        rather than Accounts Payable.  This prevents double-journaling the same
-        transaction as both a purchase journal and an expense journal.
-
-        When no transaction is given (legacy / manual path) the journal is
-        sourced against the invoice and credits Accounts Payable.
-
-        Journal entries (per line item):
-            DEBIT  <line_item.gl_account_id or default 5000> = line net amount
-            ...
-            CREDIT <cash account from txn> OR 2000 AP       = invoice gross total
-
-        Args:
-            entity_id: The entity
-            invoice_id: The invoice to journal
-            force: Re-create even if a journal already exists
-            financial_transaction_id: Optional — when the payment was observed
-                as a financial transaction, use it as the journal source.
-
-        Returns:
-            Journal record with line items
-        """
-        invoice = await self._fetch_invoice(invoice_id)
-        if not invoice:
-            raise JournalError(f"Invoice not found: {invoice_id}")
-
-        if invoice.get("invoice_type") not in ("PURCHASE", None):
-            raise JournalError(
-                f"Expected PURCHASE invoice but got type '{invoice.get('invoice_type')}'. "
-                "Use create_sale_journal for SALE invoices."
-            )
-
-        # Determine the journal source — transaction wins over invoice
-        if financial_transaction_id:
-            # Single source of truth: source is the financial transaction
-            j_source_type = "financial_transaction"
-            j_source_id: UUID = financial_transaction_id
-        else:
-            j_source_type = "invoice"
-            j_source_id = invoice_id
-
-        # Check idempotency — skip if a journal already exists, unless force=True
-        existing = await self._find_journal(
-            entity_id, j_source_type, j_source_id, "purchase"
-        )
-        if existing and not force:
-            return existing
-
-        total = Decimal(
-            str(invoice.get("gross_amount") or invoice.get("net_amount") or 0)
-        )
-        tax_total = Decimal(str(invoice.get("tax_amount") or 0))
-        currency = invoice.get("currency", "GBP")
-
-        if total <= 0:
-            raise JournalError(f"Invoice total must be positive, got {total}")
-
-        # Resolve counterparty name
-        counterparty_name = await self._get_contact_name(invoice.get("counterparty_id"))
-        inv_number = invoice.get("invoice_number", str(invoice_id))
-
-        # Resolve default account IDs
-        default_cogs_id = await self._get_account_id(entity_id, accts.COGS_DEFAULT)
-        vat_input_id = await self._get_account_id(entity_id, accts.VAT_RECEIVABLE)
-
-        if not default_cogs_id:
-            raise JournalError(
-                f"Missing chart of accounts ({accts.COGS_DEFAULT} COGS). "
-                "Check that this account number exists and is not a header."
-            )
-
-        # Fetch invoice line items for per-line debit entries
-        inv_line_items = await self._fetch_invoice_line_items(invoice_id)
-
-        line_items: List[Dict[str, Any]] = []
-
-        if inv_line_items:
-            # Create a debit entry per invoice line item using its assigned GL account
-            for li in inv_line_items:
-                # Compute the line's net amount (quantity × unit_cost or fall back)
-                qty = Decimal(str(li.get("quantity") or 1))
-                unit = Decimal(str(li.get("unit_cost") or 0))
-                line_net = qty * unit
-
-                if line_net <= 0:
-                    continue
-
-                # Use the line item's assigned GL account; fall back to default COGS
-                debit_account_id = li.get("gl_account_id") or str(default_cogs_id)
-                description = li.get("description", "Purchase item")
-
-                line_items.append(
-                    {
-                        "account_id": debit_account_id,
-                        "debit": float(line_net),
-                        "credit": 0,
-                        "currency": currency,
-                        "description": f"{description} — {counterparty_name} (inv {inv_number})",
-                    }
-                )
-
-            # If there's tax, add a VAT input debit (or lump it into the last COGS entry)
-            if tax_total > 0:
-                tax_account = (
-                    str(vat_input_id) if vat_input_id else str(default_cogs_id)
-                )
-                line_items.append(
-                    {
-                        "account_id": tax_account,
-                        "debit": float(tax_total),
-                        "credit": 0,
-                        "currency": currency,
-                        "description": f"Input VAT — {counterparty_name} (inv {inv_number})",
-                    }
-                )
-        else:
-            # No line items — fall back to single COGS debit for gross total
-            line_items.append(
-                {
-                    "account_id": str(default_cogs_id),
-                    "debit": float(total),
-                    "credit": 0,
-                    "currency": currency,
-                    "description": f"Purchase from {counterparty_name} (inv {inv_number})",
-                }
-            )
-
-        # CREDIT Accounts Payable — invoices always create an AP obligation.
-        # The matching bank transaction clears the AP via create_invoice_payment_journal.
-        ap_id = await self._get_account_id(entity_id, accts.ACCOUNTS_PAYABLE)
-        if not ap_id:
-            raise JournalError(
-                f"Missing chart of accounts ({accts.ACCOUNTS_PAYABLE} AP). "
-                "Check that this account number exists and is not a header."
-            )
-
-        line_items.append(
-            {
-                "account_id": str(ap_id),
-                "debit": 0,
-                "credit": float(total),
-                "currency": currency,
-                "description": f"AP for {counterparty_name} (inv {inv_number})",
-            }
-        )
-
-        # Validate balance
-        total_debit = sum(
-            (Decimal(str(li["debit"])) for li in line_items), Decimal("0")
-        )
-        total_credit = sum(
-            (Decimal(str(li["credit"])) for li in line_items), Decimal("0")
-        )
-        if abs(total_debit - total_credit) > BALANCE_TOLERANCE:
-            # Adjust last debit entry to absorb rounding differences
-            diff = float(total_credit - total_debit)
-            logger.debug(
-                f"Purchase journal rounding adjustment: {diff} on inv {inv_number}"
-            )
-            # Find the last debit entry and adjust it
-            for li in reversed(line_items):
-                if li["debit"] > 0:
-                    li["debit"] = float(Decimal(str(li["debit"])) + Decimal(str(diff)))
-                    break
-
-        journal_date = invoice.get(
-            "invoice_date", datetime.now(timezone.utc).isoformat()
-        )
-
-        journal = await self._create_journal(
-            entity_id=entity_id,
-            journal_type="purchase",
-            journal_date=journal_date,
-            description=f"Purchase invoice {inv_number} from {counterparty_name}",
-            source_type=j_source_type,
-            source_id=j_source_id,
-            status="posted",
-            line_items=line_items,
-        )
-
-        return journal
 
     # =========================================================================
     # INVENTORY COGS JOURNAL (Sale → Cost of Goods Sold)
@@ -1810,272 +1671,6 @@ class JournalService:
             result["returned_movements"] += 1
 
         return result
-
-    # =========================================================================
-    # INVOICE PAYMENT JOURNAL
-    # =========================================================================
-
-    # =========================================================================
-    # SALE JOURNAL (Invoice → Accounts Receivable + Revenue)
-    # =========================================================================
-
-    async def create_sale_journal(
-        self,
-        entity_id: UUID,
-        invoice_id: UUID,
-    ) -> Dict[str, Any]:
-        """Create a sale journal when a customer invoice is issued.
-
-        Journal entries:
-            DEBIT  1300 Accounts Receivable  = gross_amount
-            CREDIT 4000 Revenue              = net_amount
-            CREDIT 2100 Tax Payable          = tax_amount
-
-        Args:
-            entity_id: The entity
-            invoice_id: The SALE invoice UUID
-
-        Returns:
-            Journal record with line items
-
-        Raises:
-            JournalError: If invoice not found, wrong type, or accounts missing
-        """
-        invoice = await self._fetch_invoice(invoice_id)
-        if not invoice:
-            raise JournalError(f"Invoice not found: {invoice_id}")
-
-        if invoice.get("invoice_type") != "SALE":
-            raise JournalError(
-                f"Expected SALE invoice but got type '{invoice.get('invoice_type')}'. "
-                "Use create_purchase_journal for PURCHASE invoices."
-            )
-
-        # Check idempotency
-        existing = await self._find_journal(entity_id, "invoice", invoice_id, "accrual")
-        if existing:
-            return existing
-
-        gross = Decimal(str(invoice.get("gross_amount") or 0))
-        net = Decimal(str(invoice.get("net_amount") or gross))
-        tax = Decimal(str(invoice.get("tax_amount") or 0))
-        currency = invoice.get("currency", "GBP")
-
-        if gross <= 0:
-            raise JournalError(f"Invoice gross amount must be positive, got {gross}")
-
-        counterparty_name = await self._get_contact_name(invoice.get("counterparty_id"))
-        inv_number = invoice.get("invoice_number", str(invoice_id))
-
-        # Resolve account IDs
-        ar_id = await self._get_account_id(entity_id, accts.ACCOUNTS_RECEIVABLE)
-        revenue_id = await self._get_account_id(entity_id, accts.REVENUE_ECOMMERCE)
-        tax_id = await self._get_account_id(entity_id, accts.VAT_PAYABLE)
-
-        if not all([ar_id, revenue_id]):
-            raise JournalError(
-                f"Missing chart of accounts ({accts.ACCOUNTS_RECEIVABLE}, {accts.REVENUE_ECOMMERCE}). "
-                "Check that these account numbers exist and are not header accounts."
-            )
-
-        line_items: List[Dict[str, Any]] = [
-            {
-                "account_id": str(ar_id),
-                "debit": float(gross),
-                "credit": 0,
-                "currency": currency,
-                "description": f"Receivable from {counterparty_name} (inv {inv_number})",
-            },
-            {
-                "account_id": str(revenue_id),
-                "debit": 0,
-                "credit": float(net),
-                "currency": currency,
-                "description": f"Revenue for {counterparty_name} (inv {inv_number})",
-            },
-        ]
-
-        if tax > 0 and tax_id:
-            line_items.append(
-                {
-                    "account_id": str(tax_id),
-                    "debit": 0,
-                    "credit": float(tax),
-                    "currency": currency,
-                    "description": f"VAT/Tax for inv {inv_number}",
-                }
-            )
-
-        # Validate balance
-        total_debit = sum(
-            (Decimal(str(li["debit"])) for li in line_items), Decimal("0")
-        )
-        total_credit = sum(
-            (Decimal(str(li["credit"])) for li in line_items), Decimal("0")
-        )
-        if abs(total_debit - total_credit) > BALANCE_TOLERANCE:
-            raise JournalError(
-                f"Sale journal does not balance: debit={total_debit} credit={total_credit}"
-            )
-
-        return await self._create_journal(
-            entity_id=entity_id,
-            journal_type="accrual",
-            journal_date=invoice.get(
-                "invoice_date", datetime.now(timezone.utc).isoformat()
-            ),
-            description=f"Sale invoice {inv_number} to {counterparty_name}",
-            source_type="invoice",
-            source_id=invoice_id,
-            status="posted",
-            line_items=line_items,
-        )
-
-    async def create_invoice_payment_journal(
-        self,
-        entity_id: UUID,
-        invoice_id: UUID,
-    ) -> Dict[str, Any]:
-        """Create a payment settlement journal when an invoice is marked PAID.
-
-        Finds the matching financial transaction to determine the actual cash
-        account used for payment.  Falls back to generic Cash & Cash Equivalents
-        if no matching transaction is found.
-
-        PURCHASE invoice (pay a supplier):
-            DEBIT  2010 Accounts Payable  = gross total
-            CREDIT 1014/1019/... Cash     = gross total  (resolved from transaction)
-
-        SALE invoice (receive payment from customer):
-            DEBIT  1010/... Cash          = gross total
-            CREDIT 1020 Accounts Receivable = gross total
-
-        Args:
-            entity_id: The entity
-            invoice_id: The invoice that was paid (status must be PAID)
-
-        Returns:
-            Journal record with line items
-        """
-        invoice = await self._fetch_invoice(invoice_id)
-        if not invoice:
-            raise JournalError(f"Invoice not found: {invoice_id}")
-
-        if invoice.get("status") not in ("PAID", "paid"):
-            raise JournalError(
-                f"Invoice status is '{invoice.get('status')}', expected 'PAID'"
-            )
-
-        # Check idempotency
-        existing = await self._find_journal(entity_id, "invoice", invoice_id, "payment")
-        if existing:
-            return existing
-
-        total = Decimal(
-            str(invoice.get("gross_amount") or invoice.get("net_amount") or 0)
-        )
-        currency = invoice.get("currency", "GBP")
-        invoice_type = invoice.get("invoice_type", "PURCHASE")
-
-        counterparty_name = await self._get_contact_name(invoice.get("counterparty_id"))
-        inv_number = invoice.get("invoice_number", str(invoice_id))
-
-        # Try to find the matching financial transaction for accurate cash account
-        matched_txn = None
-        matched_txn_id = await self._find_transaction_for_invoice(entity_id, inv_number)
-        if matched_txn_id:
-            matched_txn = await self._fetch_financial_transaction(str(matched_txn_id))
-
-        journal_date = datetime.now(timezone.utc).isoformat()
-        if matched_txn and matched_txn.get("occurred_at"):
-            journal_date = matched_txn["occurred_at"]
-
-        if invoice_type == "SALE":
-            # Customer paid us: debit Cash, credit Accounts Receivable
-            cash_code = accts.CASH_AND_EQUIVALENTS
-            if matched_txn:
-                cash_code = accts.resolve_cash_account(
-                    matched_txn.get("source", "revolut"),
-                    matched_txn.get("currency_code") or currency,
-                )
-
-            cash_id = await self._get_account_id(entity_id, cash_code)
-            ar_id = await self._get_account_id(entity_id, accts.ACCOUNTS_RECEIVABLE)
-
-            if not all([cash_id, ar_id]):
-                raise JournalError(
-                    f"Missing chart of accounts ({cash_code}, {accts.ACCOUNTS_RECEIVABLE}). "
-                    "Check that these account numbers exist and are not header accounts."
-                )
-
-            line_items = [
-                {
-                    "account_id": str(cash_id),
-                    "debit": float(total),
-                    "credit": 0,
-                    "currency": currency,
-                    "description": f"Cash received from {counterparty_name} (inv {inv_number})",
-                },
-                {
-                    "account_id": str(ar_id),
-                    "debit": 0,
-                    "credit": float(total),
-                    "currency": currency,
-                    "description": f"AR cleared for {counterparty_name} (inv {inv_number})",
-                },
-            ]
-            description = (
-                f"Payment received for invoice {inv_number} from {counterparty_name}"
-            )
-        else:
-            # We paid supplier (PURCHASE): debit AP, credit Cash
-            ap_id = await self._get_account_id(entity_id, accts.ACCOUNTS_PAYABLE)
-
-            cash_code = accts.CASH_AND_EQUIVALENTS
-            if matched_txn:
-                cash_code = accts.resolve_cash_account(
-                    matched_txn.get("source", "revolut"),
-                    matched_txn.get("currency_code") or currency,
-                )
-
-            cash_id = await self._get_account_id(entity_id, cash_code)
-
-            if not all([ap_id, cash_id]):
-                raise JournalError(
-                    f"Missing chart of accounts ({accts.ACCOUNTS_PAYABLE}, {cash_code}). "
-                    "Check that these account numbers exist and are not header accounts."
-                )
-
-            line_items = [
-                {
-                    "account_id": str(ap_id),
-                    "debit": float(total),
-                    "credit": 0,
-                    "currency": currency,
-                    "description": f"AP cleared for {counterparty_name} (inv {inv_number})",
-                },
-                {
-                    "account_id": str(cash_id),
-                    "debit": 0,
-                    "credit": float(total),
-                    "currency": currency,
-                    "description": f"Cash paid to {counterparty_name} (inv {inv_number})",
-                },
-            ]
-            description = f"Payment for invoice {inv_number} to {counterparty_name}"
-
-        journal = await self._create_journal(
-            entity_id=entity_id,
-            journal_type="payment",
-            journal_date=journal_date,
-            description=description,
-            source_type="invoice",
-            source_id=invoice_id,
-            status="posted",
-            line_items=line_items,
-        )
-
-        return journal
 
     # =========================================================================
     # EXPENSE JOURNAL (Bank transaction → Expense)
@@ -3251,45 +2846,6 @@ class JournalService:
         row["_fee_amount"] = float(total_fee)
         return row
 
-    async def _fetch_invoice(self, invoice_id: UUID) -> Optional[Dict[str, Any]]:
-        """Fetch an invoice by ID."""
-        result = await asyncio.to_thread(
-            lambda: self.client.table("invoices")
-            .select("*")
-            .eq("id", str(invoice_id))
-            .execute()
-        )
-        return extract_row(result)
-
-    async def _fetch_invoice_line_items(self, invoice_id: UUID) -> List[Dict[str, Any]]:
-        """Fetch all line items for an invoice."""
-        result = await asyncio.to_thread(
-            lambda: self.client.table("invoice_line_items")
-            .select("*")
-            .eq("invoice_id", str(invoice_id))
-            .execute()
-        )
-        return extract_rows(result)
-
-    async def _get_contact_name(self, contact_id: Optional[str]) -> str:
-        """Fetch a contact's display name by UUID."""
-        if not contact_id:
-            return "Unknown"
-        try:
-            result = await asyncio.to_thread(
-                lambda: self.client.table("contacts")
-                .select("name, company_name")
-                .eq("id", contact_id)
-                .limit(1)
-                .execute()
-            )
-            if result.data:
-                row = result.data[0]
-                return row.get("company_name") or row.get("name") or "Unknown"
-        except Exception as e:
-            logger.warning(f"Failed to fetch contact name for {contact_id}: {e}")
-        return "Unknown"
-
     async def _fetch_financial_transaction(
         self, txn_id: str
     ) -> Optional[Dict[str, Any]]:
@@ -3301,39 +2857,12 @@ class JournalService:
         )
         return extract_row(result)
 
-    async def _find_transaction_for_invoice(
-        self, entity_id: UUID, invoice_number: str
-    ) -> Optional[UUID]:
-        """Find a financial transaction whose metadata.invoice_id matches the invoice number.
-
-        Returns the transaction UUID if found, or None.
-        """
-        if not invoice_number:
-            return None
-
-        def _query():
-            return (
-                self.client.table("financial_transactions")
-                .select("id")
-                .eq("entity_id", str(entity_id))
-                .filter("metadata->>invoice_id", "eq", invoice_number)
-                .is_("excluded_reason", "null")
-                .limit(1)
-                .execute()
-            )
-
-        result = await asyncio.to_thread(_query)
-        rows = result.data or []
-        return UUID(rows[0]["id"]) if rows else None
-
     async def _find_order_for_refund_transaction(
         self, entity_id: UUID, txn: Dict[str, Any]
     ) -> Optional[UUID]:
         """Try to correlate an outbound customer-refund transaction to the
-        order it refunds, via metadata.invoice_id matching orders.order_number
-        — the same cross-reference field _find_transaction_for_invoice uses,
-        in the other direction (order -> transaction there, transaction ->
-        order here). Shopify carries the order number through as PayPal's
+        order it refunds, via metadata.invoice_id matching orders.order_number.
+        Shopify carries the order number through as PayPal's
         invoice reference when routing PayPal Express payments, so a refund
         of that payment should carry the same reference back.
 
@@ -3907,8 +3436,9 @@ class JournalService:
         - Declined transactions (metadata.state == "declined")
         - Transactions already journaled as expenses
         - Transactions with excluded_reason set (cross-provider duplicates)
-        - Transactions whose metadata.invoice_id matches a known invoice number
-          (those are journaled via the invoice path with create_purchase_journal)
+
+        A transaction linked to an invoice is journaled like any other: invoices are
+        documents and never post to the ledger themselves.
         """
 
         def _query():
@@ -3942,27 +3472,7 @@ class JournalService:
             if not eligible_rows:
                 return []
 
-            # Exclude transactions that are linked to known invoices
-            # (those are handled exclusively by the invoice journaling path)
-            invoice_rows = (
-                self.client.table("invoices")
-                .select("invoice_number")
-                .eq("entity_id", str(entity_id))
-                .execute()
-            )
-            invoice_number_set = {
-                row["invoice_number"]
-                for row in (invoice_rows.data or [])
-                if row.get("invoice_number")
-            }
-
-            non_invoice_rows = [
-                r
-                for r in eligible_rows
-                if str((r.get("metadata") or {}).get("invoice_id") or "").strip()
-                not in invoice_number_set
-            ]
-            txn_ids = [row["id"] for row in non_invoice_rows]
+            txn_ids = [row["id"] for row in eligible_rows]
 
             if not txn_ids:
                 return []

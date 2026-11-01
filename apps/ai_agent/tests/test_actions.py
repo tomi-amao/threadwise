@@ -457,7 +457,7 @@ def test_an_invoice_change_waits_for_approval_then_uses_the_app(monkeypatch, see
         {"label": "Status", "before": "Open", "after": "Paid"}
     ]
     assert proposal["link"] == f"/invoices?invoice={ids.open_sale}"
-    assert "payment journal" in proposal["description"]
+    assert "journal" not in proposal["description"]  # invoices post nothing
     assert app.calls == []  # nothing written while it waits
 
     declined = run.decide(DISMISS)

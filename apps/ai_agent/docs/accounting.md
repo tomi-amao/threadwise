@@ -25,17 +25,25 @@ Code: `services/journal_service.py` (`JournalService`, the journals), `services/
 | ------------------ | --------------------------------------------------------------------------------------------------------------------------------- | -------------------------------- |
 | Accrual            | A captured payment: debit clearing (net of gateway fees) and bank charges; credit revenue, shipping and tax from the linked order | `create_accrual_journal`         |
 | Settlement         | An inbound gateway payout (Stripe or PayPal to Revolut): debit cash, credit clearing. No fee line (fees were taken at accrual)    | `create_settlement_journal`      |
-| Funding            | An inbound personal or external transfer                                                                                          | `create_funding_journal`         |
+| Funding            | An inbound personal or external transfer; a Revolut merchant payment books its fee (below)                                        | `create_funding_journal`         |
 | Sales receipt      | A direct PayPal sale                                                                                                              | `create_sales_receipt_journal`   |
 | Refund             | An inbound refund transaction                                                                                                     | `create_refund_journal`          |
 | Refund reversal    | A refunded order: reverses its revenue, cost and stock                                                                            | `create_refund_reversal_journal` |
 | FX conversion      | A currency conversion between accounts                                                                                            | `create_fx_conversion_journal`   |
 | Expense            | An outbound bank transaction: debit the resolved expense account, credit cash                                                     | `create_expense_journal`         |
-| Purchase           | A supplier invoice when it is finalised                                                                                           | `create_purchase_journal`        |
-| Sale               | A customer invoice when it is issued                                                                                              | `create_sale_journal`            |
-| Invoice payment    | An invoice marked PAID                                                                                                            | `create_invoice_payment_journal` |
 | Cost of goods sold | A fulfilled order                                                                                                                 | `create_inventory_cogs_journal`  |
 | Disposal           | A gift or write-off of stock: one dated movement plus its journal                                                                 | `record_inventory_disposal`      |
+
+A Revolut merchant payment (`reserve_release`) is a funding journal, and carries Revolut's fee
+when the transaction has one (`metadata.fee`, taken from the leg by the normaliser): debit cash
+with what reached the account, debit 8020 Bank charges with the fee, credit 4030 Wholesale
+revenue with what the customer paid (`merchant_fee`; a foreign payment's fee is scaled to its GBP
+amount). The settlement and payout that take the money on to the main account are moves between
+the business's own accounts, excluded at normalisation, so the one journal is the whole of it.
+Each journal stands on its own, so the order the three arrive in does not matter.
+
+Every journal comes from a money movement (a payment, a bank transaction, a stock movement) or a
+manual adjustment. Invoices are not a source: see [Invoices](#invoices).
 
 Rules every journal follows:
 
@@ -85,30 +93,78 @@ background with step-level retries and realtime progress:
 
 ## Invoices
 
+Invoices are documents, not ledger entries. The money an invoice describes reaches the books
+through the transaction that settles it (an expense, receipt or settlement journal above), so an
+invoice never posts, and changing its status or deleting it changes no balance. Matching an
+invoice to its transaction links the two; it does not post either.
+
+### Where an invoice comes from
+
+`invoices.origin` says where the record came from:
+
+| `origin`           | What it is                                                  | Who changes it                       |
+| ------------------ | ----------------------------------------------------------- | ------------------------------------ |
+| `upload`           | A document someone uploaded on the Invoices page            | The business                         |
+| `revolut_merchant` | A payment request sent from Revolut (a sales invoice)       | The sync; status follows Revolut     |
+| `revolut_expense`  | A supplier invoice read from a receipt on a Revolut expense | The sync; status follows the payment |
+
+`external_id` is the provider's id (unique per business and origin, so a sync upserts), and
+`attachment_id` points at the stored receipt it was read from. A synced invoice's status and
+direction are not the app's (`check_editable` refuses them with a 409, per `LOCKED` in
+`invoice_rules.py`): a payment request's follow Revolut, and an invoice read from a receipt was
+paid by the transaction the receipt is on. A payment request cannot be deleted either (the next
+sync would bring it back); an invoice read from a receipt can, whatever its status, which is how
+a misread file is dismissed (the file stays on its transaction and is not read again). Notes and
+line accounts stay editable. How receipts are read: `data-pipeline.md`. `source` is a different thing: the
+platform the extraction thinks an uploaded invoice was paid through.
+
+### Payments
+
+`invoice_payments` links an invoice to the transactions that paid it (amount and currency of
+each, and `matched_by`: `user`, `reconciliation`, `sync` or `backfill`). A transaction pays one
+invoice. `InvoiceService.link_payment` and `unlink_payment` (`POST` and
+`DELETE /accounting/invoices/{id}/payments[/{transaction_id}]`) are the only writers; they refuse
+a transaction in the wrong direction (money in pays a sale, money out a purchase), left out of the
+books, or already paying another invoice.
+
+The links decide paid (`status_from_payments`): payments covering at least 95% of the total make
+the invoice `PAID` (fees and rounding take a little off), less makes it `PARTIALLY_PAID`, and
+removing the last one makes it `OPEN` again. A payment in another currency cannot be compared, so
+it counts as paid. A draft keeps its place in To review when a payment is linked, and finalising
+it goes straight to what its links say. Marking paid by hand is for money with no transaction
+behind it.
+
+Before `invoice_payments`, a match was the invoice number written into the transaction's
+`metadata.invoice_id`, the field providers use for their own references. The migration copied
+those matches across; metadata is no longer written by matching.
+
+### Uploads
+
 Uploaded on the Invoices page. `services/invoice_service.py`:
 
 1. Extract the fields from the PDF or image with a structured-output model call
    (`DEFAULT_CHAT_MODEL`).
 2. Upsert the contact (supplier or customer).
-3. Create the invoice and its line items.
-4. Create its journal through the rules below.
+3. Create the invoice and its line items. Each line can carry a GL account, which says what it
+   was for; nothing is posted from it.
+
+Stock decisions for a purchase's lines (`POST /accounting/invoices/{id}/stock`) record inventory
+movements, whose unit cost feeds the cost of goods sold journal when the stock sells.
 
 The lifecycle is in `services/invoice_rules.py` (pure functions, no I/O; tested in
 `tests/test_invoice_rules.py`):
 
-| From                | May go to                                                                 |
-| ------------------- | ------------------------------------------------------------------------- |
-| `DRAFT`             | `OPEN`, `PAID`, `CANCELLED`, `VOID`                                       |
-| `OPEN`              | `PAID`, `PARTIALLY_PAID`, `OVERDUE`, `CANCELLED`, `VOID`                  |
-| `OVERDUE`           | `OPEN`, `PAID`, `PARTIALLY_PAID`, `CANCELLED`, `VOID`                     |
-| `PARTIALLY_PAID`    | `OPEN`, `PAID`, `OVERDUE`, `VOID`                                         |
-| `PAID`              | `OPEN` (undoes a mistaken payment: its payment journal is voided), `VOID` |
-| `CANCELLED`, `VOID` | nothing                                                                   |
+| From                | May go to                                                |
+| ------------------- | -------------------------------------------------------- |
+| `DRAFT`             | `OPEN`, `PAID`, `CANCELLED`, `VOID`                      |
+| `OPEN`              | `PAID`, `PARTIALLY_PAID`, `OVERDUE`, `CANCELLED`, `VOID` |
+| `OVERDUE`           | `OPEN`, `PAID`, `PARTIALLY_PAID`, `CANCELLED`, `VOID`    |
+| `PARTIALLY_PAID`    | `OPEN`, `PAID`, `OVERDUE`, `VOID`                        |
+| `PAID`              | `OPEN` (undoes a mistaken payment), `VOID`               |
+| `CANCELLED`, `VOID` | nothing                                                  |
 
-- The purchase or sale journal exists while the invoice is finalised (`OPEN`, `OVERDUE`,
-  `PARTIALLY_PAID`, `PAID`); the payment journal exists only while it is `PAID`.
-- An invoice can be deleted only from `DRAFT`, `CANCELLED` or `VOID`, and only if nothing is posted
-  against it.
+- An invoice can be deleted only from `DRAFT`, `CANCELLED` or `VOID`; a live one is voided, so
+  the record stays.
 - A forbidden change raises `InvoiceRuleError`, returned as HTTP 409.
 - `effective_status` shows an unpaid, finalised invoice past its due date as `OVERDUE`.
 
@@ -119,7 +175,10 @@ The lifecycle is in `services/invoice_rules.py` (pure functions, no I/O; tested 
 - `detect_cross_provider_duplicates`: the same money seen by two providers (a PayPal payout and the
   Revolut deposit it became) is marked with an `excluded_reason`, so it is not counted twice.
   Excluded transactions are left out of balances and journals.
-- `reconcile_invoice_payments`: marks an invoice PAID when a matching bank transaction exists.
+- `reconcile_invoice_payments`: links an open invoice to a bank transaction that names it (its
+  number in the reference or description, and an amount and date that fit), through
+  `link_payment`, so the status follows the link. Cross-provider detection does the same for the
+  invoice numbers PayPal carries.
 
 Routes: `POST /accounting/detect-duplicates`, `POST /accounting/reconcile-invoices`,
 `POST /accounting/clean-paypal`.
