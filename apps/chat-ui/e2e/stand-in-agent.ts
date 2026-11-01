@@ -55,7 +55,7 @@ async function invoiceWithLines(id: string) {
   const { data } = await supabase
     .from('invoices')
     .select(
-      'id, entity_id, invoice_number, invoice_type, status, invoice_date, invoice_line_items(id, description, quantity, unit_cost, sku)'
+      'id, entity_id, invoice_number, invoice_type, status, origin, invoice_date, invoice_line_items(id, description, quantity, unit_cost, sku)'
     )
     .eq('id', id)
     .maybeSingle();
@@ -319,7 +319,17 @@ async function applyStock(
 async function deleteInvoice(res: import('node:http').ServerResponse, id: string) {
   const invoice = await invoiceWithLines(id);
   if (!invoice) return send(res, 404, { detail: `Invoice not found: ${id}` });
-  if (!['DRAFT', 'CANCELLED', 'VOID'].includes(invoice.status)) {
+  // The agent's rules (invoice_rules.check_editable / check_deletable): a Revolut payment
+  // request never goes, an invoice read from a receipt always can.
+  if (invoice.origin === 'revolut_merchant') {
+    return send(res, 409, {
+      detail: 'This invoice is synced from Revolut. It would come back on the next sync.',
+    });
+  }
+  if (
+    invoice.origin !== 'revolut_expense' &&
+    !['DRAFT', 'CANCELLED', 'VOID'].includes(invoice.status)
+  ) {
     return send(res, 409, {
       detail: `A ${invoice.status.toLowerCase()} invoice cannot be deleted. Void it instead.`,
     });

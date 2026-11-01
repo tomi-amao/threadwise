@@ -9,12 +9,18 @@
  * Invoices are documents: no status change posts to the books. The ledger follows the bank or
  * payment transaction that settles an invoice, which is why matching one is worth doing.
  *
+ * A synced invoice (sent from Revolut, or read from a Revolut receipt) has no status buttons:
+ * its status is Revolut's, or it was paid by the payment its receipt is on. One read from a
+ * receipt can be removed, which is how a misread file is dismissed. A Revolut payment request,
+ * whose document is otherwise a printable copy, can take the original, which then replaces it
+ * (as can an invoice with no document at all).
+ *
  * The drawer loads its own data from /api/invoices?id= and reloads it after every change. The
  * page's list revalidates too, through `onChanged`.
  */
 
-import { useCallback, useEffect, useState } from 'react';
-import { ArrowRight, CircleNotch, FileText } from 'phosphor-react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { ArrowRight, CircleNotch, FileText, UploadSimple } from 'phosphor-react';
 import { toast } from 'sonner';
 import { Button } from '~/components/ui/button';
 import { Chip } from '~/components/ui/chip';
@@ -35,8 +41,11 @@ import { PaymentMatch } from './PaymentMatch';
 import { StockSection, looksLikeStock } from './StockSection';
 import {
   DIRECTION,
+  DOCUMENT_ACTION,
+  ORIGIN,
   STATUS,
   counterpartyName,
+  isSynced,
   dueText,
   int,
   money,
@@ -57,7 +66,7 @@ interface Result {
   url?: string;
 }
 
-async function call(fields: Record<string, string>): Promise<Result> {
+async function call(fields: Record<string, string | File>): Promise<Result> {
   const form = new FormData();
   for (const [key, value] of Object.entries(fields)) form.set(key, value);
   try {
@@ -157,7 +166,7 @@ function Confirm({
   );
 }
 
-type Pending = 'void' | 'delete' | 'unpay';
+type Pending = 'void' | 'delete' | 'unpay' | 'dismiss';
 
 export function InvoiceDrawer({
   invoiceId,
@@ -265,7 +274,7 @@ function Body({
   /** Run a change; refresh the drawer and the list when it works, show the reason when not. */
   const run = async (
     key: string,
-    fields: Record<string, string>,
+    fields: Record<string, string | File>,
     success: (result: Result) => string | null
   ): Promise<Result> => {
     setBusy(key);
@@ -292,6 +301,9 @@ function Body({
   const finalised = ['OPEN', 'OVERDUE', 'PARTIALLY_PAID', 'PAID'].includes(status);
   const unpaid = ['OPEN', 'OVERDUE', 'PARTIALLY_PAID'].includes(status);
   const dead = status === 'CANCELLED' || status === 'VOID';
+  const synced = isSynced(invoice.origin);
+  const fromReceipt = invoice.origin === 'revolut_expense';
+  const original = useRef<HTMLInputElement>(null);
 
   const accountOf = (lineId: string, saved: string | null) => coding[lineId] ?? saved ?? '';
   const uncoded = lines.filter(l => !accountOf(l.id, l.gl_account_id)).length;
@@ -355,6 +367,12 @@ function Body({
     }
   };
 
+  const attachOriginal = (file: File | undefined) => {
+    if (original.current) original.current.value = '';
+    if (!file) return;
+    void run('original', { intent: 'attachOriginal', file }, () => 'Original added');
+  };
+
   const confirmPending = async () => {
     if (!pending) return;
     if (pending === 'void') {
@@ -364,7 +382,9 @@ function Body({
       const r = await setStatus('OPEN', 'Payment undone');
       if (r.ok) setPending(null);
     } else {
-      const r = await run('delete', { intent: 'delete' }, () => 'Invoice deleted');
+      const r = await run('delete', { intent: 'delete' }, () =>
+        pending === 'dismiss' ? 'Invoice removed' : 'Invoice deleted'
+      );
       if (r.ok) {
         setPending(null);
         onClose();
@@ -394,6 +414,13 @@ function Body({
       confirm: 'Delete',
       tone: 'destructive',
     },
+    dismiss: {
+      title: 'Remove this invoice?',
+      description:
+        'Use this when the receipt was read as an invoice by mistake. The receipt stays on its payment and is not read again; the payment and your books do not change.',
+      confirm: 'Remove invoice',
+      tone: 'destructive',
+    },
   };
 
   return (
@@ -404,7 +431,9 @@ function Body({
             {STATUS[shown].label}
           </Chip>
           <Chip tone={isSale ? 'income' : 'plain'}>{DIRECTION[invoice.invoice_type].label}</Chip>
+          {synced && <Chip tone="plain">{ORIGIN[invoice.origin].label}</Chip>}
         </div>
+        {synced && <p className="mt-2 text-[13px] text-text-2">{ORIGIN[invoice.origin].note}</p>}
       </header>
 
       <StageRail status={status} />
@@ -451,20 +480,26 @@ function Body({
                 {invoice.due_date && ` · ${shortDate(invoice.due_date)}`}
               </p>
             </div>
-            <div className="flex flex-wrap gap-2">
-              <Button onClick={markPaid} disabled={busy !== null}>
-                {busy === 'status' ? 'Saving…' : isSale ? 'Mark as received' : 'Mark as paid'}
-              </Button>
-              {status !== 'PARTIALLY_PAID' && (
-                <Button
-                  variant="outline"
-                  disabled={busy !== null}
-                  onClick={() => setStatus('PARTIALLY_PAID', 'Marked part paid')}
-                >
-                  Part paid
+            {synced ? (
+              <p className="text-[13px] text-text-2">
+                It shows as paid here once Revolut marks it paid.
+              </p>
+            ) : (
+              <div className="flex flex-wrap gap-2">
+                <Button onClick={markPaid} disabled={busy !== null}>
+                  {busy === 'status' ? 'Saving…' : isSale ? 'Mark as received' : 'Mark as paid'}
                 </Button>
-              )}
-            </div>
+                {status !== 'PARTIALLY_PAID' && (
+                  <Button
+                    variant="outline"
+                    disabled={busy !== null}
+                    onClick={() => setStatus('PARTIALLY_PAID', 'Marked part paid')}
+                  >
+                    Part paid
+                  </Button>
+                )}
+              </div>
+            )}
           </>
         )}
 
@@ -473,8 +508,12 @@ function Body({
             <Eyebrow>Settled</Eyebrow>
             <p className="text-[15px]">
               {matched_transaction_id
-                ? 'Paid, and matched to a bank transaction.'
-                : 'Paid. No bank transaction is matched to it yet.'}
+                ? fromReceipt
+                  ? 'Paid by the payment this receipt is on.'
+                  : 'Paid, and matched to a bank transaction.'
+                : synced
+                  ? 'Paid in Revolut. The bank transaction is not matched yet.'
+                  : 'Paid. No bank transaction is matched to it yet.'}
             </p>
           </div>
         )}
@@ -528,8 +567,13 @@ function Body({
             <dd className="mt-1">{shortDate(invoice.due_date)}</dd>
           </div>
           <div>
-            <dt className="eyebrow">Source</dt>
-            <dd className="mt-1 capitalize">{invoice.source ?? '—'}</dd>
+            <dt className="eyebrow">From</dt>
+            <dd className="mt-1">
+              {ORIGIN[invoice.origin].label}
+              {invoice.origin === 'upload' && invoice.source && invoice.source !== 'manual' && (
+                <span className="capitalize text-text-2"> · {invoice.source}</span>
+              )}
+            </dd>
           </div>
         </dl>
       </section>
@@ -622,22 +666,51 @@ function Body({
           <li>Added {shortDate(invoice.created_at)}</li>
         </ul>
         <div className="flex flex-wrap gap-2">
-          {invoice.has_document && (
+          {invoice.document && (
             <Button
               variant="outline"
               size="sm"
               onClick={openDocument}
               disabled={busy === 'document'}
             >
-              <FileText size={14} weight="light" aria-hidden /> View document
+              <FileText size={14} weight="light" aria-hidden /> {DOCUMENT_ACTION[invoice.document]}
             </Button>
           )}
-          {finalised && status !== 'PAID' && (
+          {(invoice.origin === 'revolut_merchant'
+            ? invoice.document !== 'upload'
+            : !invoice.document) && (
+            <>
+              <input
+                ref={original}
+                type="file"
+                accept="application/pdf,image/*"
+                className="sr-only"
+                tabIndex={-1}
+                aria-label="Original document"
+                onChange={e => attachOriginal(e.target.files?.[0])}
+              />
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={busy !== null}
+                onClick={() => original.current?.click()}
+              >
+                <UploadSimple size={14} weight="light" aria-hidden />{' '}
+                {busy === 'original' ? 'Adding…' : 'Add the original'}
+              </Button>
+            </>
+          )}
+          {fromReceipt && (
+            <Button variant="outline" size="sm" onClick={() => setPending('dismiss')}>
+              Not an invoice
+            </Button>
+          )}
+          {!synced && finalised && status !== 'PAID' && (
             <Button variant="outline" size="sm" onClick={() => setPending('void')}>
               Void invoice
             </Button>
           )}
-          {status === 'PAID' && (
+          {!synced && status === 'PAID' && (
             <>
               <Button variant="outline" size="sm" onClick={() => setPending('unpay')}>
                 Undo payment
@@ -647,7 +720,7 @@ function Body({
               </Button>
             </>
           )}
-          {(isDraft || dead) && (
+          {!synced && (isDraft || dead) && (
             <Button variant="outline" size="sm" onClick={() => setPending('delete')}>
               Delete {isDraft ? 'draft' : 'invoice'}
             </Button>

@@ -6,7 +6,10 @@
  * to Paid, so that is how the page is organised: the tiles say where the money stands, the
  * tabs are the stages, and "Jump to" goes straight to what is late or waiting.
  *
- * Tab, direction, search, the overdue filter and the open invoice live in the URL.
+ * The list is one register: invoices uploaded here, payment requests sent from Revolut and
+ * supplier invoices read from Revolut receipts, each tagged with where it came from.
+ *
+ * Tab, direction, origin, search, the overdue filter and the open invoice live in the URL.
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -30,12 +33,14 @@ import { AddInvoiceDialog } from './AddInvoiceDialog';
 import { InvoiceDrawer } from './InvoiceDrawer';
 import {
   DIRECTION,
+  ORIGIN,
   STATUS,
   TABS,
   counterpartyName,
   dueText,
   inTab,
   int,
+  isFrom,
   isTab,
   matchesSearch,
   money,
@@ -43,6 +48,7 @@ import {
   shownStatus,
   sortFor,
   summarise,
+  type From,
   type Tab,
 } from './model';
 import { useAssistantRecord } from '~/providers/AssistantProvider';
@@ -74,6 +80,8 @@ export function InvoicesPage({
     sp.get('dir') === 'SALE' || sp.get('dir') === 'PURCHASE'
       ? (sp.get('dir') as InvoiceType)
       : 'all';
+  const rawFrom = sp.get('from');
+  const from: From = isFrom(rawFrom) ? rawFrom : 'all';
   const overdueOnly = sp.get('view') === 'overdue';
   const openId = sp.get('invoice');
   useAssistantRecord(
@@ -99,11 +107,12 @@ export function InvoicesPage({
           i =>
             inTab(i, tab) &&
             (direction === 'all' || i.invoice_type === direction) &&
+            (from === 'all' || i.origin === from) &&
             (!overdueOnly || shownStatus(i, today) === 'OVERDUE') &&
             matchesSearch(i, q)
         )
         .sort(sortFor(tab)),
-    [invoices, tab, direction, overdueOnly, q, today]
+    [invoices, tab, direction, from, overdueOnly, q, today]
   );
   const pages = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
   const current = Math.min(page, pages);
@@ -149,7 +158,10 @@ export function InvoicesPage({
     };
   }, []);
 
-  const filtered = q !== '' || direction !== 'all' || overdueOnly;
+  const filtered = q !== '' || direction !== 'all' || from !== 'all' || overdueOnly;
+  const clearFilters = { q: null, dir: null, from: null, view: null };
+  // Only offer the origin filter when there is more than one origin to tell apart.
+  const origins = new Set(invoices.map(i => i.origin));
   const otherCurrency =
     summary.otherCurrency > 0 ? ` · ${summary.otherCurrency} in other currencies not counted` : '';
 
@@ -163,7 +175,7 @@ export function InvoicesPage({
             What you owe, <em>and what you&rsquo;re owed.</em>
           </>
         }
-        description="Add an invoice and it is read for you. Check it, finalise it, and mark it paid."
+        description="Invoices you upload, send from Revolut, or that arrive as receipts on your Revolut payments, in one place."
         actions={
           <Button
             onClick={() => {
@@ -227,13 +239,13 @@ export function InvoicesPage({
               count: summary.overdueCount,
               label: 'overdue',
               severe: true,
-              onSelect: () => set({ tab: 'open', view: 'overdue', dir: null, q: null }),
+              onSelect: () => set({ tab: 'open', view: 'overdue', dir: null, from: null, q: null }),
             },
             {
               key: 'review',
               count: summary.toReview,
               label: 'to review',
-              onSelect: () => set({ tab: 'review', view: null, dir: null, q: null }),
+              onSelect: () => set({ tab: 'review', view: null, dir: null, from: null, q: null }),
             },
           ]}
         />
@@ -271,11 +283,24 @@ export function InvoicesPage({
               { value: 'PURCHASE', label: 'You owe' },
             ]}
           />
+          {(origins.size > 1 || from !== 'all') && (
+            <Segmented<From>
+              label="From"
+              value={from}
+              onChange={v => set({ from: v === 'all' ? null : v })}
+              options={[
+                { value: 'all', label: 'Everywhere' },
+                { value: 'upload', label: ORIGIN.upload.short },
+                { value: 'revolut_merchant', label: ORIGIN.revolut_merchant.short },
+                { value: 'revolut_expense', label: 'Receipts' },
+              ]}
+            />
+          )}
           {overdueOnly && <Chip tone="negative">Overdue only</Chip>}
           {filtered && (
             <button
               type="button"
-              onClick={() => set({ q: null, dir: null, view: null })}
+              onClick={() => set(clearFilters)}
               className="inline-flex items-center gap-1 rounded-sm text-sm text-accent-text underline underline-offset-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
               <X size={12} aria-hidden /> Clear filters
@@ -310,11 +335,7 @@ export function InvoicesPage({
               }
               action={
                 filtered ? (
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => set({ q: null, dir: null, view: null })}
-                  >
+                  <Button variant="outline" size="sm" onClick={() => set(clearFilters)}>
                     Clear filters
                   </Button>
                 ) : (
@@ -362,6 +383,9 @@ export function InvoicesPage({
                           <span className="block truncate">{counterpartyName(inv)}</span>
                           <span className="block truncate font-mono text-xs text-text-2">
                             {inv.invoice_number}
+                            {inv.origin !== 'upload' && (
+                              <span className="font-sans"> · {ORIGIN[inv.origin].short}</span>
+                            )}
                           </span>
                         </button>
                       </td>
@@ -440,7 +464,7 @@ export function InvoicesPage({
         onUploaded={ids => {
           revalidator.revalidate();
           // The new draft is what to look at next.
-          set({ tab: 'review', view: null, dir: null, q: null, invoice: ids[0] });
+          set({ tab: 'review', view: null, dir: null, from: null, q: null, invoice: ids[0] });
         }}
       />
 

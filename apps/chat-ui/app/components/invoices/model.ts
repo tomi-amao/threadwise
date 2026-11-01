@@ -11,17 +11,53 @@
  * it, so an unpaid invoice past its due date is shown as overdue here (the same rule as
  * ai_agent's invoice_rules.effective_status).
  *
+ * Origin. The register holds invoices from three places: uploads, payment requests sent from
+ * Revolut, and supplier invoices read from receipts on Revolut payments. The synced ones have a
+ * status the app does not set (Revolut's, or paid by the transaction the receipt is on).
+ *
  * Totals only add invoices in the business's own currency. The invoice rows carry a
  * currency and an fx_rate, but nothing converts them reliably, so a converted headline
  * would be a guess.
  */
 
 import type { ChipTone } from '~/components/ui/chip';
-import type { InvoiceRow, InvoiceStatus, InvoiceType } from '~/types/invoice';
+import type {
+  DocumentSource,
+  InvoiceOrigin,
+  InvoiceRow,
+  InvoiceStatus,
+  InvoiceType,
+} from '~/types/invoice';
 
 export const DIRECTION: Record<InvoiceType, { label: string; short: string }> = {
   SALE: { label: 'Owed to you', short: 'In' },
   PURCHASE: { label: 'You owe', short: 'Out' },
+};
+
+export const ORIGIN: Record<InvoiceOrigin, { label: string; short: string; note: string }> = {
+  upload: { label: 'Uploaded', short: 'Uploaded', note: '' },
+  revolut_merchant: {
+    label: 'Sent from Revolut',
+    short: 'Revolut',
+    note: 'Sent from Revolut. Its status follows Revolut, so it changes there, not here.',
+  },
+  revolut_expense: {
+    label: 'Read from a Revolut receipt',
+    short: 'Receipt',
+    note: 'Read from a receipt on a Revolut payment, so it was paid by that payment.',
+  },
+};
+
+export const isSynced = (origin: InvoiceOrigin): boolean => origin !== 'upload';
+
+export type From = 'all' | InvoiceOrigin;
+
+export const isFrom = (v: string | null): v is InvoiceOrigin => !!v && v in ORIGIN;
+
+export const DOCUMENT_ACTION: Record<DocumentSource, string> = {
+  upload: 'View document',
+  receipt: 'View receipt',
+  generated: 'Print invoice',
 };
 
 export type Tab = 'review' | 'open' | 'paid' | 'all';

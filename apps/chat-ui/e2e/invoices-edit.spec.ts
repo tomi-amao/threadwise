@@ -7,6 +7,7 @@
 import type { Page } from '@playwright/test';
 import { test, expect, readManifest } from './fixtures';
 import {
+  addReceiptInvoice,
   borrowTransaction,
   readInvoice,
   readTxnInvoiceId,
@@ -349,5 +350,32 @@ test.describe('stock from a purchase invoice', () => {
     // The other lines are still open to decide on.
     await expect(drawer.getByLabel('Stock handling for Heavy knit swatches')).toBeVisible();
     await expect(drawer.getByLabel('Stock handling for Merino yarn 4-ply')).toHaveCount(0);
+  });
+});
+
+test.describe('synced invoices', () => {
+  test('an original added to a Revolut invoice replaces the printable copy', async ({ page }) => {
+    const drawer = await openInvoice(page, inv.revolutRequest, 'paid');
+    await expect(drawer.getByRole('button', { name: 'Print invoice' })).toBeVisible();
+    await drawer.getByLabel('Original document').setInputFiles(pdf('INV-RV-5.pdf'));
+    await expect(page.getByText('Original added')).toBeVisible();
+    await expect(drawer.getByRole('button', { name: 'View document' })).toBeVisible();
+    await expect(drawer.getByRole('button', { name: 'Add the original' })).toHaveCount(0);
+
+    const response = page.waitForResponse(r => r.url().includes('document=1'));
+    await drawer.getByRole('button', { name: 'View document' }).click();
+    const { url } = (await (await response).json()) as { url: string };
+    expect(url).toContain('/storage/v1/object/sign/invoices/');
+  });
+
+  test('a receipt read as an invoice by mistake can be removed', async ({ page }) => {
+    const number = await addReceiptInvoice(inv.receiptInvoice);
+    const drawer = await openInvoice(page, number, 'paid');
+    await drawer.getByRole('button', { name: 'Not an invoice' }).click();
+    const confirm = page.getByRole('dialog', { name: 'Remove this invoice?' });
+    await confirm.getByRole('button', { name: 'Remove invoice' }).click();
+    await expect(page.getByText('Invoice removed')).toBeVisible();
+    await expect(page).not.toHaveURL(/invoice=/);
+    expect(await readInvoice(number)).toBeNull();
   });
 });

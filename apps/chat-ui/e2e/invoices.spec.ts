@@ -242,6 +242,85 @@ test.describe('invoices', () => {
     expect(url).toContain('/storage/v1/object/sign/invoices/');
   });
 
+  test('the register says where each invoice came from, and can show one source', async ({
+    page,
+  }) => {
+    await page.goto('/invoices?tab=all');
+    await expect(row(page, inv.revolutRequest)).toContainText('Revolut');
+    await expect(row(page, inv.receiptInvoice)).toContainText('Receipt');
+    await expect(row(page, inv.draftPurchase)).not.toContainText('Receipt');
+
+    const from = page.getByRole('group', { name: 'From' });
+    await from.getByRole('button', { name: 'Revolut' }).click();
+    await expect(page).toHaveURL(/from=revolut_merchant/);
+    await expect(table(page).locator('tbody tr')).toHaveCount(1);
+    await expect(row(page, inv.revolutRequest)).toBeVisible();
+
+    await from.getByRole('button', { name: 'Receipts' }).click();
+    await expect(table(page).locator('tbody tr')).toHaveCount(1);
+    await expect(row(page, inv.receiptInvoice)).toBeVisible();
+
+    await from.getByRole('button', { name: 'Uploaded' }).click();
+    await expect(page.getByRole('navigation', { name: 'Pagination' })).toContainText(
+      `OF ${num(inv.uploadedCount)}`
+    );
+  });
+
+  test('a Revolut invoice is not settled here, and prints from what was sent', async ({ page }) => {
+    const drawer = await openInvoice(page, inv.revolutRequest, 'paid');
+    await expect(drawer.getByRole('banner')).toContainText('Sent from Revolut');
+    for (const name of ['Undo payment', 'Void invoice', /^Delete/, 'Not an invoice']) {
+      await expect(drawer.getByRole('button', { name })).toHaveCount(0);
+    }
+    await expect(drawer.getByRole('button', { name: 'Add the original' })).toBeVisible();
+
+    const response = page.waitForResponse(r => r.url().includes('document=1'));
+    await drawer.getByRole('button', { name: 'Print invoice' }).click();
+    const { url } = (await (await response).json()) as { url: string };
+    expect(url).toMatch(/^\/api\/invoices\/print\?id=/);
+
+    // The printable copy asks for the request's amount, not what the lines add up to.
+    await page.goto(`${url}&noprint=1`);
+    const money = (n: number) =>
+      new Intl.NumberFormat('en-GB', { style: 'currency', currency: 'GBP' }).format(n);
+    await expect(page.locator('body')).toContainText(inv.revolutRequest);
+    await expect(page.locator('body')).toContainText(inv.revolutRequestCounterparty);
+    await expect(page.locator('tr', { hasText: 'Amount requested' })).toContainText(
+      money(inv.revolutRequestGross)
+    );
+    await expect(page.locator('tr', { hasText: 'Lines total' })).toContainText(
+      money(inv.revolutRequestLinesTotal)
+    );
+    await expect(page.getByText('Sent as a payment request through Revolut')).toBeVisible();
+  });
+
+  test('an invoice read from a receipt opens the receipt and can be dismissed', async ({
+    page,
+  }) => {
+    const drawer = await openInvoice(page, inv.receiptInvoice, 'paid');
+    await expect(drawer.getByRole('banner')).toContainText('Read from a Revolut receipt');
+    await expect(drawer.getByRole('region', { name: 'Next step' })).toContainText(
+      'Paid by the payment this receipt is on'
+    );
+    await expect(drawer.getByRole('button', { name: 'Not an invoice' })).toBeVisible();
+    for (const name of ['Undo payment', 'Void invoice', 'Add the original']) {
+      await expect(drawer.getByRole('button', { name })).toHaveCount(0);
+    }
+
+    const response = page.waitForResponse(r => r.url().includes('document=1'));
+    await drawer.getByRole('button', { name: 'View receipt' }).click();
+    const { ok, url } = (await (await response).json()) as { ok: boolean; url: string };
+    expect(ok).toBe(true);
+    expect(url).toContain('/storage/v1/object/sign/transaction-attachments/');
+  });
+
+  test('the printable copy of an invoice that is not yours is not found', async ({ page }) => {
+    const response = await page.request.get(
+      '/api/invoices/print?id=00000000-0000-4000-8000-000000000000&noprint=1'
+    );
+    expect(response.status()).toBe(404);
+  });
+
   test('closing the drawer clears it from the URL, and a link opens it directly', async ({
     page,
   }) => {
@@ -314,6 +393,10 @@ test.describe('invoices', () => {
     const drawer = await openInvoice(page, inv.draftPurchase, 'review');
     await expect(drawer.getByRole('region', { name: 'Stock' })).toBeVisible();
     await scan('draft purchase drawer');
+    await page.keyboard.press('Escape');
+
+    await openInvoice(page, inv.revolutRequest, 'paid');
+    await scan('Revolut invoice drawer');
     await page.keyboard.press('Escape');
 
     await page.goto('/invoices');

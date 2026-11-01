@@ -192,6 +192,16 @@ export interface SeedManifest {
     voided: string;
     bulkPrefix: string;
     counterparty: string;
+    /** A payment request sent from Revolut, paid, for less than its lines add up to. */
+    revolutRequest: string;
+    revolutRequestCounterparty: string;
+    revolutRequestGross: number;
+    revolutRequestLinesTotal: number;
+    /** A supplier invoice read from the receipt on `attachments.transactionId`, paid by it. */
+    receiptInvoice: string;
+    receiptInvoiceCounterparty: string;
+    /** Invoices with origin 'upload'. */
+    uploadedCount: number;
   };
 }
 

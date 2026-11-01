@@ -675,6 +675,9 @@ async function main() {
   //       you owe      = 180 + 3,600                       = 3,780 across 2 invoices
   //       overdue      = 960 + 1,500 (owed) and 180 (owe)  = 3 invoices
   //       to review    = 2 drafts; 1 open invoice is in EUR and left out of the sums
+  //     Two more are synced, and paid, so they leave the sums alone: a payment request sent
+  //     from Revolut (for less than its lines add up to, as a deposit is) and a supplier invoice
+  //     read from the receipt on transaction 3.
   const accounts = ACCOUNTS;
   const glRows = (await must(
     'chart_of_accounts',
@@ -701,6 +704,8 @@ async function main() {
     ['supplier', 'Porto Knitwear'],
     ['supplier', 'Mill Lane Textiles'],
     ['supplier', 'ParcelPost Ltd'],
+    ['customer', 'Kestrel Wholesale'],
+    ['supplier', 'Royal Mail Group'],
   ] as const;
   const contactRows = (await must(
     'contacts',
@@ -760,6 +765,9 @@ async function main() {
         file_name: receipt.fileName,
         content_type: 'application/pdf',
         size_bytes: pdf.byteLength,
+        // Read already: it is the supplier invoice filed below.
+        document_kind: 'invoice',
+        read_at: daysAgo(1),
       })
       .select('id')
       .single()
@@ -784,7 +792,11 @@ async function main() {
     lines: InvLine[];
     document?: boolean;
     notes?: string;
+    origin?: 'revolut_merchant' | 'revolut_expense';
+    /** The total when it is not what the lines add up to (a Revolut deposit request). */
+    gross?: number;
   }
+  const receiptAmount = Number(txnRows[RECEIPT_TXN].amount);
   const invoiceSpecs: SeedInvoice[] = [
     {
       number: 'INV-ML-1001',
@@ -900,6 +912,27 @@ async function main() {
       due: -60,
       lines: [['Duplicate courier charge', 1, 90, 0, '6300']],
     },
+    {
+      number: 'INV-RV-5',
+      type: 'SALE',
+      status: 'PAID',
+      contact: 'Kestrel Wholesale',
+      issued: 20,
+      due: null,
+      origin: 'revolut_merchant',
+      gross: 150,
+      lines: [['Wholesale caps', 10, 30, 0]],
+    },
+    {
+      number: 'RCPT-RM-0001',
+      type: 'PURCHASE',
+      status: 'PAID',
+      contact: 'Royal Mail Group',
+      issued: 2,
+      due: null,
+      origin: 'revolut_expense',
+      lines: [['Postage', 1, receiptAmount, 0, '6300']],
+    },
   ];
   // Enough small paid invoices to push the total past the API's 1,000-row cap.
   const BULK_INVOICES = 1020;
@@ -916,6 +949,7 @@ async function main() {
   }
 
   const totalsOf = (spec: SeedInvoice) => {
+    if (spec.gross !== undefined) return { net: spec.gross, tax: 0, gross: spec.gross };
     const net = money(spec.lines.reduce((s, [, q, u]) => s + q * u, 0));
     const tax = money(spec.lines.reduce((s, [, q, u, v]) => s + q * u * v, 0));
     return { net, tax, gross: money(net + tax) };
@@ -935,9 +969,17 @@ async function main() {
       fx_rate: 1,
       invoice_date: daysAgo(spec.issued),
       due_date: spec.due === null ? null : daysAgo(-spec.due),
-      source: 'manual',
+      source: spec.origin ? 'revolut' : 'manual',
       file_path: spec.document ? documentPath : null,
       notes: spec.notes ?? null,
+      origin: spec.origin ?? 'upload',
+      external_id:
+        spec.origin === 'revolut_merchant'
+          ? 'e2e-merchant-order-5'
+          : spec.origin === 'revolut_expense'
+            ? receipt.id
+            : null,
+      attachment_id: spec.origin === 'revolut_expense' ? receiptRow.id : null,
     };
   });
   const insertedInvoices = await insertChunked<{ id: string; invoice_number: string }>(
@@ -988,6 +1030,18 @@ async function main() {
       }))
     )
   );
+  // The supplier invoice read from the receipt is paid by the transaction the receipt is on.
+  await must(
+    'receipt invoice payment',
+    supabase.from('invoice_payments').insert({
+      entity_id: entityId,
+      invoice_id: invoiceId.get('RCPT-RM-0001'),
+      financial_transaction_id: txnInserted[RECEIPT_TXN].id,
+      amount: receiptAmount,
+      currency_code: 'GBP',
+      matched_by: 'sync',
+    })
+  );
 
   const base = invoiceSpecs.filter(s => !s.number.startsWith('INV-BULK'));
   const unpaid = (s: SeedInvoice) => ['OPEN', 'PARTIALLY_PAID'].includes(s.status);
@@ -1007,7 +1061,7 @@ async function main() {
     otherCurrency: base.filter(s => unpaid(s) && (s.currency ?? 'GBP') !== 'GBP').length,
     openCount: base.filter(unpaid).length,
     paidCount: invoiceSpecs.filter(s => s.status === 'PAID').length,
-    paymentLinks: Object.keys(MATCHED_PAYMENTS).length,
+    paymentLinks: Object.keys(MATCHED_PAYMENTS).length + 1,
     // Numbers of particular invoices, for tests that open them.
     draftPurchase: 'INV-ML-1001',
     draftSale: 'INV-OUT-2001',
@@ -1020,6 +1074,14 @@ async function main() {
     foreign: 'INV-PK-5001',
     voided: 'INV-PP-2999',
     bulkPrefix: 'INV-BULK-',
+    // Synced: a Revolut payment request for less than its lines, and one read from a receipt.
+    revolutRequest: 'INV-RV-5',
+    revolutRequestCounterparty: 'Kestrel Wholesale',
+    revolutRequestGross: 150,
+    revolutRequestLinesTotal: 300,
+    receiptInvoice: 'RCPT-RM-0001',
+    receiptInvoiceCounterparty: 'Royal Mail Group',
+    uploadedCount: invoiceSpecs.filter(s => !s.origin).length,
     counterparty: 'Mill Lane Textiles',
   };
 

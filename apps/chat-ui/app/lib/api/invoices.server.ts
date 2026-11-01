@@ -16,13 +16,16 @@ import { getServerSupabaseClient } from '~/lib/supabase';
 import { getRequestSupabaseClient } from '~/lib/supabase-server';
 import { getApiBaseUrl } from './base-url';
 import { fetchAllRows } from './paginate.server';
+import { getAttachmentUrl } from './transactions.server';
 
 export { getUserEntity } from './entity.server';
 import type {
+  DocumentSource,
   GlAccountOption,
   InvoiceContact,
   InvoiceDetail,
   InvoiceLineItem,
+  InvoiceOrigin,
   InvoiceRow,
   PaymentCandidate,
 } from '~/types/invoice';
@@ -30,20 +33,34 @@ import type {
 const CONTACT_COLUMNS = 'id, name, company_name, email, contact_type';
 const LIST_COLUMNS =
   'id, entity_id, invoice_number, invoice_type, status, currency, net_amount, tax_amount, ' +
-  'gross_amount, invoice_date, due_date, source, notes, created_at, file_path';
+  'gross_amount, invoice_date, due_date, source, notes, created_at, file_path, origin, ' +
+  'attachment_id';
 
-interface InvoiceDbRow extends Omit<InvoiceRow, 'has_document' | 'contacts'> {
+interface InvoiceDbRow extends Omit<InvoiceRow, 'document' | 'contacts' | 'origin'> {
   file_path: string | null;
+  attachment_id: string | null;
+  origin: InvoiceOrigin | null;
   contacts: InvoiceContact | null;
 }
 
-function toRow({ file_path, ...rest }: InvoiceDbRow): InvoiceRow {
+/** An uploaded original wins, then the receipt it was read from, then a printable copy. */
+export function documentSource(
+  row: Pick<InvoiceDbRow, 'file_path' | 'attachment_id' | 'origin'>
+): DocumentSource | null {
+  if (row.file_path) return 'upload';
+  if (row.attachment_id) return 'receipt';
+  if (row.origin === 'revolut_merchant') return 'generated';
+  return null;
+}
+
+function toRow({ file_path, attachment_id, origin, ...rest }: InvoiceDbRow): InvoiceRow {
   return {
     ...rest,
     net_amount: Number(rest.net_amount),
     tax_amount: Number(rest.tax_amount),
     gross_amount: Number(rest.gross_amount),
-    has_document: !!file_path,
+    origin: origin ?? 'upload',
+    document: documentSource({ file_path, attachment_id, origin }),
   };
 }
 
@@ -249,6 +266,8 @@ export interface OwnedInvoice {
   invoice_type: 'SALE' | 'PURCHASE';
   status: string;
   file_path: string | null;
+  attachment_id: string | null;
+  origin: InvoiceOrigin | null;
 }
 
 /** The invoice if the signed-in user can see it (RLS), else null. Gate every write on this. */
@@ -258,7 +277,7 @@ export async function getOwnedInvoice(
 ): Promise<OwnedInvoice | null> {
   const { data, error } = await getRequestSupabaseClient(request)
     .from('invoices')
-    .select('id, entity_id, invoice_number, invoice_type, status, file_path')
+    .select('id, entity_id, invoice_number, invoice_type, status, file_path, attachment_id, origin')
     .eq('id', invoiceId)
     .maybeSingle();
   if (error) throw new Error(`Failed to load invoice: ${error.message}`);
@@ -271,6 +290,31 @@ export async function getDocumentUrl(filePath: string, expiresIn = 3600): Promis
     .createSignedUrl(filePath, expiresIn);
   if (error) throw new Error(`Failed to open the document: ${error.message}`);
   return data.signedUrl;
+}
+
+/**
+ * Where to open an invoice's document: a signed link to the upload or the receipt it was read
+ * from, or the printable copy. null when it has none. `invoice` must have been read as the user.
+ */
+export async function documentUrlFor(
+  request: Request,
+  invoice: OwnedInvoice
+): Promise<string | null> {
+  switch (documentSource(invoice)) {
+    case 'upload':
+      return getDocumentUrl(invoice.file_path as string);
+    case 'receipt':
+      // Read as the user again: the attachment row decides, as it does on the transaction.
+      return getAttachmentUrl(
+        getRequestSupabaseClient(request),
+        invoice.entity_id,
+        invoice.attachment_id as string
+      );
+    case 'generated':
+      return `/api/invoices/print?id=${encodeURIComponent(invoice.id)}`;
+    default:
+      return null;
+  }
 }
 
 // ─── The agent ────────────────────────────────────────────────────────

@@ -75,7 +75,13 @@ export async function deleteStandInMovements(): Promise<void> {
 // ─── Invoices ─────────────────────────────────────────────────────────
 
 export interface InvoiceSnapshot {
-  invoices: { id: string; status: string; notes: string | null; invoice_type: string }[];
+  invoices: {
+    id: string;
+    status: string;
+    notes: string | null;
+    invoice_type: string;
+    file_path: string | null;
+  }[];
   lines: { id: string; gl_account_id: string | null }[];
   payments: {
     id: string;
@@ -93,7 +99,7 @@ export async function snapshotInvoices(): Promise<InvoiceSnapshot> {
   const invoices = await rest<InvoiceSnapshot['invoices']>(
     'GET',
     'invoices',
-    'select=id,status,notes,invoice_type&invoice_number=not.like.INV-BULK-*'
+    'select=id,status,notes,invoice_type,file_path&invoice_number=not.like.INV-BULK-*'
   );
   const ids = invoices.map(i => i.id).join(',');
   const lines = await rest<InvoiceSnapshot['lines']>(
@@ -120,7 +126,12 @@ export async function restoreInvoices(before: InvoiceSnapshot): Promise<void> {
         status: original.status,
         notes: original.notes,
         invoice_type: original.invoice_type,
+        file_path: original.file_path,
       });
+      // A document a test added: the file goes too.
+      if (row.file_path && row.file_path !== original.file_path) {
+        await removeStoredFile('invoices', row.file_path);
+      }
     }
   }
   const lineWas = new Map(before.lines.map(l => [l.id, l.gl_account_id]));
@@ -144,6 +155,45 @@ export async function restoreInvoices(before: InvoiceSnapshot): Promise<void> {
   await deleteStandInMovements();
   await rest('DELETE', 'inventory_items', 'sku=like.e2e-*');
   await rest('DELETE', 'contacts', 'name=in.("Stand-in Supplier Ltd","Stand-in Customer Ltd")');
+}
+
+async function removeStoredFile(bucket: string, path: string): Promise<void> {
+  const response = await fetch(`${url}/storage/v1/object/${bucket}/${path}`, {
+    method: 'DELETE',
+    headers: { apikey: key, Authorization: `Bearer ${key}` },
+  });
+  if (!response.ok && response.status !== 404) {
+    throw new Error(`remove ${bucket}/${path}: ${response.status} ${await response.text()}`);
+  }
+}
+
+/**
+ * A throwaway invoice read from a receipt, like the seeded one but safe to delete. Its number
+ * starts E2E-UP-, so restoreInvoices removes it if the test does not.
+ */
+export async function addReceiptInvoice(like: string): Promise<string> {
+  const [model] = await rest<{ entity_id: string; counterparty_id: string }[]>(
+    'GET',
+    'invoices',
+    `select=entity_id,counterparty_id&invoice_number=eq.${encodeURIComponent(like)}`
+  );
+  if (!model) throw new Error(`No invoice ${like}`);
+  const number = `E2E-UP-RCPT-${Date.now() % 1_000_000}`;
+  await rest('POST', 'invoices', '', {
+    entity_id: model.entity_id,
+    counterparty_id: model.counterparty_id,
+    invoice_number: number,
+    invoice_type: 'PURCHASE',
+    status: 'PAID',
+    currency: 'GBP',
+    net_amount: 12,
+    tax_amount: 0,
+    gross_amount: 12,
+    origin: 'revolut_expense',
+    external_id: `e2e-receipt-${number}`,
+    source: 'revolut',
+  });
+  return number;
 }
 
 export async function readInvoice(
