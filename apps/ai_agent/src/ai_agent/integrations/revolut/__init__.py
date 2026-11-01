@@ -23,6 +23,21 @@ ENDPOINTS = {
     "accounts": f"{REVOLUT_BASE_URL}/api/1.0/accounts",
 }
 
+
+def expenses_timestamp(moment: datetime) -> str:
+    """A time as the Expenses API takes it: UTC, milliseconds, ``Z`` (2026-07-31T01:22:46.585Z).
+
+    It refuses (400) what ``isoformat()`` gives for a watermark, microseconds and a ``+00:00``
+    offset, which the Transactions API accepts. A naive time is taken as UTC.
+    """
+    utc = (
+        moment.replace(tzinfo=timezone.utc)
+        if moment.tzinfo is None
+        else moment.astimezone(timezone.utc)
+    )
+    return utc.strftime("%Y-%m-%dT%H:%M:%S.") + f"{utc.microsecond // 1000:03d}Z"
+
+
 # Not a synced endpoint: expenses are read only to find the receipts attached to transactions
 # (see integrations/inngest/revolut_sync_functions.py, revolut_sync_receipts).
 EXPENSES_URL = f"{REVOLUT_BASE_URL}/api/1.0/expenses"
@@ -83,7 +98,15 @@ class RevolutAdapter:
                 headers=self._headers,
                 params=params or {},
             )
-            response.raise_for_status()
+            if response.is_error:
+                # Revolut says why in the body ({"code": ..., "message": ...}); without it a
+                # 400 reads only as "Bad Request". The status code stays on the error.
+                raise httpx.HTTPStatusError(
+                    f"Revolut answered {response.status_code} for {response.url}: "
+                    f"{response.text[:500]}",
+                    request=response.request,
+                    response=response,
+                )
             return response.json()
 
     def _get_entity_type(self, endpoint: str) -> str:
@@ -340,7 +363,7 @@ class RevolutAdapter:
             if cursor:
                 params["to"] = cursor
             if since is not None:
-                params["from"] = since.isoformat()
+                params["from"] = expenses_timestamp(since)
             response = await self._make_request(EXPENSES_URL, params)
             items: List[Dict[str, Any]] = response if isinstance(response, list) else []
             for item in items:
