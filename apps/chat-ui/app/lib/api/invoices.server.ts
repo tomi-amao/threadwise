@@ -36,7 +36,7 @@ const CONTACT_COLUMNS = 'id, name, company_name, email, contact_type';
 const LIST_COLUMNS =
   'id, entity_id, invoice_number, invoice_type, status, currency, net_amount, tax_amount, ' +
   'gross_amount, invoice_date, due_date, source, notes, created_at, file_path, origin, ' +
-  'attachment_id';
+  'attachment_id, paid_outside_bank, paid_outside_bank_note';
 
 interface InvoiceDbRow extends Omit<InvoiceRow, 'document' | 'contacts' | 'origin'> {
   file_path: string | null;

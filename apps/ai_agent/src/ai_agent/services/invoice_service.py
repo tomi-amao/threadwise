@@ -27,6 +27,7 @@ from ..core.config import Settings
 from ..core.supabase_client import get_supabase_client
 from ..normalization.utils import extract_row, extract_rows
 from .invoice_rules import (
+    PAID_OUTSIDE_BANK_REASONS,
     PAYABLE,
     SYNCED_ORIGINS,
     InvoiceRuleError,
@@ -1006,13 +1007,16 @@ class InvoiceService:
         return extract_rows(result)
 
     async def update_invoice_status(
-        self, invoice_id: UUID, status: str
+        self,
+        invoice_id: UUID,
+        status: str,
+        extra: Optional[Dict[str, Any]] = None,
     ) -> Optional[Dict[str, Any]]:
-        """Write the status as given. Prefer :meth:`set_invoice_status`, which checks the
-        move is allowed."""
+        """Write the status as given, with ``extra`` columns in the same update. Prefer
+        :meth:`set_invoice_status`, which checks the move is allowed."""
         result = await asyncio.to_thread(
             lambda: self.client.table("invoices")
-            .update({"status": status})
+            .update({"status": status, **(extra or {})})
             .eq("id", str(invoice_id))
             .execute()
         )
@@ -1032,6 +1036,8 @@ class InvoiceService:
         entity_id: UUID,
         invoice_id: UUID,
         status: str,
+        paid_outside_bank: Optional[str] = None,
+        note: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Move an invoice through its lifecycle.
 
@@ -1041,6 +1047,11 @@ class InvoiceService:
         transaction. Repeating the current status is a no-op. A synced invoice's status
         is not the app's to set, and a draft with linked payments is finalised to the
         status those payments imply.
+
+        ``paid_outside_bank`` (with an optional ``note``) marks it paid with no bank
+        transaction behind it: cash, paid personally, or another way the bank feeds do not
+        show. Only for a move to PAID, and only with no payment linked; such an invoice is
+        not matched and takes no payment link until the payment is undone, which clears it.
         """
         invoice = await self._get_owned_invoice(entity_id, invoice_id)
         check_editable(invoice.get("origin"), "status")
@@ -1048,6 +1059,29 @@ class InvoiceService:
         current = normalise_status(invoice.get("status"))
         target = normalise_status(status)
         check_transition(current, target)
+
+        extra: Optional[Dict[str, Any]] = None
+        if paid_outside_bank:
+            if target != "PAID":
+                raise InvoiceRuleError(
+                    "Only an invoice marked paid can be paid without the bank."
+                )
+            if paid_outside_bank not in PAID_OUTSIDE_BANK_REASONS:
+                raise InvoiceRuleError(
+                    f"Unknown reason '{paid_outside_bank}' for a payment outside the bank"
+                )
+            if await self.list_payments(invoice_id):
+                raise InvoiceRuleError(
+                    "This invoice has a matched bank payment, so it was paid through the "
+                    "bank. Remove the match first."
+                )
+            extra = {
+                "paid_outside_bank": paid_outside_bank,
+                "paid_outside_bank_note": (note or "").strip() or None,
+            }
+        elif target != "PAID" and invoice.get("paid_outside_bank"):
+            # Undoing the payment undoes how it was paid.
+            extra = {"paid_outside_bank": None, "paid_outside_bank_note": None}
 
         # A draft that already has its payment linked is finalised straight to what the
         # links say, not to OPEN.
@@ -1059,11 +1093,12 @@ class InvoiceService:
                 self._amounts(await self.list_payments(invoice_id)),
             )
 
-        updated = (
-            invoice
-            if current == target
-            else await self.update_invoice_status(invoice_id, target)
-        )
+        if extra:
+            updated = await self.update_invoice_status(invoice_id, target, extra)
+        elif current == target:
+            updated = invoice
+        else:
+            updated = await self.update_invoice_status(invoice_id, target)
         return {"invoice": updated, "previous_status": current}
 
     # =========================================================================
@@ -1124,6 +1159,11 @@ class InvoiceService:
         if status not in PAYABLE and status != "DRAFT":
             raise InvoiceRuleError(
                 f"A {status.lower()} invoice is not owed, so it takes no payment."
+            )
+        if invoice.get("paid_outside_bank"):
+            raise InvoiceRuleError(
+                "This invoice was paid without a bank transaction. Undo that payment "
+                "first to match one."
             )
 
         txn = extract_row(

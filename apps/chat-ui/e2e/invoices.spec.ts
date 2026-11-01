@@ -412,6 +412,11 @@ test.describe('invoices', () => {
     await scan('draft purchase drawer');
     await page.keyboard.press('Escape');
 
+    const overdue = await openInvoice(page, inv.overduePurchase, 'open');
+    await overdue.getByRole('button', { name: 'Paid without the bank' }).click();
+    await scan('paid without the bank form');
+    await page.keyboard.press('Escape');
+
     await openInvoice(page, inv.revolutRequest, 'paid');
     await scan('Revolut invoice drawer');
     await page.keyboard.press('Escape');

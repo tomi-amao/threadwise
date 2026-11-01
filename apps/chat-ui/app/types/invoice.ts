@@ -69,6 +69,9 @@ export interface LineUpdate {
   product_id?: string | null;
 }
 
+/** How a paid invoice was paid when no bank transaction is behind it. */
+export type PaidOutsideBank = 'cash' | 'paid_personally' | 'other';
+
 /** An invoice as the list shows it: no line items. */
 export interface InvoiceRow {
   id: string;
@@ -86,6 +89,9 @@ export interface InvoiceRow {
   notes: string | null;
   created_at: string;
   origin: InvoiceOrigin;
+  /** Paid with no bank transaction behind it (cash, personally), and how; null otherwise. */
+  paid_outside_bank: PaidOutsideBank | null;
+  paid_outside_bank_note: string | null;
   /** The document to show, or null if there is none. */
   document: DocumentSource | null;
   contacts: InvoiceContact | null;

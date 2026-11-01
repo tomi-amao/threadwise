@@ -134,6 +134,13 @@ it counts as paid. A draft keeps its place in To review when a payment is linked
 it goes straight to what its links say. Marking paid by hand is for money with no transaction
 behind it.
 
+An invoice paid with no bank transaction behind it says how (`invoices.paid_outside_bank`: `cash`,
+`paid_personally` or `other`, with an optional note), set with the move to `PAID`
+(`set_invoice_status(..., paid_outside_bank=...)`) and only when no payment is linked. It is then
+never matched, linking a payment to it is refused, and undoing the payment clears it (a check
+constraint keeps it on `PAID` invoices only). Nothing is posted: the books follow bank
+transactions, so a payment made personally belongs in the director's loan, recorded by hand.
+
 ### Matching an upload to its payment
 
 `services/invoice_matching.py` scores the business's transactions against an upload: the right

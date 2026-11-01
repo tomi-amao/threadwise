@@ -44,7 +44,8 @@ DAYS_AFTER = 120
 AMOUNT_NEAR = Decimal("0.10")
 MAX_SUGGESTIONS = 8
 # Only uploads are matched here: Revolut requests and receipt invoices are linked by their
-# own sync. A paid upload without a link was marked paid by hand (cash, paid personally).
+# own sync. A paid upload without a link was marked paid by hand, and one paid outside the
+# bank (``paid_outside_bank``: cash, paid personally) is never matched.
 MATCHABLE_ORIGINS = ("upload",)
 MATCHABLE_STATUSES = ("DRAFT", "OPEN", "OVERDUE")
 # Words that say nothing about who a supplier is.
@@ -231,7 +232,7 @@ async def _invoice(entity_id: UUID, invoice_id: UUID) -> Optional[Dict[str, Any]
             .table("invoices")
             .select(
                 "id, entity_id, invoice_number, invoice_type, status, origin, currency, "
-                "gross_amount, invoice_date, created_at, "
+                "gross_amount, invoice_date, created_at, paid_outside_bank, "
                 "contacts:counterparty_id(name, company_name)"
             )
             .eq("id", str(invoice_id))
@@ -297,7 +298,11 @@ async def _paying(transaction_ids: List[str]) -> set:
 async def candidates_for(entity_id: UUID, invoice_id: UUID) -> List[Dict[str, Any]]:
     """The likeliest payments for an invoice, best first, each with why it fits."""
     invoice = await _invoice(entity_id, invoice_id)
-    if not invoice or invoice.get("status") in ("CANCELLED", "VOID"):
+    if (
+        not invoice
+        or invoice.get("status") in ("CANCELLED", "VOID")
+        or invoice.get("paid_outside_bank")
+    ):
         return []
     found = rank(invoice, await _window(entity_id, invoice))
     return [c.as_dict() for c in found[:MAX_SUGGESTIONS]]
@@ -332,6 +337,7 @@ async def auto_match(entity_id: UUID, invoice_id: UUID) -> Optional[Dict[str, An
         not invoice
         or invoice.get("origin") not in MATCHABLE_ORIGINS
         or invoice.get("status") not in MATCHABLE_STATUSES
+        or invoice.get("paid_outside_bank")
         or await _linked(str(invoice_id))
     ):
         return None

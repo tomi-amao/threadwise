@@ -168,9 +168,16 @@ class TestAutoMatch:
             {"invoice": {**INVOICE, "origin": "revolut_merchant"}},
             {"invoice": {**INVOICE, "status": "PAID"}},
             {"linked": True},
+            {"invoice": {**INVOICE, "paid_outside_bank": "cash"}},
             {"candidates": [txn(amount=1180.0, metadata={})]},
         ],
-        ids=["synced", "paid-by-hand", "already-linked", "not-confident"],
+        ids=[
+            "synced",
+            "paid-by-hand",
+            "already-linked",
+            "paid-outside-the-bank",
+            "not-confident",
+        ],
     )
     def test_nothing_is_linked_otherwise(self, monkeypatch, kwargs):
         calls = self._world(monkeypatch, **kwargs)

@@ -89,6 +89,13 @@ class UpdateInvoiceStatusRequest(BaseModel):
         ...,
         description="New status: DRAFT, OPEN, PAID, PARTIALLY_PAID, OVERDUE, CANCELLED, VOID",
     )
+    paid_outside_bank: Optional[Literal["cash", "paid_personally", "other"]] = Field(
+        None,
+        description="With PAID: paid with no bank transaction behind it, and how",
+    )
+    note: Optional[str] = Field(
+        None, description="A note on a payment outside the bank"
+    )
 
 
 class ExpenseJournalRequest(BaseModel):
@@ -760,7 +767,9 @@ async def update_invoice_status(invoice_id: str, request: UpdateInvoiceStatusReq
 
     Moves the lifecycle does not allow (see ``invoice_rules``) are refused with a 409.
     Nothing is posted or reversed: invoices are documents, and the money they describe
-    reaches the ledger through its transaction.
+    reaches the ledger through its transaction. ``paid_outside_bank`` marks a payment
+    with no bank transaction behind it (cash, paid personally); refused if a bank payment
+    is matched.
     """
     if request.status.upper() not in VALID_STATUSES:
         raise HTTPException(
@@ -769,7 +778,11 @@ async def update_invoice_status(invoice_id: str, request: UpdateInvoiceStatusReq
         )
     try:
         return await invoice_service.set_invoice_status(
-            UUID(request.entity_id), UUID(invoice_id), request.status
+            UUID(request.entity_id),
+            UUID(invoice_id),
+            request.status,
+            paid_outside_bank=request.paid_outside_bank,
+            note=request.note,
         )
     except InvoiceRuleError as e:  # before ValueError: it is a subclass
         raise HTTPException(status_code=409, detail=str(e))

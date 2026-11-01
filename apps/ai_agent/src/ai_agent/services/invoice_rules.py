@@ -52,6 +52,12 @@ TRANSITIONS: Dict[str, FrozenSet[str]] = {
     "VOID": frozenset(),
 }
 
+# Why a paid invoice has no bank transaction behind it (``invoices.paid_outside_bank``): paid in
+# cash, paid personally by the owner, or some other way the bank feeds do not show.
+PAID_OUTSIDE_BANK_REASONS: FrozenSet[str] = frozenset(
+    {"cash", "paid_personally", "other"}
+)
+
 # Statuses an invoice can be deleted from; a live one is voided instead, to keep the record.
 DELETABLE: FrozenSet[str] = frozenset({"DRAFT", "CANCELLED", "VOID"})
 

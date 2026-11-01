@@ -27,6 +27,7 @@ import type {
   InvoiceRow,
   InvoiceStatus,
   InvoiceType,
+  PaidOutsideBank,
 } from '~/types/invoice';
 
 export const DIRECTION: Record<InvoiceType, { label: string; short: string }> = {
@@ -49,6 +50,28 @@ export const ORIGIN: Record<InvoiceOrigin, { label: string; short: string; note:
 };
 
 export const isSynced = (origin: InvoiceOrigin): boolean => origin !== 'upload';
+
+/** How an invoice was paid with no bank transaction behind it, in the words each side uses. */
+export const PAID_OUTSIDE_BANK: Record<
+  PaidOutsideBank,
+  { label: string; purchase: string; sale: string }
+> = {
+  cash: {
+    label: 'In cash',
+    purchase: 'Paid from the till or petty cash.',
+    sale: 'Paid to you in cash.',
+  },
+  paid_personally: {
+    label: 'Personally',
+    purchase: 'You paid it yourself; the business owes you it (your director’s loan).',
+    sale: 'Paid into your own account rather than the business’s.',
+  },
+  other: {
+    label: 'Another way',
+    purchase: 'Some other way the bank feeds do not show.',
+    sale: 'Some other way the bank feeds do not show.',
+  },
+};
 
 export type From = 'all' | InvoiceOrigin;
 

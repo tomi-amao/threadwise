@@ -226,10 +226,29 @@ async function setStatus(
   res: import('node:http').ServerResponse,
   id: string
 ) {
-  const { status } = await readJson<{ entity_id: string; status: string }>(req);
+  const body = await readJson<{
+    entity_id: string;
+    status: string;
+    paid_outside_bank?: string;
+    note?: string;
+  }>(req);
+  const { status } = body;
   const invoice = await invoiceWithLines(id);
   if (!invoice) return send(res, 404, { detail: `Invoice not found: ${id}` });
-  const { error } = await supabase.from('invoices').update({ status }).eq('id', id);
+  // Paid with no bank transaction behind it, as the agent records it; undoing a payment
+  // clears how it was paid (InvoiceService.set_invoice_status).
+  const outside = body.paid_outside_bank
+    ? {
+        paid_outside_bank: body.paid_outside_bank,
+        paid_outside_bank_note: body.note?.trim() || null,
+      }
+    : status !== 'PAID'
+      ? { paid_outside_bank: null, paid_outside_bank_note: null }
+      : {};
+  const { error } = await supabase
+    .from('invoices')
+    .update({ status, ...outside })
+    .eq('id', id);
   if (error) return send(res, 500, { detail: error.message });
   send(res, 200, { invoice: { id, status }, previous_status: invoice.status });
 }

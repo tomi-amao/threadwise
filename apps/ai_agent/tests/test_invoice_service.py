@@ -80,9 +80,10 @@ def make_service(
     async def get_invoice(_id):
         return state["invoice"]
 
-    async def update_invoice_status(_id, target):
+    async def update_invoice_status(_id, target, extra=None):
         state["status_writes"].append(target)
-        state["invoice"] = {**state["invoice"], "status": target}
+        state.setdefault("extra_writes", []).append(extra)
+        state["invoice"] = {**state["invoice"], "status": target, **(extra or {})}
         return state["invoice"]
 
     async def list_payments(_id):
@@ -132,6 +133,83 @@ class TestSetStatus:
         service, _ = make_service(monkeypatch, entity=uuid4())
         with pytest.raises(ValueError, match="not found"):
             run(service.set_invoice_status(ENTITY, INVOICE, "OPEN"))
+
+
+class TestPaidOutsideBank:
+    def test_marking_paid_in_cash_records_how(self, monkeypatch, journals):
+        service, state = make_service(monkeypatch, status="OPEN")
+        run(
+            service.set_invoice_status(
+                ENTITY, INVOICE, "PAID", paid_outside_bank="cash", note=" till 2 "
+            )
+        )
+        assert state["status_writes"] == ["PAID"]
+        assert state["extra_writes"] == [
+            {"paid_outside_bank": "cash", "paid_outside_bank_note": "till 2"}
+        ]
+        assert journals.calls == []
+
+    def test_a_draft_can_be_paid_personally(self, monkeypatch, journals):
+        service, state = make_service(monkeypatch, status="DRAFT")
+        run(
+            service.set_invoice_status(
+                ENTITY, INVOICE, "PAID", paid_outside_bank="paid_personally"
+            )
+        )
+        assert state["invoice"]["paid_outside_bank"] == "paid_personally"
+        assert state["invoice"]["paid_outside_bank_note"] is None
+
+    def test_how_can_be_added_to_an_invoice_already_paid(self, monkeypatch, journals):
+        service, state = make_service(monkeypatch, status="PAID")
+        run(
+            service.set_invoice_status(
+                ENTITY, INVOICE, "PAID", paid_outside_bank="other"
+            )
+        )
+        assert state["invoice"]["paid_outside_bank"] == "other"
+
+    @pytest.mark.parametrize(
+        "status, target, reason, message",
+        [
+            ("OPEN", "VOID", "cash", "Only an invoice marked paid"),
+            ("OPEN", "PAID", "barter", "Unknown reason"),
+        ],
+    )
+    def test_refused_without_writing(
+        self, monkeypatch, journals, status, target, reason, message
+    ):
+        service, state = make_service(monkeypatch, status=status)
+        with pytest.raises(InvoiceRuleError, match=message):
+            run(
+                service.set_invoice_status(
+                    ENTITY, INVOICE, target, paid_outside_bank=reason
+                )
+            )
+        assert state["status_writes"] == []
+
+    def test_refused_when_a_bank_payment_is_matched(self, monkeypatch, journals):
+        service, state = make_service(monkeypatch, status="OPEN")
+
+        async def linked(_id):
+            return [{"amount": 10, "currency_code": "GBP"}]
+
+        monkeypatch.setattr(service, "list_payments", linked)
+        with pytest.raises(InvoiceRuleError, match="matched bank payment"):
+            run(
+                service.set_invoice_status(
+                    ENTITY, INVOICE, "PAID", paid_outside_bank="cash"
+                )
+            )
+        assert state["status_writes"] == []
+
+    def test_undoing_the_payment_clears_how_it_was_paid(self, monkeypatch, journals):
+        service, state = make_service(monkeypatch, status="PAID")
+        state["invoice"]["paid_outside_bank"] = "cash"
+        run(service.set_invoice_status(ENTITY, INVOICE, "OPEN"))
+        assert state["extra_writes"] == [
+            {"paid_outside_bank": None, "paid_outside_bank_note": None}
+        ]
+        assert state["invoice"]["status"] == "OPEN"
 
 
 class TestDelete:
@@ -399,6 +477,15 @@ class TestPaymentLinks:
             run(service.link_payment(ENTITY, INVOICE, state["txn_id"]))
         assert state["tables"]["invoice_payments"] == []
         assert state["status_writes"] == []
+
+    def test_an_invoice_paid_outside_the_bank_takes_no_payment(
+        self, monkeypatch, journals
+    ):
+        service, state = self._linking(monkeypatch, status="PAID")
+        state["invoice"]["paid_outside_bank"] = "cash"
+        with pytest.raises(InvoiceRuleError, match="without a bank transaction"):
+            run(service.link_payment(ENTITY, INVOICE, state["txn_id"]))
+        assert state["tables"]["invoice_payments"] == []
 
     def test_a_transaction_already_paying_another_invoice_is_refused(
         self, monkeypatch, journals

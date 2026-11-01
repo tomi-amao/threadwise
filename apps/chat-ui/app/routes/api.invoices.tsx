@@ -218,10 +218,16 @@ async function setStatus(request: Request, invoice: OwnedInvoice, form: FormData
   const status = String(form.get('status') ?? '').toUpperCase();
   if (!STATUSES.includes(status)) return fail('Unknown status', 400);
 
+  // Paid with no bank transaction behind it: how (cash, personally), and a note.
+  const how = form.get('paidOutsideBank');
+  const outside =
+    how === 'cash' || how === 'paid_personally' || how === 'other'
+      ? { paid_outside_bank: how, note: String(form.get('note') ?? '') }
+      : {};
   await callAgent(
     `/accounting/invoices/${invoice.id}/status`,
     await requestAccessToken(request),
-    jsonInit('PATCH', { entity_id: invoice.entity_id, status })
+    jsonInit('PATCH', { entity_id: invoice.entity_id, status, ...outside })
   );
   return json({ ok: true, status });
 }

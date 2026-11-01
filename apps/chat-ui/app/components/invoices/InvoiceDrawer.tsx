@@ -35,14 +35,16 @@ import { Drawer } from '~/components/ui/drawer';
 import { Eyebrow } from '~/components/ui/eyebrow';
 import { FIELD_TRIGGER_CLASS, SearchableSelect } from '~/components/ui/searchable-select';
 import { Textarea } from '~/components/ui/textarea';
-import type { InvoiceDetail, InvoiceStatus, LineUpdate } from '~/types/invoice';
+import type { InvoiceDetail, InvoiceStatus, LineUpdate, PaidOutsideBank } from '~/types/invoice';
 import { cn } from '~/lib/utils';
 import { PaymentMatch } from './PaymentMatch';
 import { BoughtSection } from './BoughtSection';
+import { PaidOutsideBankForm } from './PaidOutsideBank';
 import {
   DIRECTION,
   DOCUMENT_ACTION,
   ORIGIN,
+  PAID_OUTSIDE_BANK,
   STATUS,
   counterpartyName,
   isSynced,
@@ -327,6 +329,13 @@ function Body({
 
   const markPaid = () => setStatus('PAID', 'Marked as paid');
 
+  const [outsideOpen, setOutsideOpen] = useState(false);
+  const markPaidOutsideBank = (how: PaidOutsideBank, note: string) =>
+    run('status', { intent: 'setStatus', status: 'PAID', paidOutsideBank: how, note }, () =>
+      isSale ? 'Marked as received' : 'Marked as paid'
+    ).then(r => r.ok && setOutsideOpen(false));
+  const outside = invoice.paid_outside_bank;
+
   const saveCoding = () =>
     run(
       'coding',
@@ -485,7 +494,24 @@ function Body({
                     Part paid
                   </Button>
                 )}
+                {!matched_transaction_id && !outsideOpen && (
+                  <Button
+                    variant="outline"
+                    disabled={busy !== null}
+                    onClick={() => setOutsideOpen(true)}
+                  >
+                    {isSale ? 'Received without the bank' : 'Paid without the bank'}
+                  </Button>
+                )}
               </div>
+            )}
+            {!synced && outsideOpen && (
+              <PaidOutsideBankForm
+                isSale={isSale}
+                busy={busy === 'status'}
+                onSave={markPaidOutsideBank}
+                onCancel={() => setOutsideOpen(false)}
+              />
             )}
           </>
         )}
@@ -494,14 +520,30 @@ function Body({
           <div className="space-y-2">
             <Eyebrow>Settled</Eyebrow>
             <p className="text-[15px]">
-              {matched_transaction_id
-                ? fromReceipt
-                  ? 'Paid by the payment this receipt is on.'
-                  : 'Paid, and matched to a bank transaction.'
-                : synced
-                  ? 'Paid in Revolut. The bank transaction is not matched yet.'
-                  : 'Paid. No bank transaction is matched to it yet.'}
+              {outside
+                ? `${isSale ? 'Received' : 'Paid'} without a bank transaction: ${PAID_OUTSIDE_BANK[outside].label.toLowerCase()}.`
+                : matched_transaction_id
+                  ? fromReceipt
+                    ? 'Paid by the payment this receipt is on.'
+                    : 'Paid, and matched to a bank transaction.'
+                  : synced
+                    ? 'Paid in Revolut. The bank transaction is not matched yet.'
+                    : 'Paid. No bank transaction is matched to it yet.'}
             </p>
+            {outside && (
+              <>
+                {invoice.paid_outside_bank_note && (
+                  <p className="text-[13px] text-text-2">{invoice.paid_outside_bank_note}</p>
+                )}
+                <p className="text-[13px] text-text-2">
+                  Your books follow bank transactions, so this payment is not in them.
+                  {outside === 'paid_personally' && !isSale
+                    ? ' Paid personally, it is owed to you: record it against your director’s loan.'
+                    : ''}{' '}
+                  No bank payment is looked for.
+                </p>
+              </>
+            )}
           </div>
         )}
 
@@ -512,7 +554,7 @@ function Body({
         )}
       </section>
 
-      {!dead && (
+      {!dead && !outside && (
         <PaymentMatch
           matchedId={matched_transaction_id}
           matchedBy={detail.matched_by}

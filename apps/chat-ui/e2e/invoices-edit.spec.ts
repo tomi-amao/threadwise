@@ -204,6 +204,37 @@ test.describe('moving an invoice through its lifecycle', () => {
     await expect(tile(page, 'You owe')).toContainText(`${inv.youOweCount - 1} unpaid`);
   });
 
+  test('an invoice paid in cash says so, stops looking for a payment, and can be undone', async ({
+    page,
+  }) => {
+    const drawer = await openInvoice(page, inv.overduePurchase, 'open');
+    await drawer.getByRole('button', { name: 'Paid without the bank' }).click();
+    const save = drawer.getByRole('button', { name: 'Save' });
+    await expect(save).toBeDisabled(); // how it was paid is required
+    await drawer.getByRole('radio', { name: /In cash/ }).check();
+    await drawer.getByRole('textbox', { name: 'Note on the payment' }).fill('Paid at the counter');
+    await save.click();
+    await expect(page.getByText('Marked as paid')).toBeVisible();
+
+    const next = drawer.getByRole('region', { name: 'Next step' });
+    await expect(next).toContainText('Paid without a bank transaction: in cash.');
+    await expect(next).toContainText('Paid at the counter');
+    await expect(next).toContainText('not in them');
+    await expect(drawer.getByRole('region', { name: 'Payment match' })).toHaveCount(0);
+    const saved = await readInvoice(inv.overduePurchase);
+    expect(saved?.status).toBe('PAID');
+
+    await drawer.getByRole('button', { name: 'Undo payment' }).click();
+    await page
+      .getByRole('dialog')
+      .filter({ hasText: 'Undo the payment?' })
+      .getByRole('button', { name: 'Undo payment' })
+      .click();
+    await expect(page.getByText('Payment undone')).toBeVisible();
+    await expect(drawer.getByRole('region', { name: 'Payment match' })).toBeVisible();
+    await expect(drawer.getByRole('button', { name: 'Paid without the bank' })).toBeVisible();
+  });
+
   test('an invoice with a matched bank payment says so once paid', async ({ page }) => {
     const drawer = await openInvoice(page, inv.matchedPurchase, 'open');
     await drawer.getByRole('button', { name: 'Mark as paid' }).click();

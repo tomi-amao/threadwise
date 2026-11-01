@@ -81,6 +81,8 @@ export interface InvoiceSnapshot {
     notes: string | null;
     invoice_type: string;
     file_path: string | null;
+    paid_outside_bank: string | null;
+    paid_outside_bank_note: string | null;
   }[];
   lines: {
     id: string;
@@ -104,7 +106,7 @@ export async function snapshotInvoices(): Promise<InvoiceSnapshot> {
   const invoices = await rest<InvoiceSnapshot['invoices']>(
     'GET',
     'invoices',
-    'select=id,status,notes,invoice_type,file_path&invoice_number=not.like.INV-BULK-*'
+    'select=id,status,notes,invoice_type,file_path,paid_outside_bank,paid_outside_bank_note&invoice_number=not.like.INV-BULK-*'
   );
   const ids = invoices.map(i => i.id).join(',');
   const lines = await rest<InvoiceSnapshot['lines']>(
@@ -132,6 +134,8 @@ export async function restoreInvoices(before: InvoiceSnapshot): Promise<void> {
         notes: original.notes,
         invoice_type: original.invoice_type,
         file_path: original.file_path,
+        paid_outside_bank: original.paid_outside_bank,
+        paid_outside_bank_note: original.paid_outside_bank_note,
       });
       // A document a test added: the file goes too.
       if (row.file_path && row.file_path !== original.file_path) {
