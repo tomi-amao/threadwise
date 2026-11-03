@@ -25,7 +25,7 @@
     "@nivo/bar": "^0.99.0",
     "@nivo/line": "^0.99.0",
     "@nivo/pie": "^0.99.0",
-    "@radix-ui/react-context-menu": "^2.3.7",
+    "@radix-ui/react-context-menu": "^2.4.1",
     "@radix-ui/react-dialog": "^1.1.23",
     "@radix-ui/react-dismissable-layer": "^1.1.19",
     "@radix-ui/react-focus-scope": "^1.1.16",
