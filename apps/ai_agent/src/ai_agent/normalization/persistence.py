@@ -47,6 +47,13 @@ from .utils import extract_rows
 logger = logging.getLogger(__name__)
 
 
+def count_change_note(provider: str, previous: int, new: int) -> str:
+    """The note on the adjustment movement a store's changed stock count leaves, naming the
+    store it came from ("Squarespace sync: 5 → 3"). Only a ledger item takes this path: a
+    Shopify item's count is its quantity, and records no movement."""
+    return f"{provider.capitalize()} sync: {previous} → {new}"
+
+
 class PersistenceError(Exception):
     """Raised when persistence operations fail."""
 
@@ -972,7 +979,7 @@ class PersistenceService:
                         transaction_type=InventoryMovementType.ADJUSTMENT,
                         quantity=Decimal(str(delta)),
                         unit_cost=item.unit_cost or Decimal("0"),
-                        notes=f"Shopify sync: {previous_qty} → {new_qty}",
+                        notes=count_change_note(item.provider, previous_qty, new_qty),
                     )
                 )
             except Exception as exc:

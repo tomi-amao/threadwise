@@ -1,7 +1,11 @@
 import AxeBuilder from '@axe-core/playwright';
 import { test, expect, expectNoHorizontalOverflow, readManifest } from './fixtures';
 
-const inv = readManifest().inventory;
+const manifest = readManifest();
+const inv = manifest.inventory;
+const books = manifest.ledger.stock;
+const gbp2 = (n: number) =>
+  new Intl.NumberFormat('en-GB', { style: 'currency', currency: 'GBP' }).format(n);
 const gbp0 = (n: number) =>
   new Intl.NumberFormat('en-GB', {
     style: 'currency',
@@ -26,6 +30,42 @@ test.describe('inventory', () => {
     await expect(tile(page, 'Needs attention')).toContainText(String(attention));
     await expect(tile(page, 'Invested')).toContainText(gbp0(inv.invested));
     await expect(tile(page, 'Invested')).toContainText(`${num(inv.unitsPurchased)} units bought`);
+  });
+
+  test('stock is shown against the books, with the journals since the last adjustment', async ({
+    page,
+  }) => {
+    const panel = page.getByRole('region', { name: 'Stock against the books' });
+    await expect(panel).toContainText(gbp2(books.books));
+    await expect(panel).toContainText(gbp2(books.records));
+    await expect(panel).toContainText(gbp2(books.difference));
+    await expect(panel).toContainText(
+      `${books.difference > 0 ? 'Books are higher' : 'Stock records are higher'} by ${gbp2(Math.abs(books.difference))}`
+    );
+
+    // The journals on the stock accounts after the stock-count true-up, newest first.
+    const rows = panel.getByRole('list', { name: 'Stock journals' }).getByRole('listitem');
+    await expect(rows).toHaveCount(books.entries.length);
+    for (const [i, entry] of books.entries.entries()) {
+      await expect(rows.nth(i)).toContainText(entry.description);
+      await expect(rows.nth(i)).toContainText(gbp2(entry.amount));
+      if (entry.invoice) {
+        await expect(rows.nth(i).getByRole('link')).toContainText(`Invoice ${entry.invoice}`);
+        await expect(rows.nth(i).getByRole('link')).toHaveAttribute('href', /\/invoices\?invoice=/);
+      } else {
+        await expect(rows.nth(i).getByRole('link')).toHaveAttribute(
+          'href',
+          /\/transactions\?transactionId=/
+        );
+      }
+    }
+    // It says what the journals account for, and what the stock records did meanwhile.
+    const stockMoved = books.entriesTotal - books.difference;
+    await expect(panel).toContainText(
+      Math.abs(stockMoved) < 0.01
+        ? 'These account for the difference'
+        : `These moved the books by ${gbp2(books.entriesTotal)}. Meanwhile the stock records ${stockMoved >= 0 ? 'rose' : 'fell'} by ${gbp2(Math.abs(stockMoved))}`
+    );
   });
 
   test('jump-to flags count each kind of problem and open the right filtered view', async ({

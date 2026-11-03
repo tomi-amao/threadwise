@@ -606,3 +606,11 @@ class TestRevolutNormalizer:
 
         assert not result.success
         assert "expense" not in normalizer.supported_entity_types
+
+
+class TestCountChangeNote:
+    def test_names_the_store_the_count_came_from(self):
+        from ai_agent.normalization.persistence import count_change_note
+
+        assert count_change_note("squarespace", 5, 3) == "Squarespace sync: 5 → 3"
+        assert count_change_note("shopify", 0, 12) == "Shopify sync: 0 → 12"

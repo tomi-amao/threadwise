@@ -1483,7 +1483,17 @@ async function main() {
       matched_by: 'user',
     })
   );
+  // What the rival's stock records are worth (sellable, at unit cost), by the on-hand view.
+  const rivalOnHand = (await must(
+    'rival on-hand view',
+    supabase.from('inventory_on_hand').select('on_hand, unit_cost, item_type').eq('entity_id', rid)
+  )) as { on_hand: number; unit_cost: number | null; item_type: string }[];
   const rival = {
+    stockRecords: money(
+      rivalOnHand
+        .filter(r => r.item_type !== 'sample')
+        .reduce((n, r) => n + Math.max(Number(r.on_hand), 0) * Number(r.unit_cost ?? 0), 0)
+    ),
     email: rivalEmail,
     entityName: RIVAL_ENTITY_NAME,
     orderNumbers: ['#R1', '#R2', '#R3'],
@@ -1565,6 +1575,8 @@ async function main() {
     let ms: number;
     if (journal.txnIndex !== undefined) {
       ms = new Date(String(txnRows[journal.txnIndex].occurred_at)).getTime();
+    } else if (journal.daysAgo !== undefined) {
+      ms = new Date(daysAgo(journal.daysAgo)).getTime();
     } else {
       ms = Math.min(periodDates[journal.period].start + journal.offsetDays * 86_400_000, yesterday);
     }
@@ -1610,7 +1622,57 @@ async function main() {
     to: iso(periodDates[which].end),
   });
   const countOf = (pred: (j: LedgerJournal) => boolean) => journals.filter(pred).length;
+
+  // The Inventory page's "stock against the books": the ledger's stock accounts (1031-1035)
+  // against the stock records (sellable items at unit cost, from the on-hand view), and the
+  // journals on those accounts since the last adjustment to them.
+  const STOCK_ACCOUNTS = ['1031', '1032', '1033', '1034', '1035'];
+  const stockNet = (j: LedgerJournal) =>
+    j.lines
+      .filter(l => STOCK_ACCOUNTS.includes(l.account))
+      .reduce((n, l) => n + (l.debit ?? 0) - (l.credit ?? 0), 0);
+  const stockJournals = dated.filter(
+    ({ journal }) =>
+      journal.status === 'posted' && journal.lines.some(l => STOCK_ACCOUNTS.includes(l.account))
+  );
+  const stockSince = stockJournals
+    .filter(({ journal }) => journal.type === 'adjustment')
+    .map(({ date }) => date)
+    .sort()
+    .at(-1)!;
+  const stockEntries = stockJournals
+    .filter(({ date }) => date > stockSince)
+    .sort((a, b) => b.date.localeCompare(a.date))
+    .map(({ journal, date }) => ({
+      description: journal.description,
+      date,
+      amount: money(stockNet(journal)),
+      invoice: journal.txnIndex !== undefined ? (MATCHED_PAYMENTS[journal.txnIndex] ?? null) : null,
+    }));
+  const onHandRows = (await must(
+    'on-hand view',
+    supabase
+      .from('inventory_on_hand')
+      .select('on_hand, unit_cost, item_type')
+      .eq('entity_id', entityId)
+  )) as { on_hand: number; unit_cost: number | null; item_type: string }[];
+  const stockRecords = money(
+    onHandRows
+      .filter(r => r.item_type !== 'sample')
+      .reduce((n, r) => n + Math.max(Number(r.on_hand), 0) * Number(r.unit_cost ?? 0), 0)
+  );
+  const stockBooks = money(stockJournals.reduce((n, { journal }) => n + stockNet(journal), 0));
+  const stock = {
+    books: stockBooks,
+    records: stockRecords,
+    difference: money(stockBooks - stockRecords),
+    since: stockSince,
+    entries: stockEntries,
+    entriesTotal: money(stockEntries.reduce((n, e) => n + e.amount, 0)),
+  };
+
   const ledger = {
+    stock,
     currentLabel: periodLabel(periodDates.current.end),
     previousLabel: periodLabel(periodDates.previous.end),
     currentFrom: range('current').from,

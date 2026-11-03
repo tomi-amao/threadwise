@@ -22,6 +22,7 @@ import { CompactHeader } from '~/components/ui/page-header';
 import { Segmented } from '~/components/ui/segmented';
 import { Tabs, tabId } from '~/components/ui/tabs';
 import type {
+  BooksVsStock as BooksVsStockData,
   InventoryItemRow,
   InventoryMovementsData,
   InventoryValuationItem,
@@ -29,6 +30,7 @@ import type {
 } from '~/lib/api/inventory.server';
 import { useUrlParams } from '~/lib/use-url-params';
 import { cn } from '~/lib/utils';
+import { BooksVsStock } from './BooksVsStock';
 import { ItemDrawer } from './ItemDrawer';
 import {
   MOVEMENT_LABEL,
@@ -54,6 +56,8 @@ export interface InventoryPageData {
     totalInventoryValue: number;
     totalUnitsPurchased: number;
   };
+  /** How the stock records stand against the books; null when it could not be read. */
+  booksVsStock: BooksVsStockData | null;
   errors: string[];
 }
 
@@ -470,6 +474,8 @@ export function InventoryPage({ data }: { data: InventoryPageData }) {
             caption={`${int(data.movements.totalQuantityPurchased)} units bought`}
           />
         </div>
+
+        {data.booksVsStock && <BooksVsStock data={data.booksVsStock} />}
 
         <JumpTo
           items={flags.map(f => ({

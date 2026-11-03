@@ -52,6 +52,17 @@ export interface SeedManifest {
   };
   /** The books: periods, journals and the figures the statements should show. */
   ledger: {
+    /** The Inventory page's stock against the books (the ledger's stock accounts 1031-1035). */
+    stock: {
+      books: number;
+      records: number;
+      difference: number;
+      /** The date of the last adjustment to a stock account. */
+      since: string;
+      /** Journals on those accounts after it, newest first. */
+      entries: { description: string; date: string; amount: number; invoice: string | null }[];
+      entriesTotal: number;
+    };
     currentLabel: string;
     previousLabel: string;
     currentFrom: string;
@@ -120,6 +131,8 @@ export interface SeedManifest {
     customerNames: string[];
     productName: string;
     inventorySku: string;
+    /** Its sellable stock at unit cost, from the on-hand view. */
+    stockRecords: number;
     invoiceNumber: string;
     bankName: string;
     bankBalance: number;
