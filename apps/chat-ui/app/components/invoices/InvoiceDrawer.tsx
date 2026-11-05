@@ -3,11 +3,13 @@
  *
  * One invoice, from upload to payment, in one place (replaces three modals). The top of the
  * drawer is always the next step: a draft is reviewed and finalised, an open invoice is marked
- * paid, and so on. Below are the facts, the lines with their accounts, the stock decisions for
- * a purchase, the document and the notes.
+ * paid, and so on. Below are the facts, the lines with their accounts, what a purchase bought,
+ * the document and the notes.
  *
  * Invoices are documents: no status change posts to the books. The ledger follows the bank or
- * payment transaction that settles an invoice, which is why matching one is worth doing.
+ * payment transaction that settles an invoice, which is why matching one is worth doing: once
+ * matched, a purchase's lines can split its payment's journal across their accounts
+ * (SplitSection), after the person approves it.
  *
  * A synced invoice (sent from Revolut, or read from a Revolut receipt) has no status buttons:
  * its status is Revolut's, or it was paid by the payment its receipt is on. One read from a
@@ -35,14 +37,17 @@ import { Drawer } from '~/components/ui/drawer';
 import { Eyebrow } from '~/components/ui/eyebrow';
 import { FIELD_TRIGGER_CLASS, SearchableSelect } from '~/components/ui/searchable-select';
 import { Textarea } from '~/components/ui/textarea';
-import type { InvoiceDetail, InvoiceStatus, StockDecision } from '~/types/invoice';
+import type { InvoiceDetail, InvoiceStatus, LineUpdate, PaidOutsideBank } from '~/types/invoice';
 import { cn } from '~/lib/utils';
 import { PaymentMatch } from './PaymentMatch';
-import { StockSection, looksLikeStock } from './StockSection';
+import { BoughtSection } from './BoughtSection';
+import { PaidOutsideBankForm } from './PaidOutsideBank';
+import { SplitSection } from './SplitSection';
 import {
   DIRECTION,
   DOCUMENT_ACTION,
   ORIGIN,
+  PAID_OUTSIDE_BANK,
   STATUS,
   counterpartyName,
   isSynced,
@@ -61,8 +66,6 @@ type Load =
 interface Result {
   ok: boolean;
   error?: string;
-  recorded?: number;
-  notRecorded?: string[];
   url?: string;
 }
 
@@ -291,7 +294,7 @@ function Body({
     return result;
   };
 
-  const { invoice, lines, matched_transaction_id, stocked_line_ids } = detail;
+  const { invoice, lines, matched_transaction_id } = detail;
   const { gl_accounts, products } = detail;
   const status = invoice.status;
   const shown = shownStatus(invoice, today);
@@ -308,8 +311,7 @@ function Body({
   const accountOf = (lineId: string, saved: string | null) => coding[lineId] ?? saved ?? '';
   const uncoded = lines.filter(l => !accountOf(l.id, l.gl_account_id)).length;
   const codingDirty = lines.some(l => accountOf(l.id, l.gl_account_id) !== (l.gl_account_id ?? ''));
-  const stockLines = lines.filter(looksLikeStock);
-  const stockOpen = stockLines.filter(l => !stocked_line_ids.includes(l.id)).length;
+  const unlinkedProducts = lines.filter(l => l.line_kind === 'product' && !l.product).length;
 
   const accountOptions = gl_accounts
     .filter(a =>
@@ -330,6 +332,13 @@ function Body({
 
   const markPaid = () => setStatus('PAID', 'Marked as paid');
 
+  const [outsideOpen, setOutsideOpen] = useState(false);
+  const markPaidOutsideBank = (how: PaidOutsideBank, note: string) =>
+    run('status', { intent: 'setStatus', status: 'PAID', paidOutsideBank: how, note }, () =>
+      isSale ? 'Marked as received' : 'Marked as paid'
+    ).then(r => r.ok && setOutsideOpen(false));
+  const outside = invoice.paid_outside_bank;
+
   const saveCoding = () =>
     run(
       'coding',
@@ -342,18 +351,10 @@ function Body({
       () => 'Accounts saved'
     ).then(r => r.ok && setCoding({}));
 
-  const applyStock = (decisions: StockDecision[]) =>
-    run('stock', { intent: 'stock', decisions: JSON.stringify(decisions) }, r =>
-      r.notRecorded?.length
-        ? null
-        : `Stock recorded for ${r.recorded ?? decisions.length} ${r.recorded === 1 ? 'line' : 'lines'}`
-    ).then(r => {
-      if (r.ok && r.notRecorded?.length) {
-        toast.warning(
-          `${r.notRecorded.length} ${r.notRecorded.length === 1 ? 'line' : 'lines'} could not be recorded as stock (they need a quantity and a unit cost).`
-        );
-      }
-    });
+  const saveBought = (updates: Record<string, LineUpdate>) =>
+    run('bought', { intent: 'update', lineKinds: JSON.stringify(updates) }, () => 'Saved').then(
+      r => r.ok
+    );
 
   const openDocument = async () => {
     setBusy('document');
@@ -457,11 +458,9 @@ function Body({
                   ? 'Every line has an account.'
                   : `${uncoded} ${uncoded === 1 ? 'line has' : 'lines have'} no account yet.`}
               </li>
-              {!isSale && stockLines.length > 0 && (
-                <li className={stockOpen > 0 ? 'text-accent-text' : 'text-text-2'}>
-                  {stockOpen === 0
-                    ? 'Stock is tracked for the lines that need it.'
-                    : `${stockOpen} ${stockOpen === 1 ? 'line looks' : 'lines look'} like stock and ${stockOpen === 1 ? "isn't" : "aren't"} tracked yet.`}
+              {!isSale && unlinkedProducts > 0 && (
+                <li className="text-text-2">
+                  {`${unlinkedProducts} product ${unlinkedProducts === 1 ? 'line is' : 'lines are'} not linked to a product (optional).`}
                 </li>
               )}
             </ul>
@@ -498,7 +497,24 @@ function Body({
                     Part paid
                   </Button>
                 )}
+                {!matched_transaction_id && !outsideOpen && (
+                  <Button
+                    variant="outline"
+                    disabled={busy !== null}
+                    onClick={() => setOutsideOpen(true)}
+                  >
+                    {isSale ? 'Received without the bank' : 'Paid without the bank'}
+                  </Button>
+                )}
               </div>
+            )}
+            {!synced && outsideOpen && (
+              <PaidOutsideBankForm
+                isSale={isSale}
+                busy={busy === 'status'}
+                onSave={markPaidOutsideBank}
+                onCancel={() => setOutsideOpen(false)}
+              />
             )}
           </>
         )}
@@ -507,14 +523,30 @@ function Body({
           <div className="space-y-2">
             <Eyebrow>Settled</Eyebrow>
             <p className="text-[15px]">
-              {matched_transaction_id
-                ? fromReceipt
-                  ? 'Paid by the payment this receipt is on.'
-                  : 'Paid, and matched to a bank transaction.'
-                : synced
-                  ? 'Paid in Revolut. The bank transaction is not matched yet.'
-                  : 'Paid. No bank transaction is matched to it yet.'}
+              {outside
+                ? `${isSale ? 'Received' : 'Paid'} without a bank transaction: ${PAID_OUTSIDE_BANK[outside].label.toLowerCase()}.`
+                : matched_transaction_id
+                  ? fromReceipt
+                    ? 'Paid by the payment this receipt is on.'
+                    : 'Paid, and matched to a bank transaction.'
+                  : synced
+                    ? 'Paid in Revolut. The bank transaction is not matched yet.'
+                    : 'Paid. No bank transaction is matched to it yet.'}
             </p>
+            {outside && (
+              <>
+                {invoice.paid_outside_bank_note && (
+                  <p className="text-[13px] text-text-2">{invoice.paid_outside_bank_note}</p>
+                )}
+                <p className="text-[13px] text-text-2">
+                  Your books follow bank transactions, so this payment is not in them.
+                  {outside === 'paid_personally' && !isSale
+                    ? ' Paid personally, it is owed to you: record it against your director’s loan.'
+                    : ''}{' '}
+                  No bank payment is looked for.
+                </p>
+              </>
+            )}
           </div>
         )}
 
@@ -525,9 +557,10 @@ function Body({
         )}
       </section>
 
-      {finalised && (
+      {!dead && !outside && (
         <PaymentMatch
           matchedId={matched_transaction_id}
+          matchedBy={detail.matched_by}
           candidates={detail.payment_candidates}
           isSale={isSale}
           busy={busy !== null}
@@ -536,6 +569,26 @@ function Body({
           }
           onUnmatch={id =>
             run('match', { intent: 'unmatchPayment', transactionId: id }, () => 'Match removed')
+          }
+        />
+      )}
+
+      {!isSale && !dead && matched_transaction_id && (
+        <SplitSection
+          proposals={detail.split_proposals}
+          invoiceNumber={invoice.invoice_number}
+          invoiceCurrency={invoice.currency}
+          lines={lines}
+          busy={busy !== null}
+          onApply={id =>
+            run(
+              'split',
+              { intent: 'split', transactionId: id },
+              () => 'Journal split by the invoice'
+            )
+          }
+          onUndo={id =>
+            run('split', { intent: 'undoSplit', transactionId: id }, () => 'Split undone')
           }
         />
       )}
@@ -620,16 +673,14 @@ function Body({
         )}
       </section>
 
-      {!isSale && !dead && lines.length > 0 && (
-        <StockSection
-          key={`${stocked_line_ids.length}-${lines.length}`}
+      {!isSale && lines.length > 0 && (
+        <BoughtSection
           lines={lines}
-          stockedIds={stocked_line_ids}
           currency={invoice.currency}
           products={products}
-          accounts={gl_accounts}
-          busy={busy === 'stock'}
-          onApply={applyStock}
+          busy={busy === 'bought'}
+          disabled={dead || busy !== null}
+          onSave={saveBought}
         />
       )}
 

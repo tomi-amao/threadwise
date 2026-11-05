@@ -1,4 +1,4 @@
-"""Tests for the invoice service's lifecycle, deletion, editing and stock decisions.
+"""Tests for the invoice service's lifecycle, deletion, editing and payment links.
 
 The service talks to Supabase and the journal service; both are replaced here with fakes
 so the tests pin down the *decisions* the service makes: what it writes, refuses and
@@ -80,9 +80,10 @@ def make_service(
     async def get_invoice(_id):
         return state["invoice"]
 
-    async def update_invoice_status(_id, target):
+    async def update_invoice_status(_id, target, extra=None):
         state["status_writes"].append(target)
-        state["invoice"] = {**state["invoice"], "status": target}
+        state.setdefault("extra_writes", []).append(extra)
+        state["invoice"] = {**state["invoice"], "status": target, **(extra or {})}
         return state["invoice"]
 
     async def list_payments(_id):
@@ -132,6 +133,83 @@ class TestSetStatus:
         service, _ = make_service(monkeypatch, entity=uuid4())
         with pytest.raises(ValueError, match="not found"):
             run(service.set_invoice_status(ENTITY, INVOICE, "OPEN"))
+
+
+class TestPaidOutsideBank:
+    def test_marking_paid_in_cash_records_how(self, monkeypatch, journals):
+        service, state = make_service(monkeypatch, status="OPEN")
+        run(
+            service.set_invoice_status(
+                ENTITY, INVOICE, "PAID", paid_outside_bank="cash", note=" till 2 "
+            )
+        )
+        assert state["status_writes"] == ["PAID"]
+        assert state["extra_writes"] == [
+            {"paid_outside_bank": "cash", "paid_outside_bank_note": "till 2"}
+        ]
+        assert journals.calls == []
+
+    def test_a_draft_can_be_paid_personally(self, monkeypatch, journals):
+        service, state = make_service(monkeypatch, status="DRAFT")
+        run(
+            service.set_invoice_status(
+                ENTITY, INVOICE, "PAID", paid_outside_bank="paid_personally"
+            )
+        )
+        assert state["invoice"]["paid_outside_bank"] == "paid_personally"
+        assert state["invoice"]["paid_outside_bank_note"] is None
+
+    def test_how_can_be_added_to_an_invoice_already_paid(self, monkeypatch, journals):
+        service, state = make_service(monkeypatch, status="PAID")
+        run(
+            service.set_invoice_status(
+                ENTITY, INVOICE, "PAID", paid_outside_bank="other"
+            )
+        )
+        assert state["invoice"]["paid_outside_bank"] == "other"
+
+    @pytest.mark.parametrize(
+        "status, target, reason, message",
+        [
+            ("OPEN", "VOID", "cash", "Only an invoice marked paid"),
+            ("OPEN", "PAID", "barter", "Unknown reason"),
+        ],
+    )
+    def test_refused_without_writing(
+        self, monkeypatch, journals, status, target, reason, message
+    ):
+        service, state = make_service(monkeypatch, status=status)
+        with pytest.raises(InvoiceRuleError, match=message):
+            run(
+                service.set_invoice_status(
+                    ENTITY, INVOICE, target, paid_outside_bank=reason
+                )
+            )
+        assert state["status_writes"] == []
+
+    def test_refused_when_a_bank_payment_is_matched(self, monkeypatch, journals):
+        service, state = make_service(monkeypatch, status="OPEN")
+
+        async def linked(_id):
+            return [{"amount": 10, "currency_code": "GBP"}]
+
+        monkeypatch.setattr(service, "list_payments", linked)
+        with pytest.raises(InvoiceRuleError, match="matched bank payment"):
+            run(
+                service.set_invoice_status(
+                    ENTITY, INVOICE, "PAID", paid_outside_bank="cash"
+                )
+            )
+        assert state["status_writes"] == []
+
+    def test_undoing_the_payment_clears_how_it_was_paid(self, monkeypatch, journals):
+        service, state = make_service(monkeypatch, status="PAID")
+        state["invoice"]["paid_outside_bank"] = "cash"
+        run(service.set_invoice_status(ENTITY, INVOICE, "OPEN"))
+        assert state["extra_writes"] == [
+            {"paid_outside_bank": None, "paid_outside_bank_note": None}
+        ]
+        assert state["invoice"]["status"] == "OPEN"
 
 
 class TestDelete:
@@ -276,112 +354,6 @@ class TestUpdate:
         assert state["invoice_updates"][0][0] == {"notes": "chased"}
 
 
-class TestStockDecisions:
-    def _stocking(self, monkeypatch, recorded=("l1",), **kwargs):
-        service, state = make_service(monkeypatch, **kwargs)
-        state["calls"] = []
-
-        async def create(entity_id, invoice_id, ids, overrides=None):
-            state["calls"].append(("new", ids, overrides))
-            return []
-
-        async def link(entity_id, invoice_id, links):
-            state["calls"].append(("link", links))
-            return {}
-
-        async def track(entity_id, invoice_id, ids, overrides=None):
-            state["calls"].append(("track", ids, overrides))
-            return {}
-
-        async def stock_state(invoice_id, ids):
-            return set(recorded) & set(ids)
-
-        monkeypatch.setattr(service, "create_products_from_line_items", create)
-        monkeypatch.setattr(service, "link_line_items_to_existing_products", link)
-        monkeypatch.setattr(service, "create_inventory_movements_only", track)
-        monkeypatch.setattr(service, "stock_state", stock_state)
-        return service, state
-
-    def test_each_action_goes_to_the_right_step(self, monkeypatch, journals):
-        service, state = self._stocking(monkeypatch, recorded=("l1", "l2"))
-        result = run(
-            service.apply_stock_decisions(
-                ENTITY,
-                INVOICE,
-                [
-                    {
-                        "line_item_id": "l1",
-                        "action": "new",
-                        "name": " Wool Cap ",
-                        "sku": "CAP",
-                        "asset_account_id": "a1",
-                    },
-                    {"line_item_id": "l2", "action": "link", "product_id": "p1"},
-                ],
-            )
-        )
-        kinds = [c[0] for c in state["calls"]]
-        assert kinds == ["new", "link"]
-        assert state["calls"][0][2] == {
-            "l1": {"name": "Wool Cap", "sku": "CAP", "asset_account_id": "a1"}
-        }
-        assert state["calls"][1][1] == [{"line_item_id": "l2", "product_id": "p1"}]
-        assert result["recorded"] == 2 and result["not_recorded"] == []
-
-    def test_expense_lines_do_nothing_and_are_not_reported_missing(
-        self, monkeypatch, journals
-    ):
-        service, state = self._stocking(monkeypatch, recorded=())
-        result = run(
-            service.apply_stock_decisions(
-                ENTITY, INVOICE, [{"line_item_id": "l2", "action": "expense"}]
-            )
-        )
-        assert state["calls"] == []
-        assert result["not_recorded"] == []
-
-    def test_a_line_that_could_not_be_recorded_is_reported(self, monkeypatch, journals):
-        service, _ = self._stocking(monkeypatch, recorded=())
-        result = run(
-            service.apply_stock_decisions(
-                ENTITY, INVOICE, [{"line_item_id": "l1", "action": "track"}]
-            )
-        )
-        assert result["not_recorded"] == ["l1"]
-
-    @pytest.mark.parametrize(
-        "decisions,message",
-        [
-            ([{"line_item_id": "nope", "action": "track"}], "does not belong"),
-            ([{"line_item_id": "l1", "action": "link"}], "Choose a product"),
-            ([{"line_item_id": "l1", "action": "burn"}], "Unknown stock action"),
-            (
-                [
-                    {"line_item_id": "l1", "action": "track"},
-                    {"line_item_id": "l1", "action": "expense"},
-                ],
-                "more than once",
-            ),
-        ],
-    )
-    def test_invalid_decisions_fail_before_anything_is_written(
-        self, monkeypatch, journals, decisions, message
-    ):
-        service, state = self._stocking(monkeypatch)
-        with pytest.raises(InvoiceRuleError, match=message):
-            run(service.apply_stock_decisions(ENTITY, INVOICE, decisions))
-        assert state["calls"] == []
-
-    def test_sales_invoices_carry_no_stock(self, monkeypatch, journals):
-        service, _ = self._stocking(monkeypatch, invoice_type="SALE")
-        with pytest.raises(InvoiceRuleError, match="Only purchase"):
-            run(
-                service.apply_stock_decisions(
-                    ENTITY, INVOICE, [{"line_item_id": "l1", "action": "track"}]
-                )
-            )
-
-
 class FakeTable:
     """Just enough of a PostgREST table: select / insert / delete, eq filters, order."""
 
@@ -505,6 +477,15 @@ class TestPaymentLinks:
             run(service.link_payment(ENTITY, INVOICE, state["txn_id"]))
         assert state["tables"]["invoice_payments"] == []
         assert state["status_writes"] == []
+
+    def test_an_invoice_paid_outside_the_bank_takes_no_payment(
+        self, monkeypatch, journals
+    ):
+        service, state = self._linking(monkeypatch, status="PAID")
+        state["invoice"]["paid_outside_bank"] = "cash"
+        with pytest.raises(InvoiceRuleError, match="without a bank transaction"):
+            run(service.link_payment(ENTITY, INVOICE, state["txn_id"]))
+        assert state["tables"]["invoice_payments"] == []
 
     def test_a_transaction_already_paying_another_invoice_is_refused(
         self, monkeypatch, journals

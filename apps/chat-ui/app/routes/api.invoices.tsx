@@ -9,10 +9,11 @@
  *                               (a Revolut payment request's original, say); it is not read
  * POST intent=setStatus         move the invoice through its lifecycle (nothing is posted)
  * POST intent=update            notes, direction (drafts only) and the GL account of each line
- * POST intent=stock             decide, per purchase line, how it is tracked as stock
  * POST intent=delete            remove a draft, cancelled or void invoice
  * POST intent=matchPayment      link a bank transaction as the invoice's payment (unmatchPayment undoes
  *                               it); the agent then sets paid or part paid from what is linked
+ * POST intent=split             replace a matched payment's journal with its split by the
+ *                               invoice's lines (undoSplit puts the previous journal back)
  *
  * Every invoice is first fetched as the signed-in user (row-level security), so one user can
  * never read or change another's by guessing an id. Rules about *what* may change (lifecycle,
@@ -33,7 +34,7 @@ import {
 } from '~/lib/api/invoices.server';
 import { requestAccessToken } from '~/lib/api/agent-auth.server';
 import { getServerSupabaseClient } from '~/lib/supabase';
-import type { StockDecision } from '~/types/invoice';
+import type { LineUpdate } from '~/types/invoice';
 
 const MAX_FILE_BYTES = 10 * 1024 * 1024;
 const STATUSES = ['DRAFT', 'OPEN', 'PAID', 'PARTIALLY_PAID', 'OVERDUE', 'CANCELLED', 'VOID'];
@@ -96,8 +97,6 @@ export async function action({ request }: ActionFunctionArgs) {
         return await setStatus(request, invoice, form);
       case 'update':
         return await update(request, invoice, form);
-      case 'stock':
-        return await stock(request, invoice, form);
       case 'delete':
         return await remove(request, invoice);
       case 'attachOriginal':
@@ -105,6 +104,9 @@ export async function action({ request }: ActionFunctionArgs) {
       case 'matchPayment':
       case 'unmatchPayment':
         return await matchPayment(request, invoice, form, intent === 'matchPayment');
+      case 'split':
+      case 'undoSplit':
+        return await split(request, invoice, form, intent === 'split');
       default:
         return fail('Unknown action', 400);
     }
@@ -146,6 +148,7 @@ async function upload(request: Request, form: FormData) {
       invoice: { id: string; invoice_number: string | null; invoice_type: string };
       contact: { name: string; company_name: string | null } | null;
       extraction: { confidence_score: number };
+      payment_match: { amount: number; currency: string; occurred_at: string } | null;
     }>('/accounting/invoices/process', await requestAccessToken(request), {
       method: 'POST',
       body: agentForm,
@@ -157,6 +160,8 @@ async function upload(request: Request, form: FormData) {
       direction: result.invoice.invoice_type,
       counterparty: result.contact?.company_name || result.contact?.name || null,
       confidence: result.extraction?.confidence_score ?? null,
+      // Linked on upload because one payment carries its number and exact amount.
+      paymentMatched: !!result.payment_match,
     });
   } catch (error) {
     // Extraction failed, so no invoice points at the file: do not leave it orphaned.
@@ -217,10 +222,16 @@ async function setStatus(request: Request, invoice: OwnedInvoice, form: FormData
   const status = String(form.get('status') ?? '').toUpperCase();
   if (!STATUSES.includes(status)) return fail('Unknown status', 400);
 
+  // Paid with no bank transaction behind it: how (cash, personally), and a note.
+  const how = form.get('paidOutsideBank');
+  const outside =
+    how === 'cash' || how === 'paid_personally' || how === 'other'
+      ? { paid_outside_bank: how, note: String(form.get('note') ?? '') }
+      : {};
   await callAgent(
     `/accounting/invoices/${invoice.id}/status`,
     await requestAccessToken(request),
-    jsonInit('PATCH', { entity_id: invoice.entity_id, status })
+    jsonInit('PATCH', { entity_id: invoice.entity_id, status, ...outside })
   );
   return json({ ok: true, status });
 }
@@ -249,6 +260,25 @@ async function matchPayment(
   return json({ ok: true });
 }
 
+async function split(request: Request, invoice: OwnedInvoice, form: FormData, apply: boolean) {
+  const transactionId = String(form.get('transactionId') ?? '');
+  if (!transactionId) return fail('A transaction id is required', 400);
+  const token = await requestAccessToken(request);
+  const path = `/accounting/invoices/${invoice.id}/split`;
+  await (apply
+    ? callAgent(
+        path,
+        token,
+        jsonInit('POST', { entity_id: invoice.entity_id, transaction_id: transactionId })
+      )
+    : callAgent(
+        `${path}/${encodeURIComponent(transactionId)}?entity_id=${encodeURIComponent(invoice.entity_id)}`,
+        token,
+        { method: 'DELETE' }
+      ));
+  return json({ ok: true });
+}
+
 async function update(request: Request, invoice: OwnedInvoice, form: FormData) {
   const body: Record<string, unknown> = { entity_id: invoice.entity_id };
   const notes = form.get('notes');
@@ -260,6 +290,12 @@ async function update(request: Request, invoice: OwnedInvoice, form: FormData) {
     return fail('The line accounts were not understood', 400);
   }
   if (coding) body.line_item_gl_accounts = coding;
+  // What each line bought: shown on the invoice only, it changes no product or stock.
+  const kinds = parseJson<Record<string, LineUpdate>>(form.get('lineKinds'));
+  if (form.get('lineKinds') !== null && !kinds) {
+    return fail('What the lines bought was not understood', 400);
+  }
+  if (kinds) body.line_items = kinds;
 
   await callAgent(
     `/accounting/invoices/${invoice.id}`,
@@ -267,19 +303,6 @@ async function update(request: Request, invoice: OwnedInvoice, form: FormData) {
     jsonInit('PATCH', body)
   );
   return json({ ok: true });
-}
-
-async function stock(request: Request, invoice: OwnedInvoice, form: FormData) {
-  const decisions = parseJson<StockDecision[]>(form.get('decisions'));
-  if (!decisions || decisions.length === 0)
-    return fail('Choose how at least one line is handled', 400);
-
-  const result = await callAgent<{ recorded: number; not_recorded: string[] }>(
-    `/accounting/invoices/${invoice.id}/stock`,
-    await requestAccessToken(request),
-    jsonInit('POST', { entity_id: invoice.entity_id, decisions })
-  );
-  return json({ ok: true, recorded: result.recorded, notRecorded: result.not_recorded });
 }
 
 async function remove(request: Request, invoice: OwnedInvoice) {

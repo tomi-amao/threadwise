@@ -4,16 +4,20 @@ Handles the full invoice ingestion pipeline:
 1. AI extraction from uploaded document (PDF/image) via structured output
 2. Contact upsert (supplier or customer)
 3. Invoice record creation
-4. Invoice line items creation
+4. Invoice line items creation, each with what it bought (``line_kind``: a product, a
+   sample or neither) and, for a product, the product it matches
 
-Invoices never post to the ledger: the transaction that pays one is what gets journaled.
+Invoices never post to the ledger: the transaction that pays one is what gets journaled. Nor
+do they touch stock: what a line bought is shown on the invoice, and nothing is written to
+``products``, ``inventory_items`` or ``inventory_movements``.
 """
 
 import asyncio
 import base64
+import hashlib
 import logging
 import re
-from typing import Any, Dict, List, Literal, Optional, Tuple, cast
+from typing import Any, Dict, List, Literal, NamedTuple, Optional, Tuple, cast
 from uuid import UUID
 
 from langchain.chat_models import init_chat_model
@@ -21,9 +25,9 @@ from pydantic import BaseModel, Field
 
 from ..core.config import Settings
 from ..core.supabase_client import get_supabase_client
-from ..normalization.persistence import persistence_service
 from ..normalization.utils import extract_row, extract_rows
 from .invoice_rules import (
+    PAID_OUTSIDE_BANK_REASONS,
     PAYABLE,
     SYNCED_ORIGINS,
     InvoiceRuleError,
@@ -71,6 +75,10 @@ class ExtractedContact(BaseModel):
     )
 
 
+LineKind = Literal["product", "sample", "other"]
+LINE_KINDS = ("product", "sample", "other")
+
+
 class ExtractedLineItem(BaseModel):
     """A single line item from the invoice."""
 
@@ -95,12 +103,13 @@ class ExtractedLineItem(BaseModel):
             "Use the exact account_number string (e.g. '5010', '5210'). Leave null if unsure."
         ),
     )
-    category: Optional[str] = Field(
+    line_kind: Optional[LineKind] = Field(
         None,
         description=(
-            "Inventory/product category for this line item, e.g. 'Headwear', 'Accessories', "
-            "'Apparel', 'Footwear', 'Stationery', 'Electronics'. "
-            "Use a broad category that fits the industry context. Leave null if unclear."
+            "What this line is. 'product': goods the business sells, bought or made for "
+            "resale. 'sample': a sample, prototype or trial run of a product, not for "
+            "resale. 'other': anything else (shipping, freight, packaging, fees, services, "
+            "tooling, setup or design charges)."
         ),
     )
 
@@ -179,6 +188,76 @@ def document_part(file_content: bytes, mime_type: str) -> Dict[str, Any]:
             "data": b64,
         }
     return {"type": "image_url", "image_url": {"url": f"data:{mime_type};base64,{b64}"}}
+
+
+class DuplicateInvoiceError(InvoiceRuleError):
+    """The upload is an invoice the register already holds: the same file, or the same
+    number from the same counterparty."""
+
+    def __init__(self, message: str, invoice_id: str):
+        super().__init__(message)
+        self.invoice_id = invoice_id
+
+
+def same_number(a: Optional[str], b: Optional[str]) -> bool:
+    """Invoice numbers compared as people write them: case, spaces and punctuation aside."""
+    squash = lambda s: re.sub(r"[^0-9a-z]", "", (s or "").lower())  # noqa: E731
+    return bool(squash(a)) and squash(a) == squash(b)
+
+
+class ProductCatalogue(NamedTuple):
+    """The business's products, keyed for matching an invoice line to one.
+
+    ``by_sku``: an inventory item's SKU (lower case) to its product. ``by_name``: a product's
+    name (lower case, trimmed) to the product. A key that points at more than one product is
+    left out, so an ambiguous line stays unlinked rather than linked to the wrong one.
+    """
+
+    by_sku: Dict[str, str]
+    by_name: Dict[str, str]
+
+
+def _unambiguous(pairs: List[Tuple[str, str]]) -> Dict[str, str]:
+    found: Dict[str, set] = {}
+    for key, product_id in pairs:
+        if key:
+            found.setdefault(key, set()).add(product_id)
+    return {key: next(iter(ids)) for key, ids in found.items() if len(ids) == 1}
+
+
+def build_catalogue(
+    products: List[Dict[str, Any]], items: List[Dict[str, Any]]
+) -> ProductCatalogue:
+    """A catalogue from ``products`` rows (id, name) and ``inventory_items`` rows (sku,
+    product_id). Items without a product (samples, materials) are ignored."""
+    return ProductCatalogue(
+        by_sku=_unambiguous(
+            [
+                (str(i.get("sku") or "").strip().lower(), str(i["product_id"]))
+                for i in items
+                if i.get("product_id")
+            ]
+        ),
+        by_name=_unambiguous(
+            [
+                (str(p.get("name") or "").strip().lower(), str(p["id"]))
+                for p in products
+                if p.get("id")
+            ]
+        ),
+    )
+
+
+def match_product(
+    catalogue: ProductCatalogue, sku: Optional[str], description: Optional[str]
+) -> Optional[str]:
+    """The product an invoice line bought: by SKU first, then by exact name. None when
+    nothing matches, or only ambiguously; the person can link it in the drawer."""
+    if sku and (found := catalogue.by_sku.get(sku.strip().lower())):
+        return found
+    if description:
+        return catalogue.by_name.get(description.strip().lower())
+    return None
 
 
 # =============================================================================
@@ -333,6 +412,10 @@ class InvoiceService:
             "- Look for platform branding, logos, or keywords in the document header/footer "
             "(e.g. PayPal, Revolut, Stripe, Square, Shopify, Xero). "
             "Extract as lowercase (e.g. 'paypal', 'revolut'). Null if none detected.\n\n"
+            "LINE KINDS (line_kind on each line item):\n"
+            "- 'product' for goods the business sells (bought or made for resale).\n"
+            "- 'sample' for samples, prototypes and trial runs (often marked 'sample').\n"
+            "- 'other' for shipping, freight, packaging, fees, services and setup charges.\n\n"
             "AMOUNTS:\n"
             "- Be precise. Derive missing amounts: if gross and net are present, tax = gross - net.\n"
             "- VAT rate as a percentage (e.g. 20, not 0.20).\n\n"
@@ -452,6 +535,7 @@ class InvoiceService:
         origin: str = "upload",
         external_id: Optional[str] = None,
         attachment_id: Optional[str] = None,
+        file_sha256: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Persist an invoice record to the database.
 
@@ -511,6 +595,7 @@ class InvoiceService:
             "origin": origin,
             "external_id": external_id,
             "attachment_id": attachment_id,
+            "file_sha256": file_sha256,
         }
 
         result = await asyncio.to_thread(
@@ -525,23 +610,45 @@ class InvoiceService:
     # LINE ITEMS CREATION
     # =========================================================================
 
+    async def product_catalogue(self, entity_id: UUID) -> ProductCatalogue:
+        """The business's products and the SKUs of their inventory items, for matching.
+        Reads only."""
+        products = await asyncio.to_thread(
+            lambda: self.client.table("products")
+            .select("id, name")
+            .eq("entity_id", str(entity_id))
+            .execute()
+        )
+        items = await asyncio.to_thread(
+            lambda: self.client.table("inventory_items")
+            .select("sku, product_id")
+            .eq("entity_id", str(entity_id))
+            .not_.is_("product_id", "null")
+            .execute()
+        )
+        return build_catalogue(extract_rows(products), extract_rows(items))
+
     async def create_line_items(
         self,
         invoice_id: UUID,
         line_items: List[ExtractedLineItem],
         chart_of_accounts: Optional[List[Dict[str, Any]]] = None,
         invoice_type: Optional[str] = None,
+        entity_id: Optional[UUID] = None,
     ) -> List[Dict[str, Any]]:
         """Insert invoice line items, resolving AI-suggested GL codes to account UUIDs.
 
         Validates that GL codes match the invoice type (e.g. PURCHASE invoices
-        should not have revenue accounts).
+        should not have revenue accounts). Each line keeps the kind the extraction gave it
+        (product, sample or other) and, for a product with ``entity_id`` given, the
+        business's product it matches (``match_product``). Only the line is written.
 
         Args:
             invoice_id: Invoice UUID
             line_items: Extracted line items (may include suggested_gl_code)
             chart_of_accounts: Pre-fetched CoA used to resolve account_number → UUID
             invoice_type: 'SALE' or 'PURCHASE' — used to validate GL code types
+            entity_id: The business, to match product lines to its products
 
         Returns:
             List of created line item dicts
@@ -560,6 +667,12 @@ class InvoiceService:
                 if num and acct_id:
                     coa_by_code[str(num)] = str(acct_id)
                     coa_type_by_code[str(num)] = acct_type
+
+        catalogue = (
+            await self.product_catalogue(entity_id)
+            if entity_id and any(i.line_kind == "product" for i in line_items)
+            else ProductCatalogue({}, {})
+        )
 
         # Account types that are invalid for each invoice type
         invalid_types_for_purchase = {"revenue", "income"}
@@ -618,6 +731,12 @@ class InvoiceService:
                     "tax_code": tax_code,
                     "vat_rate": item.vat_rate or 0.0,
                     "gl_account_id": gl_account_id,
+                    "line_kind": item.line_kind or "other",
+                    "product_id": (
+                        match_product(catalogue, item.sku, item.description)
+                        if item.line_kind == "product"
+                        else None
+                    ),
                 }
             )
 
@@ -663,6 +782,11 @@ class InvoiceService:
             2. Contact upsert (counterparty only, never our own entity)
             3. Invoice creation (source = AI-detected platform or 'manual')
             4. Line item creation (with GL account resolution from CoA)
+            5. Matching to its payment (``invoice_matching.auto_match``): linked only when
+               a transaction carries the invoice number and the exact amount
+
+        A duplicate is refused with DuplicateInvoiceError before anything is written: the
+        same file (checked before the model reads it) or the same counterparty and number.
 
         Args:
             entity_id: Business entity UUID
@@ -672,8 +796,12 @@ class InvoiceService:
             file_path: Supabase storage path (e.g. "entity_id/timestamp-name.pdf")
 
         Returns:
-            { invoice, contact, line_items, extraction }
+            { invoice, contact, line_items, extraction, payment_match }
         """
+        # The same file again is refused before the model is paid to read it.
+        file_sha256 = hashlib.sha256(file_content).hexdigest()
+        await self._refuse_duplicate_file(entity_id, file_sha256)
+
         # Step 0: Fetch entity + CoA for AI context
         entity = await self._fetch_entity(entity_id)
         entity_name: str = (
@@ -720,6 +848,9 @@ class InvoiceService:
             entity_id, extracted.counterparty, contact_type
         )
         logger.info(f"Contact upserted: {contact['id']} ({contact['name']})")
+        await self._refuse_duplicate_number(
+            entity_id, UUID(contact["id"]), extracted.invoice_number
+        )
 
         # Determine source label: prefer AI-detected platform, fall back to 'manual'
         source_label = extracted.payment_source or "manual"
@@ -731,29 +862,36 @@ class InvoiceService:
             UUID(contact["id"]),
             source=source_label,
             file_path=file_path,
+            file_sha256=file_sha256,
         )
         logger.info(f"Invoice created: {invoice['id']} (source: {source_label})")
 
-        # Step 4: Create line items (pass CoA + type so GL codes can be resolved & validated)
+        # Step 4: Create line items (pass CoA + type so GL codes can be resolved & validated,
+        # and the business so product lines can be matched to its products)
         line_items = await self.create_line_items(
             UUID(invoice["id"]),
             extracted.line_items,
             chart_of_accounts=coa,
             invoice_type=extracted.invoice_type,
+            entity_id=entity_id,
         )
         logger.info(f"Created {len(line_items)} line items")
 
-        # NOTE: Inventory movements are NO LONGER created automatically here.
-        # They are created only when the user explicitly selects product line items
-        # via the Product Selection Modal → create_products_from_line_items().
-        # This ensures only items the user identifies as products/inventory get
-        # stock records, while non-product items (R&D, marketing, giveaways)
-        # remain pure expenses with no inventory footprint.
+        # Step 5: Match it to its payment, if one confidently fits. A failure here never
+        # fails the upload: the invoice is in, and is matched again after the next sync.
+        from .invoice_matching import auto_match
+
+        try:
+            payment_match = await auto_match(entity_id, UUID(invoice["id"]))
+        except Exception as exc:
+            logger.warning(f"Matching invoice {invoice['id']} failed: {exc}")
+            payment_match = None
 
         return {
             "invoice": invoice,
             "contact": contact,
             "line_items": line_items,
+            "payment_match": payment_match,
             "extraction": {
                 "invoice_type": extracted.invoice_type,
                 "payment_source": extracted.payment_source,
@@ -762,121 +900,44 @@ class InvoiceService:
             },
         }
 
-    # =========================================================================
-    # INVENTORY MOVEMENT RECORDING
-    # =========================================================================
-
-    # Fee-like keywords — line items matching these are NOT stock purchases
-    _FEE_KEYWORDS = frozenset(
-        [
-            "fee",
-            "fees",
-            "charge",
-            "charges",
-            "shipping",
-            "postage",
-            "delivery",
-            "handling",
-            "discount",
-            "credit",
-            "adjustment",
-            "service charge",
-            "surcharge",
-            "commission",
-            "tax",
-            "vat",
-            "duty",
-            "tariff",
-            "insurance",
-        ]
-    )
-
-    # Pre-compiled regex: whole-word match for each keyword
-    _FEE_PATTERN = re.compile(
-        r"\b(?:" + "|".join(re.escape(k) for k in _FEE_KEYWORDS) + r")\b",
-        re.IGNORECASE,
-    )
-
-    def _is_stockable_line(self, description: str) -> bool:
-        """Heuristic: return False if the line item looks like a fee / service.
-
-        Uses whole-word matching so e.g. 'trendsbyafeez' is NOT caught by 'fee'.
-        """
-        return not self._FEE_PATTERN.search(description)
-
-    async def _record_purchase_movements(
-        self,
-        entity_id: UUID,
-        line_items: List[Dict[str, Any]],
-        category_map: Optional[Dict[str, str]] = None,
-    ) -> List[Dict[str, Any]]:
-        """Record PURCHASE inventory movements for stockable line items.
-
-        Skips fee-like items (shipping, discounts, etc.) and lines with
-        no quantity or no unit_cost.
-
-        Returns list of movement dicts for items that were recorded.
-        """
-        recorded: List[Dict[str, Any]] = []
-
-        for item in line_items:
-            description = item.get("description", "")
-            quantity = item.get("quantity")
-            unit_cost = item.get("unit_cost")
-
-            # Skip non-stockable or zero-quantity items
-            if not quantity or quantity <= 0:
-                continue
-            if unit_cost is None:
-                continue
-            if not self._is_stockable_line(description):
-                continue
-
-            # Prefer SKU stored on the line item by the AI; fall back to heuristic extraction
-            sku_candidate = item.get("sku") or self._extract_sku_from_description(
-                description
+    async def _refuse_duplicate_file(self, entity_id: UUID, file_sha256: str) -> None:
+        rows = extract_rows(
+            await asyncio.to_thread(
+                lambda: self.client.table("invoices")
+                .select("id, invoice_number")
+                .eq("entity_id", str(entity_id))
+                .eq("file_sha256", file_sha256)
+                .limit(1)
+                .execute()
+            )
+        )
+        if rows:
+            raise DuplicateInvoiceError(
+                f"This file is already in your invoices as {rows[0]['invoice_number']}.",
+                rows[0]["id"],
             )
 
-            try:
-                movement_id = (
-                    await persistence_service.record_purchase_movement_for_invoice_line(
-                        invoice_line_item_id=UUID(item["id"]),
-                        entity_id=entity_id,
-                        sku=sku_candidate,
-                        description=description,
-                        quantity=float(quantity),
-                        unit_cost=float(unit_cost),
-                        category=(category_map or {}).get(description),
-                    )
+    async def _refuse_duplicate_number(
+        self, entity_id: UUID, counterparty_id: UUID, invoice_number: Optional[str]
+    ) -> None:
+        if not invoice_number:
+            return
+        rows = extract_rows(
+            await asyncio.to_thread(
+                lambda: self.client.table("invoices")
+                .select("id, invoice_number")
+                .eq("entity_id", str(entity_id))
+                .eq("counterparty_id", str(counterparty_id))
+                .execute()
+            )
+        )
+        for row in rows:
+            if same_number(row.get("invoice_number"), invoice_number):
+                raise DuplicateInvoiceError(
+                    f"Invoice {row['invoice_number']} from this supplier or customer is "
+                    "already in your invoices.",
+                    row["id"],
                 )
-                if movement_id:
-                    recorded.append(
-                        {"movement_id": str(movement_id), "line_item_id": item["id"]}
-                    )
-            except Exception as exc:
-                logger.warning(
-                    "Failed to record purchase movement for line %s: %s",
-                    item.get("id"),
-                    exc,
-                )
-
-        return recorded
-
-    @staticmethod
-    def _extract_sku_from_description(description: str) -> Optional[str]:
-        """Try to extract a SKU from the line item description.
-
-        Returns the first token that looks like a product code
-        (alphanumeric, 3+ chars, contains at least one digit).
-        """
-        import re
-
-        tokens = description.split()
-        for token in tokens[:3]:  # Only check first few tokens
-            cleaned = re.sub(r"[^A-Za-z0-9]", "", token)
-            if len(cleaned) >= 3 and re.search(r"\d", cleaned):
-                return cleaned.upper()
-        return None
 
     # =========================================================================
     # QUERY HELPERS
@@ -946,13 +1007,16 @@ class InvoiceService:
         return extract_rows(result)
 
     async def update_invoice_status(
-        self, invoice_id: UUID, status: str
+        self,
+        invoice_id: UUID,
+        status: str,
+        extra: Optional[Dict[str, Any]] = None,
     ) -> Optional[Dict[str, Any]]:
-        """Write the status as given. Prefer :meth:`set_invoice_status`, which checks the
-        move is allowed."""
+        """Write the status as given, with ``extra`` columns in the same update. Prefer
+        :meth:`set_invoice_status`, which checks the move is allowed."""
         result = await asyncio.to_thread(
             lambda: self.client.table("invoices")
-            .update({"status": status})
+            .update({"status": status, **(extra or {})})
             .eq("id", str(invoice_id))
             .execute()
         )
@@ -972,6 +1036,8 @@ class InvoiceService:
         entity_id: UUID,
         invoice_id: UUID,
         status: str,
+        paid_outside_bank: Optional[str] = None,
+        note: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Move an invoice through its lifecycle.
 
@@ -981,6 +1047,11 @@ class InvoiceService:
         transaction. Repeating the current status is a no-op. A synced invoice's status
         is not the app's to set, and a draft with linked payments is finalised to the
         status those payments imply.
+
+        ``paid_outside_bank`` (with an optional ``note``) marks it paid with no bank
+        transaction behind it: cash, paid personally, or another way the bank feeds do not
+        show. Only for a move to PAID, and only with no payment linked; such an invoice is
+        not matched and takes no payment link until the payment is undone, which clears it.
         """
         invoice = await self._get_owned_invoice(entity_id, invoice_id)
         check_editable(invoice.get("origin"), "status")
@@ -988,6 +1059,29 @@ class InvoiceService:
         current = normalise_status(invoice.get("status"))
         target = normalise_status(status)
         check_transition(current, target)
+
+        extra: Optional[Dict[str, Any]] = None
+        if paid_outside_bank:
+            if target != "PAID":
+                raise InvoiceRuleError(
+                    "Only an invoice marked paid can be paid without the bank."
+                )
+            if paid_outside_bank not in PAID_OUTSIDE_BANK_REASONS:
+                raise InvoiceRuleError(
+                    f"Unknown reason '{paid_outside_bank}' for a payment outside the bank"
+                )
+            if await self.list_payments(invoice_id):
+                raise InvoiceRuleError(
+                    "This invoice has a matched bank payment, so it was paid through the "
+                    "bank. Remove the match first."
+                )
+            extra = {
+                "paid_outside_bank": paid_outside_bank,
+                "paid_outside_bank_note": (note or "").strip() or None,
+            }
+        elif target != "PAID" and invoice.get("paid_outside_bank"):
+            # Undoing the payment undoes how it was paid.
+            extra = {"paid_outside_bank": None, "paid_outside_bank_note": None}
 
         # A draft that already has its payment linked is finalised straight to what the
         # links say, not to OPEN.
@@ -999,11 +1093,12 @@ class InvoiceService:
                 self._amounts(await self.list_payments(invoice_id)),
             )
 
-        updated = (
-            invoice
-            if current == target
-            else await self.update_invoice_status(invoice_id, target)
-        )
+        if extra:
+            updated = await self.update_invoice_status(invoice_id, target, extra)
+        elif current == target:
+            updated = invoice
+        else:
+            updated = await self.update_invoice_status(invoice_id, target)
         return {"invoice": updated, "previous_status": current}
 
     # =========================================================================
@@ -1050,7 +1145,7 @@ class InvoiceService:
         entity_id: UUID,
         invoice_id: UUID,
         transaction_id: UUID,
-        matched_by: Literal["user", "reconciliation", "sync"] = "user",
+        matched_by: Literal["user", "reconciliation", "sync", "auto"] = "user",
     ) -> Dict[str, Any]:
         """Record that a transaction paid this invoice, then set the status it implies.
 
@@ -1064,6 +1159,11 @@ class InvoiceService:
         if status not in PAYABLE and status != "DRAFT":
             raise InvoiceRuleError(
                 f"A {status.lower()} invoice is not owed, so it takes no payment."
+            )
+        if invoice.get("paid_outside_bank"):
+            raise InvoiceRuleError(
+                "This invoice was paid without a bank transaction. Undo that payment "
+                "first to match one."
             )
 
         txn = extract_row(
@@ -1182,6 +1282,7 @@ class InvoiceService:
         invoice_id: UUID,
         updates: Dict[str, Any],
         line_item_gl_updates: Optional[Dict[str, Optional[str]]] = None,
+        line_item_updates: Optional[Dict[str, Dict[str, Any]]] = None,
     ) -> Dict[str, Any]:
         """Update editable invoice fields and optionally line item GL accounts.
 
@@ -1193,6 +1294,11 @@ class InvoiceService:
         line must belong to this invoice (an id from another invoice is rejected rather
         than silently re-coded). The accounts describe what each line was for; nothing
         is posted from them.
+
+        ``line_item_updates`` maps ``{line_item_id: {line_kind?, product_id?}}``: what the
+        line bought. A product must be one of this business's and makes the line a
+        'product' line; a 'sample' or 'other' line has no product. Only the line is written:
+        what an invoice bought is shown, it never changes products or stock.
         """
         invoice = await self._get_owned_invoice(entity_id, invoice_id)
         status = normalise_status(invoice.get("status"))
@@ -1208,13 +1314,17 @@ class InvoiceService:
                     "The direction of an invoice can only be changed while it is a draft."
                 )
 
-        if line_item_gl_updates:
+        if line_item_gl_updates or line_item_updates:
             own_lines = {li["id"] for li in invoice.get("invoice_line_items") or []}
-            foreign = set(line_item_gl_updates) - own_lines
+            foreign = (
+                set(line_item_gl_updates or {}) | set(line_item_updates or {})
+            ) - own_lines
             if foreign:
                 raise InvoiceRuleError(
                     f"{len(foreign)} line item(s) do not belong to this invoice"
                 )
+
+        line_patches = await self._line_patches(entity_id, line_item_updates or {})
 
         if safe_updates:
             await asyncio.to_thread(
@@ -1225,9 +1335,12 @@ class InvoiceService:
             )
 
         for li_id, gl_id in (line_item_gl_updates or {}).items():
+            line_patches.setdefault(li_id, {})["gl_account_id"] = gl_id
+
+        for li_id, patch in line_patches.items():
             await asyncio.to_thread(
                 lambda: self.client.table("invoice_line_items")
-                .update({"gl_account_id": gl_id})
+                .update(patch)
                 .eq("id", li_id)
                 .eq("invoice_id", str(invoice_id))
                 .execute()
@@ -1235,649 +1348,48 @@ class InvoiceService:
 
         return await self.get_invoice(invoice_id) or invoice
 
-    # =========================================================================
-    # PRODUCT CREATION FROM LINE ITEMS
-    # =========================================================================
+    async def _line_patches(
+        self, entity_id: UUID, updates: Dict[str, Dict[str, Any]]
+    ) -> Dict[str, Dict[str, Any]]:
+        """The column changes for each line's kind and product, checked before anything is
+        written: a product must be this business's, and only a product line has one."""
+        wanted = {str(u["product_id"]) for u in updates.values() if u.get("product_id")}
+        if wanted:
+            rows = await asyncio.to_thread(
+                lambda: self.client.table("products")
+                .select("id")
+                .eq("entity_id", str(entity_id))
+                .in_("id", sorted(wanted))
+                .execute()
+            )
+            if wanted - {str(r["id"]) for r in extract_rows(rows)}:
+                raise InvoiceRuleError("That product is not one of this business's")
 
-    async def create_products_from_line_items(
-        self,
-        entity_id: UUID,
-        invoice_id: UUID,
-        line_item_ids: List[str],
-        overrides: Optional[Dict[str, Dict[str, str]]] = None,
-    ) -> List[Dict[str, Any]]:
-        """Create product + inventory entries from user-selected invoice line items.
-
-        Only line items explicitly chosen by the user in the Product Selection
-        Modal are processed.  This is the ONLY path that creates inventory
-        items and purchase movements — ensuring non-product expenses (R&D,
-        marketing, giveaways) never receive stock records.
-
-        Products created from invoices are bare-bones with provider='invoice'
-        and external_id derived from the line item ID. These serve as
-        placeholder entries that can be enriched when synced from an
-        e-commerce platform.
-
-        ``overrides`` is keyed by line_item_id and allows the user to supply
-        corrected name/sku values before products are persisted.
-        """
-        if not line_item_ids:
-            return []
-
-        # Fetch the specified line items
-        result = await asyncio.to_thread(
-            lambda: self.client.table("invoice_line_items")
-            .select("*")
-            .eq("invoice_id", str(invoice_id))
-            .in_("id", line_item_ids)
-            .execute()
-        )
-        items = result.data or []
-
-        if not items:
-            return []
-
-        products_data = []
-        for item in items:
-            description = item.get("description", "")
-            line_item_id = item["id"]
-
-            # Apply user overrides for name / sku if provided
-            row_overrides = (overrides or {}).get(line_item_id, {})
-            name = (row_overrides.get("name") or description).strip()
-            sku = row_overrides.get("sku") or item.get("sku") or None
-
-            if not name:
-                continue
-
-            # Use 'invoice' as provider and line_item_id as external_id
-            # for uniqueness within the (provider, external_id, entity_id) constraint
-            products_data.append(
-                {
-                    "entity_id": str(entity_id),
-                    "provider": "invoice",
-                    "external_id": line_item_id,
-                    "name": name,
-                    "description": description,
-                    "product_type": None,
-                    "status": "draft",
-                    "variants": (
-                        [
-                            {
-                                "external_id": line_item_id,
-                                "sku": sku,
-                                "name": name,
-                                "price": (
-                                    {
-                                        "amount": str(item["unit_cost"]),
-                                        "currency": "GBP",
-                                    }
-                                    if item.get("unit_cost") is not None
-                                    else None
-                                ),
-                                "compare_at_price": None,
-                                "on_sale": False,
-                                "quantity": int(item.get("quantity", 0) or 0),
-                                "is_unlimited": False,
-                                "attributes": {},
-                            }
-                        ]
-                        if sku or item.get("unit_cost") is not None
-                        else []
-                    ),
-                    "tags": [],
-                    "metadata": {
-                        "source": "invoice",
-                        "invoice_id": str(invoice_id),
-                        "line_item_id": line_item_id,
-                        "original_unit_cost": str(item.get("unit_cost", "0")),
-                        "original_quantity": str(item.get("quantity", "0")),
-                    },
+        patches: Dict[str, Dict[str, Any]] = {}
+        for line_id, update in updates.items():
+            kind = update.get("line_kind")
+            if kind is not None and kind not in LINE_KINDS:
+                raise InvoiceRuleError(f"Unknown line kind '{kind}'")
+            patch: Dict[str, Any] = {}
+            if update.get("product_id"):
+                if kind not in (None, "product"):
+                    raise InvoiceRuleError(
+                        "Only a product line can be linked to a product"
+                    )
+                patch = {
+                    "line_kind": "product",
+                    "product_id": str(update["product_id"]),
                 }
-            )
-
-        if not products_data:
-            return []
-
-        # Upsert to handle re-runs gracefully
-        created = await asyncio.to_thread(
-            lambda: self.client.table("products")
-            .upsert(products_data, on_conflict="provider,external_id,entity_id")
-            .execute()
-        )
-
-        created_products = created.data or []
-        logger.info(
-            "Created %d products from invoice %s line items",
-            len(created_products),
-            invoice_id,
-        )
-
-        # Create inventory items + purchase movements for the selected line items.
-        # This is the ONLY place inventory records get created — ensuring items
-        # the user did NOT select (or skipped entirely) never become stock.
-        if created_products and items:
-            # Build category_map from AI extraction data if possible
-            category_map: Dict[str, str] = {}
-            # items already holds the fetched line items
-            inventory_movements = await self._record_purchase_movements(
-                entity_id, items, category_map=category_map
-            )
-            if inventory_movements:
-                logger.info(
-                    "Created %d inventory movements for selected products",
-                    len(inventory_movements),
-                )
-
-            # Link inventory_items → products
-            await self._link_inventory_items_to_products(
-                entity_id, created_products, overrides=overrides
-            )
-
-        return created_products
-
-    async def _link_inventory_items_to_products(
-        self,
-        entity_id: UUID,
-        products: List[Dict[str, Any]],
-        overrides: Optional[Dict[str, Dict[str, str]]] = None,
-    ) -> None:
-        """Set inventory_items.product_id (and sku if overridden) for items
-        whose purchase movement was created from one of the given invoice line items.
-
-        Discovery path:
-          products.external_id (= line_item_id)
-          → inventory_movements.reference_id WHERE transaction_type = 'PURCHASE'
-          → inventory_movements.inventory_item_id
-          → UPDATE inventory_items SET product_id = products.id [, sku = override_sku]
-        """
-        for product in products:
-            product_id = product.get("id")
-            line_item_id = product.get("external_id")
-            if not product_id or not line_item_id:
-                continue
-            try:
-                # Find the PURCHASE movement for this invoice line
-                mv_result = await asyncio.to_thread(
-                    lambda: self.client.table("inventory_movements")
-                    .select("inventory_item_id")
-                    .eq("reference_id", line_item_id)
-                    .eq("reference_table", "invoice_line_items")
-                    .eq("transaction_type", "PURCHASE")
-                    .limit(1)
-                    .execute()
-                )
-                if not mv_result.data:
-                    continue  # No stock movement — product-only line, skip
-                inventory_item_id = mv_result.data[0]["inventory_item_id"]
-
-                # Build the patch: always set product_id; also update sku if the
-                # user supplied an override (so inventory_items.sku stays in sync)
-                row_overrides = (overrides or {}).get(line_item_id, {})
-                override_sku = row_overrides.get("sku") or None
-                patch: Dict[str, Any] = {"product_id": product_id}
-                if override_sku:
-                    patch["sku"] = override_sku
-                    patch["variant_external_id"] = override_sku
-                if row_overrides.get("asset_account_id"):
-                    patch["asset_account_id"] = row_overrides["asset_account_id"]
-                if row_overrides.get("cogs_account_id"):
-                    patch["cogs_account_id"] = row_overrides["cogs_account_id"]
-
-                await asyncio.to_thread(
-                    lambda: self.client.table("inventory_items")
-                    .update(patch)
-                    .eq("id", inventory_item_id)
-                    .eq("entity_id", str(entity_id))
-                    .execute()
-                )
-                logger.debug(
-                    "Linked inventory_item %s → product %s%s",
-                    inventory_item_id,
-                    product_id,
-                    f" (sku → {override_sku})" if override_sku else "",
-                )
-            except Exception as exc:
-                logger.warning(
-                    "Failed to link inventory_item for line %s: %s", line_item_id, exc
-                )
-
-    async def link_line_items_to_existing_products(
-        self,
-        entity_id: UUID,
-        invoice_id: UUID,
-        links: List[Dict[str, Any]],
-    ) -> Dict[str, Any]:
-        """Backfill unit costs on existing inventory items from invoice line items.
-
-        For each {line_item_id, product_id} pair:
-          1. Reads unit_cost from the invoice line item
-          2. Finds all inventory_items linked to that product
-          3. Updates their unit_cost
-          4. Creates a PURCHASE movement per inventory item for COGS tracking
-
-        This is the correct path when the product catalog already exists
-        (e.g. synced from Squarespace) and the user just wants to assign costs
-        from a purchase invoice.
-        """
-        if not links:
-            return {"updated_items": 0, "linked_products": 0}
-
-        line_item_ids = [
-            lnk["line_item_id"] for lnk in links if lnk.get("line_item_id")
-        ]
-        if not line_item_ids:
-            return {"updated_items": 0, "linked_products": 0}
-
-        # Fetch all referenced line items in one round-trip
-        li_result = await asyncio.to_thread(
-            lambda: self.client.table("invoice_line_items")
-            .select("id, unit_cost, quantity, description, sku")
-            .eq("invoice_id", str(invoice_id))
-            .in_("id", line_item_ids)
-            .execute()
-        )
-        line_items_by_id: Dict[str, Any] = {
-            li["id"]: li for li in (li_result.data or [])
-        }
-
-        updated_items = 0
-        linked_products = 0
-
-        for lnk in links:
-            line_item_id = lnk.get("line_item_id")
-            product_id = lnk.get("product_id")
-            if not line_item_id or not product_id:
-                continue
-
-            li = line_items_by_id.get(line_item_id)
-            if not li or li.get("unit_cost") is None:
-                logger.warning(
-                    "Skipping link: line item %s not found or has no unit_cost",
-                    line_item_id,
-                )
-                continue
-
-            unit_cost = float(li["unit_cost"])
-            qty = float(li.get("quantity") or 0)
-            asset_account_id = lnk.get("asset_account_id") or None
-            cogs_account_id = lnk.get("cogs_account_id") or None
-
-            try:
-                # Fetch all inventory_items for this product
-                inv_result = await asyncio.to_thread(
-                    lambda: self.client.table("inventory_items")
-                    .select("id, variant_external_id, sku")
-                    .eq("product_id", product_id)
-                    .eq("entity_id", str(entity_id))
-                    .execute()
-                )
-                inventory_items = inv_result.data or []
-
-                # No inventory_items yet — bootstrap from the product's variants
-                if not inventory_items:
-                    prod_result = await asyncio.to_thread(
-                        lambda: self.client.table("products")
-                        .select("id, name, provider, variants")
-                        .eq("id", product_id)
-                        .eq("entity_id", str(entity_id))
-                        .limit(1)
-                        .execute()
-                    )
-                    product_row = prod_result.data[0] if prod_result.data else None
-                    if not product_row:
-                        logger.warning(
-                            "Product %s not found for entity %s — skipping link",
-                            product_id,
-                            entity_id,
-                        )
-                        continue
-
-                    raw_variants = product_row.get("variants") or []
-                    # Fall back to a single generic entry if product has no variants
-                    if not raw_variants:
-                        raw_variants = [
-                            {"external_id": product_id, "sku": None, "attributes": {}}
-                        ]
-
-                    provider = product_row.get("provider") or "invoice"
-                    to_insert = [
-                        {
-                            "entity_id": str(entity_id),
-                            "product_id": product_id,
-                            "variant_external_id": (v.get("external_id") or product_id),
-                            "sku": v.get("sku") or None,
-                            "description": li.get("description"),
-                            "unit_cost": unit_cost,
-                            "is_unlimited": False,
-                            "provider": provider,
-                            **(
-                                {"asset_account_id": asset_account_id}
-                                if asset_account_id
-                                else {}
-                            ),
-                            **(
-                                {"cogs_account_id": cogs_account_id}
-                                if cogs_account_id
-                                else {}
-                            ),
-                        }
-                        for v in raw_variants
-                    ]
-                    upsert_result = await asyncio.to_thread(
-                        lambda: self.client.table("inventory_items")
-                        .upsert(
-                            to_insert,
-                            on_conflict="entity_id,provider,variant_external_id",
-                        )
-                        .execute()
-                    )
-                    inventory_items = upsert_result.data or []
-                    if not inventory_items:
-                        logger.warning(
-                            "Failed to create inventory_items for product %s — skipping",
-                            product_id,
-                        )
-                        continue
-                    logger.info(
-                        "Bootstrapped %d inventory_item(s) for product %s",
-                        len(inventory_items),
-                        product_id,
-                    )
-
-                # Bulk-update unit_cost (and optionally account IDs) for all variants
-                inv_ids = [item["id"] for item in inventory_items]
-                update_patch: Dict[str, Any] = {"unit_cost": unit_cost}
-                if asset_account_id:
-                    update_patch["asset_account_id"] = asset_account_id
-                if cogs_account_id:
-                    update_patch["cogs_account_id"] = cogs_account_id
-                await asyncio.to_thread(
-                    lambda: self.client.table("inventory_items")
-                    .update(update_patch)
-                    .in_("id", inv_ids)
-                    .eq("entity_id", str(entity_id))
-                    .execute()
-                )
-                updated_items += len(inv_ids)
-
-                # Record a PURCHASE movement for each inventory item.
-                # Use the same column names as persistence_service (quantity, not
-                # quantity_delta; entity_id is not a column on inventory_movements).
-                # Idempotent: skip if a PURCHASE movement already exists for this
-                # line_item_id + inventory_item combination.
-                for inv_item in inventory_items:
-                    try:
-                        existing_mv = await asyncio.to_thread(
-                            lambda: self.client.table("inventory_movements")
-                            .select("id")
-                            .eq("reference_id", line_item_id)
-                            .eq("inventory_item_id", inv_item["id"])
-                            .eq("transaction_type", "PURCHASE")
-                            .limit(1)
-                            .execute()
-                        )
-                        if existing_mv.data:
-                            continue  # Already recorded — skip to stay idempotent
-
-                        movement = {
-                            "inventory_item_id": inv_item["id"],
-                            "quantity": qty,
-                            "unit_cost": unit_cost,
-                            "transaction_type": "PURCHASE",
-                            "reference_id": line_item_id,
-                            "reference_table": "invoice_line_items",
-                            "notes": f"Cost backfilled from invoice {invoice_id}",
-                        }
-                        await asyncio.to_thread(
-                            lambda: self.client.table("inventory_movements")
-                            .insert(movement)
-                            .execute()
-                        )
-                    except Exception as exc:
-                        logger.warning(
-                            "Could not record purchase movement for inv_item %s: %s",
-                            inv_item["id"],
-                            exc,
-                        )
-
-                linked_products += 1
-                logger.info(
-                    "Linked invoice line %s → product %s: updated %d item(s) @ £%.2f",
-                    line_item_id,
-                    product_id,
-                    len(inv_ids),
-                    unit_cost,
-                )
-
-            except Exception as exc:
-                logger.warning(
-                    "Failed to link line item %s to product %s: %s",
-                    line_item_id,
-                    product_id,
-                    exc,
-                )
-
-        return {"updated_items": updated_items, "linked_products": linked_products}
-
-    async def create_inventory_movements_only(
-        self,
-        entity_id: UUID,
-        invoice_id: UUID,
-        line_item_ids: List[str],
-        overrides: Optional[Dict[str, Dict[str, str]]] = None,
-    ) -> Dict[str, Any]:
-        """Create inventory items + PURCHASE movements without creating product catalog entries.
-
-        Used when the user selects Skip (expense) on a line item but still wants
-        to track the physical stock movement (e.g. consumables, raw materials).
-
-        ``overrides`` is keyed by line_item_id and accepts:
-          - ``sku``              — override the SKU used to match/create the inventory_item
-          - ``asset_account_id`` — set the GL asset account on the inventory_item
-          - ``cogs_account_id``  — set the GL COGS account on the inventory_item
-        """
-        if not line_item_ids:
-            return {"recorded": 0}
-
-        result = await asyncio.to_thread(
-            lambda: self.client.table("invoice_line_items")
-            .select("*")
-            .eq("invoice_id", str(invoice_id))
-            .in_("id", line_item_ids)
-            .execute()
-        )
-        items = result.data or []
-        if not items:
-            return {"recorded": 0}
-
-        # Apply SKU overrides before passing to _record_purchase_movements
-        for item in items:
-            item_overrides = (overrides or {}).get(item["id"], {})
-            if item_overrides.get("sku"):
-                item["sku"] = item_overrides["sku"]
-
-        movements = await self._record_purchase_movements(
-            entity_id, items, category_map={}
-        )
-
-        # Apply asset/cogs account overrides to the inventory items created above
-        for item in items:
-            item_overrides = (overrides or {}).get(item["id"], {})
-            asset_account_id = item_overrides.get("asset_account_id")
-            cogs_account_id = item_overrides.get("cogs_account_id")
-            if not asset_account_id and not cogs_account_id:
-                continue
-            try:
-                mv_result = await asyncio.to_thread(
-                    lambda: self.client.table("inventory_movements")
-                    .select("inventory_item_id")
-                    .eq("reference_id", item["id"])
-                    .eq("transaction_type", "PURCHASE")
-                    .limit(1)
-                    .execute()
-                )
-                if not mv_result.data:
-                    continue
-                inv_item_id = mv_result.data[0]["inventory_item_id"]
-                patch: Dict[str, Any] = {}
-                if asset_account_id:
-                    patch["asset_account_id"] = asset_account_id
-                if cogs_account_id:
-                    patch["cogs_account_id"] = cogs_account_id
-                await asyncio.to_thread(
-                    lambda: self.client.table("inventory_items")
-                    .update(patch)
-                    .eq("id", inv_item_id)
-                    .eq("entity_id", str(entity_id))
-                    .execute()
-                )
-            except Exception as exc:
-                logger.warning(
-                    "Failed to apply account overrides for line %s: %s", item["id"], exc
-                )
-
-        return {"recorded": len(movements)}
-
-    # =========================================================================
-    # STOCK DECISIONS (one call for a whole invoice)
-    # =========================================================================
-
-    STOCK_ACTIONS = ("expense", "link", "new", "track")
-
-    async def stock_state(self, invoice_id: UUID, line_item_ids: List[str]) -> set:
-        """Line items that already have a PURCHASE movement recorded against them."""
-        if not line_item_ids:
-            return set()
-        result = await asyncio.to_thread(
-            lambda: self.client.table("inventory_movements")
-            .select("reference_id")
-            .eq("reference_table", "invoice_line_items")
-            .eq("transaction_type", "PURCHASE")
-            .in_("reference_id", line_item_ids)
-            .execute()
-        )
-        return {row["reference_id"] for row in extract_rows(result)}
-
-    async def apply_stock_decisions(
-        self,
-        entity_id: UUID,
-        invoice_id: UUID,
-        decisions: List[Dict[str, Any]],
-    ) -> Dict[str, Any]:
-        """Decide, for each purchase line, whether it is stock and how it is tracked.
-
-        This replaces three separate endpoints that the UI used to call in turn (and race).
-        Each decision is one of:
-
-        * ``expense`` : nothing to record; the line stays a pure expense.
-        * ``link``    : an existing product (``product_id``): set its unit cost from this
-                        line and record the purchase against its inventory items.
-        * ``new``     : create a draft product (``name``, optional ``sku``) and its stock.
-        * ``track``   : record the stock movement without a catalogue product (raw
-                        materials, consumables).
-
-        ``asset_account_id`` / ``cogs_account_id`` are optional on ``link``, ``new`` and
-        ``track``. Every step is idempotent per line, so re-sending a decision is safe.
-
-        Validation happens up front, before anything is written: a bad line fails the
-        whole request rather than leaving the invoice half-applied.
-
-        Returns one result per line: ``recorded`` is whether a purchase movement now
-        exists for it (a line without a quantity or unit cost cannot be recorded).
-        """
-        invoice = await self._get_owned_invoice(entity_id, invoice_id)
-        if (invoice.get("invoice_type") or "PURCHASE").upper() != "PURCHASE":
-            raise InvoiceRuleError("Only purchase invoices carry stock")
-
-        lines = {li["id"]: li for li in invoice.get("invoice_line_items") or []}
-        seen: set = set()
-        for d in decisions:
-            line_id = d.get("line_item_id")
-            action = d.get("action")
-            if line_id not in lines:
-                raise InvoiceRuleError(
-                    f"Line item {line_id} does not belong to this invoice"
-                )
-            if line_id in seen:
-                raise InvoiceRuleError(f"Line item {line_id} appears more than once")
-            seen.add(line_id)
-            if action not in self.STOCK_ACTIONS:
-                raise InvoiceRuleError(f"Unknown stock action '{action}'")
-            if action == "link" and not d.get("product_id"):
-                raise InvoiceRuleError("Choose a product to link each 'link' line to")
-
-        def accounts(d: Dict[str, Any]) -> Dict[str, str]:
-            return {
-                k: d[k] for k in ("asset_account_id", "cogs_account_id") if d.get(k)
-            }
-
-        to_create = [d for d in decisions if d["action"] == "new"]
-        to_link = [d for d in decisions if d["action"] == "link"]
-        to_track = [d for d in decisions if d["action"] == "track"]
-
-        if to_create:
-            await self.create_products_from_line_items(
-                entity_id,
-                invoice_id,
-                [d["line_item_id"] for d in to_create],
-                overrides={
-                    d["line_item_id"]: {
-                        "name": (
-                            d.get("name") or lines[d["line_item_id"]]["description"]
-                        ).strip(),
-                        **({"sku": d["sku"]} if d.get("sku") else {}),
-                        **accounts(d),
-                    }
-                    for d in to_create
-                },
-            )
-        if to_link:
-            await self.link_line_items_to_existing_products(
-                entity_id,
-                invoice_id,
-                [
-                    {
-                        "line_item_id": d["line_item_id"],
-                        "product_id": d["product_id"],
-                        **accounts(d),
-                    }
-                    for d in to_link
-                ],
-            )
-        if to_track:
-            await self.create_inventory_movements_only(
-                entity_id,
-                invoice_id,
-                [d["line_item_id"] for d in to_track],
-                overrides={
-                    d["line_item_id"]: {
-                        **({"sku": d["sku"]} if d.get("sku") else {}),
-                        **accounts(d),
-                    }
-                    for d in to_track
-                },
-            )
-
-        stocked = [d["line_item_id"] for d in decisions if d["action"] != "expense"]
-        recorded_ids = await self.stock_state(invoice_id, stocked)
-        results = [
-            {
-                "line_item_id": d["line_item_id"],
-                "action": d["action"],
-                "recorded": d["line_item_id"] in recorded_ids,
-            }
-            for d in decisions
-        ]
-        return {
-            "results": results,
-            "recorded": sum(1 for r in results if r["recorded"]),
-            "not_recorded": [
-                r["line_item_id"]
-                for r in results
-                if r["action"] != "expense" and not r["recorded"]
-            ],
-        }
+            elif kind in ("sample", "other"):
+                patch = {"line_kind": kind, "product_id": None}
+            else:
+                if kind == "product":
+                    patch["line_kind"] = "product"
+                if "product_id" in update:  # explicitly unlinked
+                    patch["product_id"] = None
+            if patch:
+                patches[line_id] = patch
+        return patches
 
 
 # Global service instance

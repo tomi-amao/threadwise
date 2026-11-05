@@ -63,15 +63,8 @@ jobs:
             ci
             chore
             revert
-          scopes: |
-            frontend
-            backend
-            chat-ui
-            ai-agent
-            deps
-            ci
-            docker
-            db
+          # Any scope is accepted (invoices, revolut, deploy, ...): releases are decided by the
+          # type alone (.github/scripts/next-version.sh), and a fixed list kept rejecting titles.
           requireScope: false
           subjectPattern: ^[A-Z].+$
           subjectPatternError: |

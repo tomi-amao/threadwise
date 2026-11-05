@@ -780,7 +780,17 @@ async function main() {
     sizeBytes: pdf.byteLength,
   };
 
-  type InvLine = [description: string, qty: number, unit: number, vat: number, account?: string];
+  // What a line bought (shown on the invoice only): a product, linked by name to a seeded
+  // product when one is given, a sample, or something else (the default).
+  type InvLine = [
+    description: string,
+    qty: number,
+    unit: number,
+    vat: number,
+    account?: string,
+    kind?: 'product' | 'sample',
+    product?: string,
+  ];
   interface SeedInvoice {
     number: string;
     type: 'SALE' | 'PURCHASE';
@@ -807,8 +817,8 @@ async function main() {
       due: 27,
       document: true,
       lines: [
-        ['Merino yarn 4-ply', 40, 20, 0.2, '1033'],
-        ['Heavy knit swatches', 10, 15, 0.2, '1033'],
+        ['Merino yarn 4-ply', 40, 20, 0.2, '1033', 'product'], // a product, not linked yet
+        ['Heavy knit swatches', 10, 15, 0.2, '1033', 'sample'],
         ['Delivery', 1, 50, 0.2], // left uncoded on purpose
       ],
     },
@@ -883,7 +893,7 @@ async function main() {
       currency: 'EUR',
       issued: 12,
       due: 30,
-      lines: [['Production run: cardigans', 40, 50, 0, '1033']],
+      lines: [['Production run: cardigans', 40, 50, 0, '1033', 'product', 'Heavy Knit Cardigan']],
     },
     {
       number: 'INV-OUT-2000',
@@ -901,7 +911,11 @@ async function main() {
       contact: 'Mill Lane Textiles',
       issued: 100,
       due: -70,
-      lines: [['Cotton jersey', 50, 22, 0, '1033']],
+      lines: [
+        ['Cotton jersey', 50, 22, 0, '1033'],
+        // On another account than the payment's journal (1033), so the journal can be split.
+        ['Courier', 1, 60, 0, '6300'],
+      ],
     },
     {
       number: 'INV-PP-2999',
@@ -989,8 +1003,9 @@ async function main() {
     'id, invoice_number'
   );
   const invoiceId = new Map(insertedInvoices.map(r => [r.invoice_number, r.id]));
+  const productIdByName = new Map([...products, ...extraProducts].map(p => [p.name, p.id]));
   const invoiceLineRows = invoiceSpecs.flatMap(spec =>
-    spec.lines.map(([description, quantity, unit_cost, vat_rate, account]) => ({
+    spec.lines.map(([description, quantity, unit_cost, vat_rate, account, kind, product]) => ({
       invoice_id: invoiceId.get(spec.number),
       description,
       quantity,
@@ -998,6 +1013,8 @@ async function main() {
       vat_rate,
       tax_code: vat_rate > 0 ? 'STANDARD' : 'ZERO',
       gl_account_id: account ? gl[account] : null,
+      line_kind: kind ?? 'other',
+      product_id: product ? (productIdByName.get(product) ?? null) : null,
     }))
   );
   await insertChunked('invoice_line_items', 'invoice_line_items', invoiceLineRows, 'id');
@@ -1026,7 +1043,12 @@ async function main() {
         financial_transaction_id: t.id,
         amount: Math.abs(Number(t.amount)),
         currency_code: t.currency_code,
-        matched_by: 'user',
+        // The paid one was matched on upload: its number and amount agree with the payment.
+        matched_by:
+          MATCHED_PAYMENTS[Number(t.external_transaction_id.replace('e2e-txn-', '')) - 1] ===
+          'INV-ML-0900'
+            ? 'auto'
+            : 'user',
       }))
     )
   );
@@ -1043,6 +1065,24 @@ async function main() {
     })
   );
 
+  const splitOf = (number: string) => {
+    const spec = invoiceSpecs.find(s => s.number === number)!;
+    const index = Number(Object.keys(MATCHED_PAYMENTS).find(i => MATCHED_PAYMENTS[+i] === number));
+    const payment = Number(txnRows[index].amount);
+    const gross = totalsOf(spec).gross;
+    const [largest, ...rest] = [...spec.lines].sort((a, b) => b[1] * b[2] - a[1] * a[2]);
+    const others = rest.map(([description, q, u, v, account]) => ({
+      description,
+      account: account!,
+      amount: money((payment * q * u * (1 + v)) / gross),
+    }));
+    const kept = money(payment - others.reduce((n, l) => n + l.amount, 0));
+    return {
+      invoice: number,
+      payment,
+      lines: [{ description: largest[0], account: largest[4]!, amount: kept }, ...others],
+    };
+  };
   const base = invoiceSpecs.filter(s => !s.number.startsWith('INV-BULK'));
   const unpaid = (s: SeedInvoice) => ['OPEN', 'PARTIALLY_PAID'].includes(s.status);
   const late = (s: SeedInvoice) => unpaid(s) && s.due !== null && s.due < 0;
@@ -1079,6 +1119,12 @@ async function main() {
     revolutRequestCounterparty: 'Kestrel Wholesale',
     revolutRequestGross: 150,
     revolutRequestLinesTotal: 300,
+    // What a purchase bought: a production run linked to its product.
+    boughtInvoice: 'INV-PK-5001',
+    boughtProduct: 'Heavy Knit Cardigan',
+    // Its payment's journal split by its lines (services/invoice_split.py): by line gross,
+    // the rounding on the largest line.
+    split: splitOf('INV-ML-0900'),
     receiptInvoice: 'RCPT-RM-0001',
     receiptInvoiceCounterparty: 'Royal Mail Group',
     uploadedCount: invoiceSpecs.filter(s => !s.origin).length,

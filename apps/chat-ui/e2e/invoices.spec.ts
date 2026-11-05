@@ -10,6 +10,8 @@ const gbp0 = (n: number) =>
     maximumFractionDigits: 0,
   }).format(n);
 const num = (n: number) => n.toLocaleString('en-GB');
+const gbp = (n: number) =>
+  new Intl.NumberFormat('en-GB', { style: 'currency', currency: 'GBP' }).format(n);
 
 const table = (page: Page) => page.getByRole('region', { name: 'Invoices' });
 const row = (page: Page, number: string) => table(page).locator('tr', { hasText: number });
@@ -144,7 +146,7 @@ test.describe('invoices', () => {
     const next = drawer.getByRole('region', { name: 'Next step' });
     await expect(next).toContainText('Check the lines, then finalise');
     await expect(next).toContainText('1 line has no account');
-    await expect(next).toContainText('2 lines look like stock');
+    await expect(next).toContainText('1 product line is not linked to a product (optional)');
     await expect(next.getByRole('button', { name: 'Finalise invoice' })).toBeEnabled();
 
     const amounts = drawer.getByRole('region', { name: 'Amounts' });
@@ -154,44 +156,54 @@ test.describe('invoices', () => {
     await expect(drawer.getByRole('region', { name: 'Lines' }).getByRole('listitem')).toHaveCount(
       3
     );
-    await expect(drawer.getByRole('region', { name: 'Stock' })).toBeVisible();
+    await expect(drawer.getByRole('region', { name: 'What this invoice bought' })).toBeVisible();
   });
 
-  test('a sale has no stock section, and a fee line starts as an expense', async ({ page }) => {
+  test('a purchase shows what it bought: products and samples, not freight', async ({ page }) => {
     const sale = await openInvoice(page, inv.draftSale, 'review');
-    await expect(sale.getByRole('region', { name: 'Stock' })).toHaveCount(0);
+    await expect(sale.getByRole('region', { name: 'What this invoice bought' })).toHaveCount(0);
     await page.keyboard.press('Escape');
 
-    const purchase = await openInvoice(page, inv.draftPurchase, 'review');
-    await expect(purchase.getByLabel('Stock handling for Delivery')).toHaveValue('expense');
-    await expect(purchase.getByLabel('Stock handling for Merino yarn 4-ply')).toHaveValue(
-      'undecided'
+    const drawer = await openInvoice(page, inv.draftPurchase, 'review');
+    const bought = drawer.getByRole('region', { name: 'What this invoice bought' });
+    await expect(bought).toContainText('1 product, 40 units; 1 sample, 10 units');
+    await expect(bought.getByRole('listitem')).toHaveCount(2);
+    await expect(bought.locator('li', { hasText: 'Merino yarn 4-ply' })).toContainText(
+      'Not linked to a product'
     );
+    await expect(bought.locator('li', { hasText: 'Heavy knit swatches' })).toContainText('Sample');
+    await expect(bought).not.toContainText('Delivery');
+    await expect(bought).toContainText('does not change your products or stock');
   });
 
-  test('stock choices reveal the fields they need, and apply needs a complete choice', async ({
-    page,
-  }) => {
+  test("a linked product opens that product's page", async ({ page }) => {
+    const drawer = await openInvoice(page, inv.boughtInvoice, 'open');
+    const bought = drawer.getByRole('region', { name: 'What this invoice bought' });
+    const link = bought.getByRole('link', { name: inv.boughtProduct });
+    await expect(link).toHaveAttribute('href', /^\/products\?product=/);
+    await expect(bought).toContainText('Production run: cardigans');
+    await link.click();
+    await expect(page).toHaveURL(/\/products\?product=/);
+    await expect(
+      page.getByRole('dialog').getByRole('heading', { name: inv.boughtProduct })
+    ).toBeVisible();
+  });
+
+  test('changing what a line is offers a product only for a product line', async ({ page }) => {
     const drawer = await openInvoice(page, inv.draftPurchase, 'review');
-    const apply = drawer.getByRole('button', { name: /Apply/ });
-    await expect(apply).toBeDisabled();
+    const bought = drawer.getByRole('region', { name: 'What this invoice bought' });
+    await bought.getByRole('button', { name: 'Change' }).click();
+    const save = bought.getByRole('button', { name: 'Save' });
+    await expect(save).toBeDisabled(); // nothing changed yet
 
-    const yarn = drawer.getByLabel('Stock handling for Merino yarn 4-ply');
-    await yarn.selectOption('link');
-    await expect(drawer.getByLabel('Product for Merino yarn 4-ply')).toBeVisible();
-    await expect(apply).toBeDisabled(); // no product chosen yet
+    await expect(bought.getByLabel('Product for Merino yarn 4-ply')).toBeVisible();
+    await expect(bought.getByLabel('Product for Heavy knit swatches')).toHaveCount(0);
+    await bought.getByLabel('What Heavy knit swatches is').selectOption('product');
+    await expect(bought.getByLabel('Product for Heavy knit swatches')).toBeVisible();
+    await expect(save).toBeEnabled();
 
-    await yarn.selectOption('new');
-    await expect(drawer.getByLabel('Product name for Merino yarn 4-ply')).toHaveValue(
-      'Merino yarn 4-ply'
-    );
-    await expect(apply).toBeEnabled();
-    await expect(apply).toHaveText('Apply 1 decision');
-
-    await yarn.selectOption('track');
-    await expect(drawer.getByLabel('SKU for Merino yarn 4-ply')).toBeVisible();
-    await yarn.selectOption('expense');
-    await expect(apply).toBeDisabled(); // "not stock" needs no record
+    await bought.getByRole('button', { name: 'Cancel' }).click();
+    await expect(bought).toContainText('1 product, 40 units; 1 sample, 10 units');
   });
 
   test('an open invoice offers payment; a paid one links to its bank transaction', async ({
@@ -208,12 +220,37 @@ test.describe('invoices', () => {
     await expect(drawer.getByRole('region', { name: 'Next step' })).toContainText(
       'matched to a bank transaction'
     );
+    // It was matched on upload, because its number and amount agree with the payment.
+    await expect(drawer.getByRole('region', { name: 'Payment match' })).toContainText(
+      'Matched automatically: the invoice number and the amount agree.'
+    );
     await expect(drawer.getByRole('link', { name: /View the transaction/ })).toHaveAttribute(
       'href',
       /\/transactions\?transactionId=/
     );
     await expect(drawer.getByRole('button', { name: 'Undo payment' })).toBeVisible();
     await expect(drawer.getByRole('button', { name: /^Delete/ })).toHaveCount(0);
+  });
+
+  test("a matched purchase shows its payment's journal and the split its lines suggest", async ({
+    page,
+  }) => {
+    const drawer = await openInvoice(page, inv.split.invoice, 'paid');
+    const books = drawer.getByRole('region', { name: 'Payment journal' });
+    await expect(books).toContainText('The payment is journaled to 1033');
+    const split = books.getByRole('list', { name: 'Split' }).getByRole('listitem');
+    await expect(split).toHaveCount(inv.split.lines.length);
+    for (const line of inv.split.lines) {
+      const shown = split.filter({ hasText: line.description });
+      await expect(shown).toContainText(line.account);
+      await expect(shown).toContainText(gbp(line.amount));
+    }
+    await expect(books).toContainText('keeps the payment’s date');
+    await page.keyboard.press('Escape');
+
+    // A sale has nothing to split: its payment is income, journaled from the bank feed.
+    const sale = await openInvoice(page, inv.revolutRequest, 'paid');
+    await expect(sale.getByRole('region', { name: 'Payment journal' })).toHaveCount(0);
   });
 
   test('a void invoice says it stays on record and can be deleted; a live one cannot', async ({
@@ -391,8 +428,21 @@ test.describe('invoices', () => {
       await scan(tab);
     }
     const drawer = await openInvoice(page, inv.draftPurchase, 'review');
-    await expect(drawer.getByRole('region', { name: 'Stock' })).toBeVisible();
+    await drawer
+      .getByRole('region', { name: 'What this invoice bought' })
+      .getByRole('button', { name: 'Change' })
+      .click();
     await scan('draft purchase drawer');
+    await page.keyboard.press('Escape');
+
+    const overdue = await openInvoice(page, inv.overduePurchase, 'open');
+    await overdue.getByRole('button', { name: 'Paid without the bank' }).click();
+    await scan('paid without the bank form');
+    await page.keyboard.press('Escape');
+
+    const split = await openInvoice(page, inv.split.invoice, 'paid');
+    await expect(split.getByRole('button', { name: 'Split the journal' })).toBeVisible();
+    await scan('journal split proposal');
     await page.keyboard.press('Escape');
 
     await openInvoice(page, inv.revolutRequest, 'paid');

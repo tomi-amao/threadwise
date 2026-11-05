@@ -4,7 +4,8 @@
  * Right-hand slide-over for one transaction: details, its journal (the double entry), and an
  * edit form. Behaviour is unchanged from the previous drawer: saving always asks the API to
  * re-journal, changing the ledger account on a posted journal reverses and recreates it, and
- * excluding a transaction reverses any journal.
+ * excluding a transaction reverses any journal. A journal split by a matched invoice's lines
+ * (journal type invoice_split) links to that invoice, where the split is undone.
  */
 
 import { useCallback, useEffect, useState } from 'react';
@@ -18,6 +19,7 @@ import {
   FilePdf,
   Paperclip,
 } from 'phosphor-react';
+import { Link } from 'react-router';
 import { toast } from 'sonner';
 import { Button } from '~/components/ui/button';
 import { Chip, type ChipTone } from '~/components/ui/chip';
@@ -307,6 +309,14 @@ export function TransactionDrawer({
   const [isLoading, setIsLoading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
+  // Which invoice split this journal (services/invoice_split.py writes its id and number).
+  const split =
+    journal?.journal_type === 'invoice_split' && typeof journal.metadata?.invoice_id === 'string'
+      ? {
+          invoiceId: journal.metadata.invoice_id,
+          invoiceNumber: String(journal.metadata.invoice_number ?? ''),
+        }
+      : null;
 
   useEffect(() => {
     if (!transactionId) {
@@ -512,6 +522,19 @@ export function TransactionDrawer({
                   <span>· {shortDate(journal.journal_date)}</span>
                 </div>
                 {journal.description && <p className="mt-3 text-text-2">{journal.description}</p>}
+                {split && (
+                  <p className="mt-2 text-[13px] text-text-2">
+                    Split across the lines of the invoice it paid. To put the single journal back,
+                    undo the split on{' '}
+                    <Link
+                      to={`/invoices?invoice=${encodeURIComponent(split.invoiceId)}`}
+                      className="rounded-sm text-accent-text underline underline-offset-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    >
+                      invoice {split.invoiceNumber}
+                    </Link>
+                    .
+                  </p>
+                )}
                 {journal.line_items && journal.line_items.length > 0 ? (
                   <JournalTable items={journal.line_items} />
                 ) : (
@@ -548,7 +571,8 @@ export function TransactionDrawer({
                 {journal?.status === 'posted' && (
                   <p className="mt-4 rounded-xl border bg-muted px-4 py-3 text-sm text-text-2">
                     This transaction has a posted journal. Changing the ledger account reverses it
-                    and creates a corrected entry.
+                    and creates a corrected entry
+                    {split ? ' on that one account, in place of the split by the invoice' : ''}.
                   </p>
                 )}
                 <EditForm

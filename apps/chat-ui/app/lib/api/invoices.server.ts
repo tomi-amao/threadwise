@@ -16,6 +16,7 @@ import { getServerSupabaseClient } from '~/lib/supabase';
 import { getRequestSupabaseClient } from '~/lib/supabase-server';
 import { getApiBaseUrl } from './base-url';
 import { fetchAllRows } from './paginate.server';
+import { requestAccessToken } from './agent-auth.server';
 import { getAttachmentUrl } from './transactions.server';
 
 export { getUserEntity } from './entity.server';
@@ -27,14 +28,16 @@ import type {
   InvoiceLineItem,
   InvoiceOrigin,
   InvoiceRow,
+  MatchedBy,
   PaymentCandidate,
+  SplitProposal,
 } from '~/types/invoice';
 
 const CONTACT_COLUMNS = 'id, name, company_name, email, contact_type';
 const LIST_COLUMNS =
   'id, entity_id, invoice_number, invoice_type, status, currency, net_amount, tax_amount, ' +
   'gross_amount, invoice_date, due_date, source, notes, created_at, file_path, origin, ' +
-  'attachment_id';
+  'attachment_id, paid_outside_bank, paid_outside_bank_note';
 
 interface InvoiceDbRow extends Omit<InvoiceRow, 'document' | 'contacts' | 'origin'> {
   file_path: string | null;
@@ -98,7 +101,8 @@ export async function getInvoiceDetail(
     .select(
       `${LIST_COLUMNS}, contacts:counterparty_id(${CONTACT_COLUMNS}), ` +
         'invoice_line_items(id, invoice_id, description, sku, quantity, unit_cost, ' +
-        'gl_account_id, tax_code, vat_rate, line_net, line_vat, line_gross)'
+        'gl_account_id, tax_code, vat_rate, line_net, line_vat, line_gross, line_kind, ' +
+        'product:product_id(id, name))'
     )
     .eq('id', invoiceId)
     .maybeSingle();
@@ -123,38 +127,26 @@ export async function getInvoiceDetail(
     .sort((a, b) => a.id.localeCompare(b.id));
 
   const entityId = invoice.entity_id;
-  const [matched, stocked, accounts, products, candidates] = await Promise.all([
+  const [matched, accounts, products] = await Promise.all([
     findMatchingTransaction(user, invoiceId),
-    readStockedLines(
-      user,
-      lines.map(l => l.id)
-    ),
     readGlAccounts(user),
     readProducts(user, entityId),
-    findPaymentCandidates(user, invoice),
+  ]);
+  const [candidates, splits] = await Promise.all([
+    matched ? [] : findPaymentCandidates(request, invoice),
+    matched && invoice.invoice_type === 'PURCHASE' ? findSplitProposals(request, invoice) : [],
   ]);
 
   return {
     invoice,
     lines,
-    matched_transaction_id: matched,
-    payment_candidates: matched ? [] : candidates,
-    stocked_line_ids: stocked,
+    matched_transaction_id: matched?.transactionId ?? null,
+    matched_by: matched?.matchedBy ?? null,
+    payment_candidates: candidates,
+    split_proposals: splits,
     gl_accounts: accounts,
     products,
   };
-}
-
-async function readStockedLines(supabase: SupabaseClient, lineIds: string[]): Promise<string[]> {
-  if (lineIds.length === 0) return [];
-  const { data, error } = await supabase
-    .from('inventory_movements')
-    .select('reference_id')
-    .eq('reference_table', 'invoice_line_items')
-    .eq('transaction_type', 'PURCHASE')
-    .in('reference_id', lineIds);
-  if (error) throw new Error(`Failed to load stock movements: ${error.message}`);
-  return [...new Set((data ?? []).map(r => r.reference_id as string))];
 }
 
 /** The chart of accounts is shared by every business (it has no entity column). */
@@ -184,78 +176,92 @@ async function readProducts(user: SupabaseClient, entityId: string) {
 
 /**
  * The bank transaction matched to this invoice as its payment (the earliest, if several part
- * payments are). null means no match, a normal result; a failing query throws.
+ * payments are), and how it was matched. null means no match, a normal result; a failing
+ * query throws.
  */
 export async function findMatchingTransaction(
   supabase: SupabaseClient,
   invoiceId: string
-): Promise<string | null> {
+): Promise<{ transactionId: string; matchedBy: MatchedBy } | null> {
   const { data, error } = await supabase
     .from('invoice_payments')
-    .select('financial_transaction_id')
+    .select('financial_transaction_id, matched_by')
     .eq('invoice_id', invoiceId)
     .order('created_at')
     .limit(1)
     .maybeSingle();
   if (error) throw new Error(`Failed to check for a matching payment: ${error.message}`);
-  return (data?.financial_transaction_id as string | undefined) ?? null;
+  return data
+    ? {
+        transactionId: data.financial_transaction_id as string,
+        matchedBy: data.matched_by as MatchedBy,
+      }
+    : null;
 }
 
 /**
- * Bank transactions that could be the payment for a finalised invoice: money going the right way
- * (out for a purchase, in for a sale), in the invoice's currency, within 10% of its total, and
- * not already matched to another invoice. Nearest amount first.
+ * The bank transactions most likely to be this invoice's payment, best first, as the agent
+ * scores them (services/invoice_matching.py: the invoice number on the transaction, the exact
+ * amount, the counterparty's name, the date). Drafts included. Suggestions are a help, not
+ * the page: if the agent cannot be reached the drawer shows none rather than failing.
  */
 export async function findPaymentCandidates(
-  supabase: SupabaseClient,
+  request: Request,
   invoice: InvoiceRow
 ): Promise<PaymentCandidate[]> {
-  if (invoice.status === 'DRAFT' || invoice.status === 'CANCELLED' || invoice.status === 'VOID') {
+  if (invoice.status === 'CANCELLED' || invoice.status === 'VOID') return [];
+  try {
+    const result = await callAgent<{
+      candidates: {
+        transaction_id: string;
+        occurred_at: string;
+        description: string | null;
+        counterparty: string | null;
+        amount: number;
+        currency: string;
+        reasons: string[];
+        confident: boolean;
+      }[];
+    }>(
+      `/accounting/invoices/${invoice.id}/payment-candidates?entity_id=${encodeURIComponent(invoice.entity_id)}`,
+      await requestAccessToken(request)
+    );
+    return result.candidates.map(c => ({
+      id: c.transaction_id,
+      occurred_at: c.occurred_at,
+      description: c.description,
+      counterparty: c.counterparty,
+      amount: Number(c.amount),
+      currency: c.currency,
+      reasons: c.reasons,
+      confident: c.confident,
+    }));
+  } catch (error) {
+    console.warn('Payment suggestions unavailable:', error);
     return [];
   }
-  const total = invoice.gross_amount;
-  if (!(total > 0)) return [];
-  const { data, error } = await supabase
-    .from('financial_transactions')
-    .select('id, occurred_at, description, counterparty_name, amount, currency_code')
-    .eq('entity_id', invoice.entity_id)
-    .eq('direction', invoice.invoice_type === 'SALE' ? 'in' : 'out')
-    .eq('currency_code', invoice.currency)
-    .is('excluded_reason', null)
-    .gte('amount', total * 0.9)
-    .lte('amount', total * 1.1)
-    .order('occurred_at', { ascending: false })
-    .limit(200);
-  if (error) throw new Error(`Failed to look for a matching payment: ${error.message}`);
-  const rows = data ?? [];
-  // A transaction pays one invoice, so those already matched are not offered.
-  const { data: taken, error: takenError } = rows.length
-    ? await supabase
-        .from('invoice_payments')
-        .select('financial_transaction_id')
-        .in(
-          'financial_transaction_id',
-          rows.map(t => t.id as string)
-        )
-    : { data: [], error: null };
-  if (takenError) throw new Error(`Failed to look for a matching payment: ${takenError.message}`);
-  const matched = new Set((taken ?? []).map(t => t.financial_transaction_id as string));
-  return rows
-    .filter(t => !matched.has(t.id as string))
-    .map(t => ({
-      id: t.id as string,
-      occurred_at: t.occurred_at as string,
-      description: (t.description as string | null) ?? null,
-      counterparty: (t.counterparty_name as string | null) ?? null,
-      amount: Number(t.amount),
-      currency: t.currency_code as string,
-    }))
-    .sort(
-      (a, b) =>
-        Math.abs(a.amount - total) - Math.abs(b.amount - total) ||
-        b.occurred_at.localeCompare(a.occurred_at)
-    )
-    .slice(0, 8);
+}
+
+/**
+ * For each payment matched to a purchase: how its journal would be split by the invoice's lines,
+ * or that it already is, or why it cannot be (services/invoice_split.py). Nothing is stored by
+ * asking. null when the agent cannot be reached, so the drawer can say so rather than show
+ * nothing, which would read as "there is no split".
+ */
+export async function findSplitProposals(
+  request: Request,
+  invoice: InvoiceRow
+): Promise<SplitProposal[] | null> {
+  try {
+    const result = await callAgent<{ proposals: SplitProposal[] }>(
+      `/accounting/invoices/${invoice.id}/split?entity_id=${encodeURIComponent(invoice.entity_id)}`,
+      await requestAccessToken(request)
+    );
+    return result.proposals;
+  } catch (error) {
+    console.warn('Journal split unavailable:', error);
+    return null;
+  }
 }
 
 /** The minimum a write needs to know about an invoice the user may touch. */

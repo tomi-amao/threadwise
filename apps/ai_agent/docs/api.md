@@ -46,10 +46,14 @@ Router guard: **entity**, except `/health-checks` (**internal**).
 | GET    | `/invoices/{invoice_id}`                           | owned                                         |
 | PATCH  | `/invoices/{invoice_id}`                           | owned                                         |
 | PATCH  | `/invoices/{invoice_id}/status`                    | owned; lifecycle rules, 409 if not allowed    |
+| GET    | `/invoices/{invoice_id}/payment-candidates`        | owned; likely payments, with why they fit     |
+| POST   | `/invoices/match`                                  | match every unlinked upload (Inngest)         |
+| GET    | `/invoices/{invoice_id}/split`                     | owned; how each payment's journal would split |
+| POST   | `/invoices/{invoice_id}/split`                     | owned; apply one payment's split (409 if not) |
+| DELETE | `/invoices/{invoice_id}/split/{transaction_id}`    | owned; undo that split                        |
 | POST   | `/invoices/{invoice_id}/payments`                  | owned; match a transaction as its payment     |
 | DELETE | `/invoices/{invoice_id}/payments/{transaction_id}` | owned; remove that match                      |
 | DELETE | `/invoices/{invoice_id}`                           | owned                                         |
-| POST   | `/invoices/{invoice_id}/stock`                     | owned                                         |
 | GET    | `/contacts`                                        |                                               |
 | POST   | `/contacts`                                        |                                               |
 | GET    | `/transactions`                                    |                                               |

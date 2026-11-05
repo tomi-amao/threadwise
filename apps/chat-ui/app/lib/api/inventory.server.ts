@@ -557,7 +557,8 @@ export async function getStockLevels(supabase: SupabaseClient): Promise<StockDat
         unitsGifted: Number(row.units_gifted ?? 0),
         unitsWrittenOff: Number(row.units_written_off ?? 0),
         onHand,
-        stockValue: Math.max(0, onHand) * unitCost,
+        // Samples are never valued: they are counted, but carry no stock value.
+        stockValue: row.item_type === 'sample' ? 0 : Math.max(0, onHand) * unitCost,
       };
     })
     .sort((a: StockLevelRow, b: StockLevelRow) => a.productName.localeCompare(b.productName));

@@ -37,6 +37,7 @@ export const TYPE_LABEL: Record<string, string> = {
   refund: 'Refund',
   fx_conversion: 'Currency exchange',
   receipt: 'Receipt',
+  invoice_split: 'Split by invoice',
 };
 export const typeLabel = (type: string): string =>
   TYPE_LABEL[type] ?? type.replace(/_/g, ' ').replace(/^./, c => c.toUpperCase());

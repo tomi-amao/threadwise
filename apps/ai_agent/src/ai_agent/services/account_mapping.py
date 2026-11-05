@@ -70,7 +70,9 @@ DISCOUNTS = "4120"  # Discounts & Promotional Allowances
 # and only reaches the P&L via COGS_FINISHED_GOODS when the item actually sells.
 INVENTORY_FINISHED_GOODS = "1033"  # Inventory — Finished Goods
 INVENTORY_TRIMS = "1034"  # Inventory — Trims & Accessories
-INVENTORY_SAMPLES = "1035"  # Inventory — Samples
+INVENTORY_SAMPLES = (
+    "1035"  # Inventory — Samples: never posted to (samples are not valued)
+)
 
 # ── COGS ────────────────────────────────────────────────────────────────────
 COGS_FINISHED_GOODS = "5005"  # COGS — Finished Goods Sold (perpetual, per sale)

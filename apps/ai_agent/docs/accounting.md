@@ -32,7 +32,8 @@ Code: `services/journal_service.py` (`JournalService`, the journals), `services/
 | FX conversion      | A currency conversion between accounts                                                                                            | `create_fx_conversion_journal`   |
 | Expense            | An outbound bank transaction: debit the resolved expense account, credit cash                                                     | `create_expense_journal`         |
 | Cost of goods sold | A fulfilled order                                                                                                                 | `create_inventory_cogs_journal`  |
-| Disposal           | A gift or write-off of stock: one dated movement plus its journal                                                                 | `record_inventory_disposal`      |
+| Invoice split      | A payment's expense journal re-cut by the lines of the invoice it paid (approved by a person; see below)                          | `invoice_split.apply_split`      |
+| Disposal           | A gift or write-off of stock: one dated movement plus its journal (a sample: the movement only, as samples are never valued)      | `record_inventory_disposal`      |
 
 A Revolut merchant payment (`reserve_release`) is a funding journal, and carries Revolut's fee
 when the transaction has one (`metadata.fee`, taken from the leg by the normaliser): debit cash
@@ -41,6 +42,35 @@ revenue with what the customer paid (`merchant_fee`; a foreign payment's fee is 
 amount). The settlement and payout that take the money on to the main account are moves between
 the business's own accounts, excluded at normalisation, so the one journal is the whole of it.
 Each journal stands on its own, so the order the three arrive in does not matter.
+
+### Splitting a payment's journal by its invoice
+
+A payment is journaled on its own, usually before its invoice arrives, to one account. Once an
+invoice is matched to it, `services/invoice_split.py` works out how its journal would be re-cut
+by the invoice's lines (`GET /accounting/invoices/{id}/split`), and a person approves it
+(`POST .../split`, undone with `DELETE .../split/{transaction_id}`). The journal stays the
+transaction's: same date, same cash line, journal type `invoice_split`.
+
+- The debit side becomes one line per invoice line, on that line's account, or on the account the
+  payment was journaled to when the line has none.
+- Lines are weighted by their gross and scaled to add up exactly to the payment (rounding on the
+  largest line), so a part payment, a currency difference and a fee are all the same rule. In a
+  non-GBP journal each line's GBP equivalent is its share of the GBP the payment was booked at.
+- VAT is folded into each line (the business is not VAT registered); each line's VAT share is kept
+  in the journal's `metadata.lines`.
+- Only a payment journaled as one expense (posted, or an uncategorised draft) can be split, and
+  purchases only for now.
+
+Applying is one database call (`apply_invoice_split`): it voids the journal it replaces, posts the
+split and records what it replaced in `metadata.replaces`, so the books never hold both or
+neither. `undo_invoice_split` puts the replaced journal back as it was. Both are refused in a
+locked accounting period. A split payment counts as journaled, so journal generation does not
+make it a second expense journal. Changing the transaction's account in its drawer reverses the
+split and journals it afresh, as for any journal.
+
+In the app, the invoice drawer's "In your books" section shows the payment's journal now, the
+split its lines suggest, and Split / Undo (`components/invoices/SplitSection.tsx`); the
+transaction's drawer says when its journal is split and links back to the invoice.
 
 Every journal comes from a money movement (a payment, a bank transaction, a stock movement) or a
 manual adjustment. Invoices are not a source: see [Invoices](#invoices).
@@ -121,7 +151,7 @@ platform the extraction thinks an uploaded invoice was paid through.
 ### Payments
 
 `invoice_payments` links an invoice to the transactions that paid it (amount and currency of
-each, and `matched_by`: `user`, `reconciliation`, `sync` or `backfill`). A transaction pays one
+each, and `matched_by`: `user`, `reconciliation`, `sync`, `backfill` or `auto`). A transaction pays one
 invoice. `InvoiceService.link_payment` and `unlink_payment` (`POST` and
 `DELETE /accounting/invoices/{id}/payments[/{transaction_id}]`) are the only writers; they refuse
 a transaction in the wrong direction (money in pays a sale, money out a purchase), left out of the
@@ -133,6 +163,37 @@ removing the last one makes it `OPEN` again. A payment in another currency canno
 it counts as paid. A draft keeps its place in To review when a payment is linked, and finalising
 it goes straight to what its links say. Marking paid by hand is for money with no transaction
 behind it.
+
+An invoice paid with no bank transaction behind it says how (`invoices.paid_outside_bank`: `cash`,
+`paid_personally` or `other`, with an optional note), set with the move to `PAID`
+(`set_invoice_status(..., paid_outside_bank=...)`) and only when no payment is linked. It is then
+never matched, linking a payment to it is refused, and undoing the payment clears it (a check
+constraint keeps it on `PAID` invoices only). Nothing is posted: the books follow bank
+transactions, so a payment made personally belongs in the director's loan, recorded by hand.
+
+### Matching an upload to its payment
+
+`services/invoice_matching.py` scores the business's transactions against an upload: the right
+direction and currency, counted in the books, not paying another invoice, from 15 days before
+the invoice date to 120 after, and either within 10% of the total or carrying the invoice number
+(a part payment). It scores up the invoice number on the transaction (its text or provider data,
+punctuation aside), the exact amount, the counterparty's name (a long word on its first six
+letters, for cut-short card merchants) and a close date. Each candidate says why it fits.
+
+A candidate is **confident** when it carries the invoice number and the exact amount. When
+exactly one is, the upload is linked to it automatically (`matched_by = 'auto'`); otherwise the
+drawer offers the candidates, drafts included (`GET /accounting/invoices/{id}/payment-candidates`).
+Matching runs on upload and after each Revolut or PayPal sync (`match_invoice_payments`, also
+`POST /accounting/invoices/match` on demand) for every upload that is a draft, open or overdue
+with no payment linked. That pass first removes automatic links whose transaction has since been
+excluded (the PayPal clean-up excludes a PayPal payment a Revolut one covers), so the next match
+finds the one that counts; a person's links are never touched. Against the 35 linked uploads in
+production (2026-11-01) it chose the linked payment for 31 automatically, put it first for the
+other 4, and chose a wrong one for none.
+
+An upload is refused (409, nothing written) when it is the same file as one already held (its
+SHA-256, `invoices.file_sha256`, checked before the model reads it) or carries the same number as
+an invoice from the same counterparty (`same_number`: case and punctuation aside).
 
 Before `invoice_payments`, a match was the invoice number written into the transaction's
 `metadata.invoice_id`, the field providers use for their own references. The migration copied
@@ -146,10 +207,16 @@ Uploaded on the Invoices page. `services/invoice_service.py`:
    (`DEFAULT_CHAT_MODEL`).
 2. Upsert the contact (supplier or customer).
 3. Create the invoice and its line items. Each line can carry a GL account, which says what it
-   was for; nothing is posted from it.
+   was for; nothing is posted from it. Each line also says what it bought (`line_kind`: a
+   product, a sample or something else, proposed by the extraction) and, for a product, the
+   business's product it matches (`product_id`: by SKU, then exact name; `match_product`).
 
-Stock decisions for a purchase's lines (`POST /accounting/invoices/{id}/stock`) record inventory
-movements, whose unit cost feeds the cost of goods sold journal when the stock sells.
+Invoices do not touch stock. What a purchase bought is shown in the invoice drawer and can be
+corrected there (`PATCH /accounting/invoices/{id}` with `line_items`), but nothing is written to
+`products`, `inventory_items` or `inventory_movements`: stock levels and stock value come from
+the stock records. (A Stock section that created products and purchase movements from invoice
+lines was removed; the 67 movements it made in production stay as plain stock records, and
+migration `20261102000000_invoice_line_products` copied what they bought onto their lines.)
 
 The lifecycle is in `services/invoice_rules.py` (pure functions, no I/O; tested in
 `tests/test_invoice_rules.py`):

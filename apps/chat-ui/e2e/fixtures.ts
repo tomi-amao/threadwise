@@ -197,6 +197,15 @@ export interface SeedManifest {
     revolutRequestCounterparty: string;
     revolutRequestGross: number;
     revolutRequestLinesTotal: number;
+    /** A purchase whose one line is a product linked to `boughtProduct`. */
+    boughtInvoice: string;
+    boughtProduct: string;
+    /** A paid purchase whose payment's journal (all on 1033) its two lines can split. */
+    split: {
+      invoice: string;
+      payment: number;
+      lines: { description: string; account: string; amount: number }[];
+    };
     /** A supplier invoice read from the receipt on `attachments.transactionId`, paid by it. */
     receiptInvoice: string;
     receiptInvoiceCounterparty: string;

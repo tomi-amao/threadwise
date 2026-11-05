@@ -19,8 +19,9 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 
 from ...normalization.utils import extract_rows
+from ...services import invoice_matching, invoice_split
 from ...services.invoice_rules import VALID_STATUSES, InvoiceRuleError
-from ...services.invoice_service import invoice_service
+from ...services.invoice_service import DuplicateInvoiceError, invoice_service
 from ...services.journal_service import JournalError, journal_service
 from ...services.paypal_cleaning_service import paypal_cleaning_service
 from ...services.reconciliation_service import reconciliation_service
@@ -87,6 +88,13 @@ class UpdateInvoiceStatusRequest(BaseModel):
     status: str = Field(
         ...,
         description="New status: DRAFT, OPEN, PAID, PARTIALLY_PAID, OVERDUE, CANCELLED, VOID",
+    )
+    paid_outside_bank: Optional[Literal["cash", "paid_personally", "other"]] = Field(
+        None,
+        description="With PAID: paid with no bank transaction behind it, and how",
+    )
+    note: Optional[str] = Field(
+        None, description="A note on a payment outside the bank"
     )
 
 
@@ -684,9 +692,12 @@ async def process_invoice(
     5. Invoice line items created (with GL account resolved from chart of accounts)
 
     The invoice is created as a DRAFT. Invoices never post to the ledger; the
-    transaction that pays one is what gets journaled.
+    transaction that pays one is what gets journaled. It is then matched to its payment
+    when one transaction carries its number and exact amount (``payment_match``).
 
-    Returns the invoice, contact, line items and extraction summary.
+    Returns the invoice, contact, line items, extraction summary and payment match. A
+    duplicate (the same file, or the same number from the same counterparty) is refused
+    with a 409 naming the invoice already held.
     """
     try:
         content = await file.read()
@@ -702,6 +713,8 @@ async def process_invoice(
             invoice_type_override=invoice_type,
         )
         return result
+    except DuplicateInvoiceError as e:  # before ValueError: it is a subclass
+        raise HTTPException(status_code=409, detail=str(e))
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
     except Exception as e:
@@ -754,7 +767,9 @@ async def update_invoice_status(invoice_id: str, request: UpdateInvoiceStatusReq
 
     Moves the lifecycle does not allow (see ``invoice_rules``) are refused with a 409.
     Nothing is posted or reversed: invoices are documents, and the money they describe
-    reaches the ledger through its transaction.
+    reaches the ledger through its transaction. ``paid_outside_bank`` marks a payment
+    with no bank transaction behind it (cash, paid personally); refused if a bank payment
+    is matched.
     """
     if request.status.upper() not in VALID_STATUSES:
         raise HTTPException(
@@ -763,7 +778,11 @@ async def update_invoice_status(invoice_id: str, request: UpdateInvoiceStatusReq
         )
     try:
         return await invoice_service.set_invoice_status(
-            UUID(request.entity_id), UUID(invoice_id), request.status
+            UUID(request.entity_id),
+            UUID(invoice_id),
+            request.status,
+            paid_outside_bank=request.paid_outside_bank,
+            note=request.note,
         )
     except InvoiceRuleError as e:  # before ValueError: it is a subclass
         raise HTTPException(status_code=409, detail=str(e))
@@ -803,6 +822,115 @@ class LinkPaymentRequest(BaseModel):
     transaction_id: str = Field(
         ..., description="The financial transaction that paid it"
     )
+
+
+@router.get(
+    "/invoices/{invoice_id}/payment-candidates", dependencies=[Depends(owned_invoice)]
+)
+async def invoice_payment_candidates(invoice_id: str, entity_id: str):
+    """The transactions most likely to be this invoice's payment, best first.
+
+    Each says why it fits (the invoice number on it, the exact amount, the counterparty's
+    name, how far from the invoice date) and whether it is ``confident`` (number and exact
+    amount). Drafts included. Reads only.
+    """
+    try:
+        candidates = await invoice_matching.candidates_for(
+            UUID(entity_id), UUID(invoice_id)
+        )
+        return {"candidates": candidates}
+    except Exception as e:
+        logger.error(f"Error finding payment candidates: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/invoices/{invoice_id}/split", dependencies=[Depends(owned_invoice)])
+async def invoice_split_proposals(invoice_id: str, entity_id: str):
+    """For each payment matched to the invoice: how its journal would be split by the
+    invoice's lines (``ready``), or that it already is (``applied``), or why it cannot be
+    (``not_journaled``, ``unsupported``). Reads only: nothing is stored until it is applied.
+    """
+    try:
+        proposals = await invoice_split.proposals_for(UUID(entity_id), UUID(invoice_id))
+        return {"proposals": proposals}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error working out invoice splits: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class ApplySplitRequest(BaseModel):
+    entity_id: str
+    transaction_id: str
+
+
+@router.post("/invoices/{invoice_id}/split", dependencies=[Depends(owned_invoice)])
+async def apply_invoice_split(invoice_id: str, request: ApplySplitRequest):
+    """Replace one payment's journal with its split by the invoice, in one step.
+
+    Refused with a 409 when the payment cannot be split, is already split, or is in a locked
+    accounting period; 404 when the invoice or transaction is not the business's.
+    """
+    try:
+        return await invoice_split.apply_split(
+            UUID(request.entity_id), UUID(invoice_id), UUID(request.transaction_id)
+        )
+    except InvoiceRuleError as e:  # before ValueError: it is a subclass
+        raise HTTPException(status_code=409, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error applying an invoice split: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete(
+    "/invoices/{invoice_id}/split/{transaction_id}",
+    dependencies=[Depends(owned_invoice)],
+)
+async def undo_invoice_split(invoice_id: str, transaction_id: str, entity_id: str):
+    """Take the split off one payment and put its previous journal back."""
+    try:
+        return await invoice_split.undo_split(
+            UUID(entity_id), UUID(invoice_id), UUID(transaction_id)
+        )
+    except InvoiceRuleError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error undoing an invoice split: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class MatchInvoicesRequest(BaseModel):
+    entity_id: str
+
+
+@router.post("/invoices/match")
+async def match_invoices(request: MatchInvoicesRequest):
+    """Match every unlinked upload to its payment, in the background.
+
+    Runs the same pass as after each Revolut or PayPal sync (``invoices/match.requested``):
+    automatic links whose transaction has since been excluded are removed, then each
+    unlinked upload is linked when its payment is confident and the only one.
+    """
+    import inngest as inngest_sdk
+
+    from ...integrations.inngest import get_client
+
+    try:
+        await get_client().send(
+            inngest_sdk.Event(
+                name="invoices/match.requested",
+                data={"entity_id": request.entity_id},
+            )
+        )
+        return {"entity_id": request.entity_id, "status": "triggered"}
+    except Exception as e:
+        logger.error(f"Error triggering invoice matching: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/invoices/{invoice_id}/payments", dependencies=[Depends(owned_invoice)])
@@ -851,6 +979,15 @@ async def unlink_invoice_payment(invoice_id: str, transaction_id: str, entity_id
 # =============================================================================
 
 
+class LineItemUpdate(BaseModel):
+    """What a line bought: a product (optionally linked), a sample, or neither."""
+
+    line_kind: Optional[Literal["product", "sample", "other"]] = None
+    product_id: Optional[str] = Field(
+        None, description="A product of this business; only on a 'product' line"
+    )
+
+
 class UpdateInvoiceRequest(BaseModel):
     entity_id: str = Field(..., description="Entity the invoice belongs to")
     invoice_type: Optional[str] = Field(
@@ -861,11 +998,18 @@ class UpdateInvoiceRequest(BaseModel):
         None,
         description="Map of line_item_id → gl_account_id (or null to clear)",
     )
+    line_items: Optional[Dict[str, LineItemUpdate]] = Field(
+        None,
+        description=(
+            "Map of line_item_id → what the line bought. Shown in the drawer only: "
+            "nothing is written to products or stock."
+        ),
+    )
 
 
 @router.patch("/invoices/{invoice_id}", dependencies=[Depends(owned_invoice)])
 async def update_invoice(invoice_id: str, request: UpdateInvoiceRequest):
-    """Update editable invoice fields (type, notes) and line item GL accounts.
+    """Update editable invoice fields (type, notes), line GL accounts and what lines bought.
 
     Financial amounts are immutable through this endpoint.
     """
@@ -887,6 +1031,14 @@ async def update_invoice(invoice_id: str, request: UpdateInvoiceRequest):
             UUID(invoice_id),
             updates,
             line_item_gl_updates=request.line_item_gl_accounts,
+            line_item_updates=(
+                {
+                    line_id: update.model_dump(exclude_unset=True)
+                    for line_id, update in request.line_items.items()
+                }
+                if request.line_items
+                else None
+            ),
         )
     except InvoiceRuleError as e:
         raise HTTPException(status_code=409, detail=str(e))
@@ -894,58 +1046,6 @@ async def update_invoice(invoice_id: str, request: UpdateInvoiceRequest):
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         logger.error(f"Error updating invoice: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-# =============================================================================
-# STOCK DECISIONS FOR A PURCHASE INVOICE
-# =============================================================================
-
-
-class StockDecision(BaseModel):
-    line_item_id: str
-    action: Literal["expense", "link", "new", "track"] = Field(
-        ...,
-        description=(
-            "expense: no stock record. link: set an existing product's cost from this line. "
-            "new: create a draft product. track: record stock without a catalogue product."
-        ),
-    )
-    product_id: Optional[str] = Field(None, description="Required for 'link'")
-    name: Optional[str] = Field(
-        None, description="Product name for 'new' (defaults to the line)"
-    )
-    sku: Optional[str] = None
-    asset_account_id: Optional[str] = None
-    cogs_account_id: Optional[str] = None
-
-
-class StockDecisionsRequest(BaseModel):
-    entity_id: str
-    decisions: List[StockDecision] = Field(..., min_length=1)
-
-
-@router.post("/invoices/{invoice_id}/stock", dependencies=[Depends(owned_invoice)])
-async def apply_stock_decisions(invoice_id: str, request: StockDecisionsRequest):
-    """Decide how each line of a purchase invoice is treated as stock, in one call.
-
-    Replaces the separate create-products, link-to-products and inventory-movements
-    endpoints. Validated up front (nothing is written if any line is invalid) and
-    idempotent per line. Returns one result per line, with whether a purchase movement
-    now exists for it.
-    """
-    try:
-        return await invoice_service.apply_stock_decisions(
-            UUID(request.entity_id),
-            UUID(invoice_id),
-            [d.model_dump() for d in request.decisions],
-        )
-    except InvoiceRuleError as e:
-        raise HTTPException(status_code=409, detail=str(e))
-    except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
-    except Exception as e:
-        logger.error(f"Error applying stock decisions: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 

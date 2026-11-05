@@ -42,7 +42,7 @@ one channel per source), which the frontend subscribes to with a token from
 
 ## Inngest functions
 
-All are registered on `/api/inngest` (31 in total).
+All are registered on `/api/inngest` (32 in total).
 
 | Group         | Function                                                                                 | Trigger                                                                    |
 | ------------- | ---------------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
@@ -61,6 +61,7 @@ All are registered on `/api/inngest` (31 in total).
 |               | `reprocess_stuck_processing_events`                                                      | cron `0 */2 * * *`                                                         |
 |               | `reprocess_failed_manual`                                                                | `normalization/reprocess.requested`                                        |
 | Accounting    | `generate_all_journals`                                                                  | `accounting/journals.generate.requested`                                   |
+|               | `match_invoice_payments` (sent after a Revolut or PayPal sync is normalised)             | `invoices/match.requested`                                                 |
 | Other         | `process_chat_message`, `process_document_embedding`, `cleanup_old_threads`              | `chat/message.received`, `documents/embedding.completed`, cron `0 2 * * *` |
 
 ## Attachments (Revolut receipts)

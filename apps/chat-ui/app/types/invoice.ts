@@ -38,6 +38,12 @@ export interface InvoiceContact {
   contact_type: 'supplier' | 'customer' | 'both';
 }
 
+/**
+ * What a line bought: a product the business sells, a sample (never a product), or something
+ * else (freight, fees, services). Shown on the invoice only; it never changes stock.
+ */
+export type LineKind = 'product' | 'sample' | 'other';
+
 export interface InvoiceLineItem {
   id: string;
   invoice_id: string;
@@ -51,7 +57,20 @@ export interface InvoiceLineItem {
   line_net: number | null;
   line_vat: number | null;
   line_gross: number | null;
+  line_kind: LineKind;
+  /** The product a product line bought, when it is linked to one. */
+  product: ProductOption | null;
 }
+
+/** A change to what a line bought, sent to the agent with the invoice update. */
+export interface LineUpdate {
+  line_kind?: LineKind;
+  /** A product of this business; null unlinks it. Only on a product line. */
+  product_id?: string | null;
+}
+
+/** How a paid invoice was paid when no bank transaction is behind it. */
+export type PaidOutsideBank = 'cash' | 'paid_personally' | 'other';
 
 /** An invoice as the list shows it: no line items. */
 export interface InvoiceRow {
@@ -70,6 +89,9 @@ export interface InvoiceRow {
   notes: string | null;
   created_at: string;
   origin: InvoiceOrigin;
+  /** Paid with no bank transaction behind it (cash, personally), and how; null otherwise. */
+  paid_outside_bank: PaidOutsideBank | null;
+  paid_outside_bank_note: string | null;
   /** The document to show, or null if there is none. */
   document: DocumentSource | null;
   contacts: InvoiceContact | null;
@@ -87,7 +109,7 @@ export interface ProductOption {
   name: string;
 }
 
-/** A bank transaction that might be the payment for an invoice. */
+/** A bank transaction that might be the payment for an invoice, scored by the agent. */
 export interface PaymentCandidate {
   id: string;
   occurred_at: string;
@@ -95,7 +117,52 @@ export interface PaymentCandidate {
   counterparty: string | null;
   amount: number;
   currency: string;
+  /** Why it fits, in plain words: "Invoice number on the transaction", "Exact amount"… */
+  reasons: string[];
+  /** The invoice number and the exact amount agree. */
+  confident: boolean;
 }
+
+/** One line of a journal, as the split shows it (services/invoice_split.py `_shown`). */
+export interface SplitJournalLine {
+  account_id: string;
+  account_number: string | null;
+  account_name: string | null;
+  description: string | null;
+  debit: number;
+  credit: number;
+  currency: string | null;
+  /** On a proposed debit: the invoice line it comes from, and its VAT share. */
+  line_item_id?: string;
+  vat?: number;
+  /** False when the invoice line has no account, so it keeps the payment's. */
+  from_invoice_account?: boolean;
+}
+
+/**
+ * How one matched payment's journal would be split by the invoice's lines (`ready`), that it
+ * already is (`applied`), or why it cannot be (`not_journaled`, `unsupported`, with `reason`).
+ */
+export interface SplitProposal {
+  transaction_id: string;
+  state: 'ready' | 'applied' | 'not_journaled' | 'unsupported';
+  reason: string | null;
+  occurred_at: string | null;
+  payment_amount: number | null;
+  payment_currency: string | null;
+  journal_amount: number | null;
+  journal_currency: string | null;
+  /** The payment as a share of the invoice (0.4 for a 40% deposit); null across currencies. */
+  share_of_invoice: number | null;
+  /** The journal it replaces, and how it stood (a posted expense, or a draft). */
+  replaces: { id: string; journal_type: string; status: string }[];
+  current_lines: SplitJournalLine[];
+  lines: SplitJournalLine[];
+  split_journal_id: string | null;
+}
+
+/** Who matched an invoice to its payment. */
+export type MatchedBy = 'user' | 'reconciliation' | 'sync' | 'backfill' | 'auto';
 
 /** Everything the drawer shows for one invoice. */
 export interface InvoiceDetail {
@@ -103,23 +170,16 @@ export interface InvoiceDetail {
   lines: InvoiceLineItem[];
   /** A bank transaction already matched to this invoice, if any. */
   matched_transaction_id: string | null;
+  /** How that match was made: 'auto' when the number and amount agreed on upload or sync. */
+  matched_by: MatchedBy | null;
   /** Bank transactions that could be this invoice's payment, nearest in amount first. */
   payment_candidates: PaymentCandidate[];
-  /** Line items that already have a purchase movement recorded. */
-  stocked_line_ids: string[];
+  /**
+   * For a purchase with a matched payment: each payment's journal split by the invoice's lines.
+   * Empty when there is nothing to split; null when the agent could not be asked.
+   */
+  split_proposals: SplitProposal[] | null;
   gl_accounts: GlAccountOption[];
+  /** The business's products (not archived), to link a line to. */
   products: ProductOption[];
-}
-
-/** One line's stock handling, sent to the agent (see POST /accounting/invoices/{id}/stock). */
-export type StockAction = 'expense' | 'link' | 'new' | 'track';
-
-export interface StockDecision {
-  line_item_id: string;
-  action: StockAction;
-  product_id?: string;
-  name?: string;
-  sku?: string;
-  asset_account_id?: string;
-  cogs_account_id?: string;
 }

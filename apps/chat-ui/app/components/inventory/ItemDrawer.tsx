@@ -177,7 +177,9 @@ function Body({
           </div>
           {!entry.isUnlimited && (
             <p className="mt-1 text-[13px] text-muted-foreground">
-              {money(entry.stockValue)} at {money(entry.unitCost, 2)} each
+              {entry.itemType === 'sample'
+                ? 'Samples are counted but never valued.'
+                : `${money(entry.stockValue)} at ${money(entry.unitCost, 2)} each`}
             </p>
           )}
           <dl className="mt-4 text-[15px]">

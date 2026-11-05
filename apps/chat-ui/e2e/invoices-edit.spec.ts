@@ -8,16 +8,22 @@ import type { Page } from '@playwright/test';
 import { test, expect, readManifest } from './fixtures';
 import {
   addReceiptInvoice,
+  readLinesBought,
+  tableSize,
   borrowTransaction,
   readInvoice,
   readTxnInvoiceId,
   readLineAccount,
+  readPaymentJournals,
   restoreInvoices,
+  restoreJournals,
   snapshotInvoices,
+  snapshotJournals,
   type InvoiceSnapshot,
 } from './helpers/db';
 
 const inv = readManifest().invoices;
+const STOCK_TABLES = ['products', 'inventory_items', 'inventory_movements'];
 const gbp0 = (n: number) =>
   new Intl.NumberFormat('en-GB', {
     style: 'currency',
@@ -48,7 +54,8 @@ async function openInvoice(page: Page, number: string, tab = 'all') {
 const pdf = (name: string) => ({
   name,
   mimeType: 'application/pdf',
-  buffer: Buffer.from('%PDF-1.1\n%%EOF'),
+  // Each file's bytes differ, as real files do: the same bytes twice is a duplicate upload.
+  buffer: Buffer.from(`%PDF-1.1\n% ${name}\n%%EOF`),
 });
 
 test.describe('adding invoices', () => {
@@ -100,6 +107,27 @@ test.describe('adding invoices', () => {
     await expect(dialog.getByRole('button', { name: 'Try again' })).toBeVisible();
     await dialog.getByRole('button', { name: 'Remove unreadable.pdf' }).click();
     await expect(dialog.getByRole('list', { name: 'Files' })).toHaveCount(0);
+  });
+
+  test('the same file added twice is refused the second time', async ({ page }) => {
+    await page.goto('/invoices');
+    await page.getByRole('button', { name: 'Add invoice' }).click();
+    let dialog = page.getByRole('dialog');
+    await dialog.getByLabel('Choose invoice files').setInputFiles(pdf('twice.pdf'));
+    await dialog.getByRole('button', { name: 'Add 1 invoice' }).click();
+    await expect(page).toHaveURL(/invoice=/);
+    await expect(page.getByRole('dialog')).toContainText('Stand-in Supplier Ltd');
+
+    await page.goto('/invoices');
+    await page.getByRole('button', { name: 'Add invoice' }).click();
+    dialog = page.getByRole('dialog');
+    await dialog.getByLabel('Choose invoice files').setInputFiles(pdf('twice.pdf'));
+    await dialog.getByRole('button', { name: 'Add 1 invoice' }).click();
+    const files = dialog.getByRole('list', { name: 'Files' });
+    await expect(files).toContainText('already in your invoices as E2E-UP-');
+    // Nothing to try again: the invoice is already there.
+    await expect(dialog.getByRole('button', { name: 'Try again' })).toHaveCount(0);
+    await expect(dialog).toBeVisible();
   });
 
   test('a draft that was just added can be deleted', async ({ page }) => {
@@ -179,6 +207,37 @@ test.describe('moving an invoice through its lifecycle', () => {
     await expect(tile(page, 'You owe')).toContainText(`${inv.youOweCount - 1} unpaid`);
   });
 
+  test('an invoice paid in cash says so, stops looking for a payment, and can be undone', async ({
+    page,
+  }) => {
+    const drawer = await openInvoice(page, inv.overduePurchase, 'open');
+    await drawer.getByRole('button', { name: 'Paid without the bank' }).click();
+    const save = drawer.getByRole('button', { name: 'Save' });
+    await expect(save).toBeDisabled(); // how it was paid is required
+    await drawer.getByRole('radio', { name: /In cash/ }).check();
+    await drawer.getByRole('textbox', { name: 'Note on the payment' }).fill('Paid at the counter');
+    await save.click();
+    await expect(page.getByText('Marked as paid')).toBeVisible();
+
+    const next = drawer.getByRole('region', { name: 'Next step' });
+    await expect(next).toContainText('Paid without a bank transaction: in cash.');
+    await expect(next).toContainText('Paid at the counter');
+    await expect(next).toContainText('not in them');
+    await expect(drawer.getByRole('region', { name: 'Payment match' })).toHaveCount(0);
+    const saved = await readInvoice(inv.overduePurchase);
+    expect(saved?.status).toBe('PAID');
+
+    await drawer.getByRole('button', { name: 'Undo payment' }).click();
+    await page
+      .getByRole('dialog')
+      .filter({ hasText: 'Undo the payment?' })
+      .getByRole('button', { name: 'Undo payment' })
+      .click();
+    await expect(page.getByText('Payment undone')).toBeVisible();
+    await expect(drawer.getByRole('region', { name: 'Payment match' })).toBeVisible();
+    await expect(drawer.getByRole('button', { name: 'Paid without the bank' })).toBeVisible();
+  });
+
   test('an invoice with a matched bank payment says so once paid', async ({ page }) => {
     const drawer = await openInvoice(page, inv.matchedPurchase, 'open');
     await drawer.getByRole('button', { name: 'Mark as paid' }).click();
@@ -214,6 +273,23 @@ test.describe('moving an invoice through its lifecycle', () => {
       await expect(match).not.toContainText('Matched to a bank transaction');
       expect(await readTxnInvoiceId(borrowed.id)).toBeUndefined();
       expect((await readInvoice(inv.overduePurchase))?.status).toBe('OPEN');
+    } finally {
+      await borrowed.restore();
+    }
+  });
+
+  test('a draft is offered its likely payment, with why it fits', async ({ page }) => {
+    // INV-ML-1001 is a £1,200 draft: make one transaction look like its payment.
+    const borrowed = await borrowTransaction('out', 1200, 'Mill Lane Textiles');
+    try {
+      const drawer = await openInvoice(page, inv.draftPurchase, 'review');
+      const match = drawer.getByRole('region', { name: 'Payment match' });
+      await expect(match).toContainText('Not matched yet');
+      await match.getByRole('button', { name: 'Match a payment' }).click();
+      const offer = match.locator('li', { hasText: 'Mill Lane Textiles' });
+      await expect(offer).toContainText('£1,200.00');
+      await expect(offer).toContainText('Exact amount');
+      await expect(offer.getByRole('button', { name: /^Match Mill Lane Textiles/ })).toBeVisible();
     } finally {
       await borrowed.restore();
     }
@@ -336,20 +412,28 @@ test.describe('editing an invoice', () => {
   });
 });
 
-test.describe('stock from a purchase invoice', () => {
-  test('a line can be tracked as stock, and then shows as recorded', async ({ page }) => {
+test.describe('what a purchase bought', () => {
+  test('a line can be linked to a product, and stock is left alone', async ({ page }) => {
+    const stockBefore = await Promise.all(STOCK_TABLES.map(tableSize));
     const drawer = await openInvoice(page, inv.draftPurchase, 'review');
-    await drawer.getByLabel('Stock handling for Merino yarn 4-ply').selectOption('track');
-    await drawer.getByRole('button', { name: 'Apply 1 decision' }).click();
+    const bought = drawer.getByRole('region', { name: 'What this invoice bought' });
+    await bought.getByRole('button', { name: 'Change' }).click();
+    await bought.getByRole('button', { name: /Product for Merino yarn 4-ply/ }).click();
+    await page.getByRole('option', { name: 'Merino Scarf' }).click();
+    await bought.getByLabel('What Heavy knit swatches is').selectOption('other');
+    await bought.getByRole('button', { name: 'Save' }).click();
+    await expect(page.getByText('Saved')).toBeVisible();
 
-    await expect(page.getByText('Stock recorded for 1 line')).toBeVisible();
-    const stock = drawer.getByRole('region', { name: 'Stock' });
-    await expect(stock.locator('li', { hasText: 'Merino yarn 4-ply' })).toContainText(
-      'Stock recorded'
-    );
-    // The other lines are still open to decide on.
-    await expect(drawer.getByLabel('Stock handling for Heavy knit swatches')).toBeVisible();
-    await expect(drawer.getByLabel('Stock handling for Merino yarn 4-ply')).toHaveCount(0);
+    await expect(bought.getByRole('link', { name: 'Merino Scarf' })).toBeVisible();
+    await expect(bought).toContainText('1 product, 40 units');
+    await expect(bought).not.toContainText('sample');
+    expect(await readLinesBought(inv.draftPurchase)).toEqual({
+      'Merino yarn 4-ply': { kind: 'product', product: 'Merino Scarf' },
+      'Heavy knit swatches': { kind: 'other', product: null },
+      Delivery: { kind: 'other', product: null },
+    });
+    // Information only: no product, stock item or movement was written.
+    expect(await Promise.all(STOCK_TABLES.map(tableSize))).toEqual(stockBefore);
   });
 });
 
@@ -377,5 +461,53 @@ test.describe('synced invoices', () => {
     await expect(page.getByText('Invoice removed')).toBeVisible();
     await expect(page).not.toHaveURL(/invoice=/);
     expect(await readInvoice(number)).toBeNull();
+  });
+});
+
+test.describe("splitting a payment's journal by the invoice", () => {
+  test('the split replaces the journal, the transaction says so, and undo puts it back', async ({
+    page,
+  }) => {
+    const journals = await snapshotJournals();
+    try {
+      const live = async () =>
+        (await readPaymentJournals(inv.split.invoice))
+          .filter(j => j.status !== 'reversed')
+          .map(j => `${j.journal_type}:${j.status}`);
+      expect(await live()).toEqual(['expense:posted']);
+
+      const drawer = await openInvoice(page, inv.split.invoice, 'paid');
+      const books = drawer.getByRole('region', { name: 'Payment journal' });
+      await books.getByRole('button', { name: 'Split the journal' }).click();
+      await expect(page.getByText('Journal split by the invoice')).toBeVisible();
+      await expect(books).toContainText('Split by this invoice');
+      await expect(books.getByRole('list', { name: 'Split' }).getByRole('listitem')).toHaveCount(
+        inv.split.lines.length
+      );
+      // One journal in the books for the payment: the split, with the expense reversed.
+      expect(await live()).toEqual(['invoice_split:posted']);
+
+      // The transaction's own drawer shows the split and points back to the invoice.
+      await drawer.getByRole('link', { name: /View the transaction/ }).click();
+      const txn = page.getByRole('dialog');
+      await expect(txn).toContainText('Split across the lines of the invoice it paid');
+      await expect(txn.getByRole('link', { name: `invoice ${inv.split.invoice}` })).toBeVisible();
+      await txn.getByRole('link', { name: `invoice ${inv.split.invoice}` }).click();
+
+      const again = page.getByRole('dialog');
+      await again
+        .getByRole('region', { name: 'Payment journal' })
+        .getByRole('button', { name: 'Undo the split' })
+        .click();
+      await expect(page.getByText('Split undone')).toBeVisible();
+      await expect(
+        again.getByRole('region', { name: 'Payment journal' }).getByRole('button', {
+          name: 'Split the journal',
+        })
+      ).toBeVisible();
+      expect(await live()).toEqual(['expense:posted']);
+    } finally {
+      await restoreJournals(journals);
+    }
   });
 });
