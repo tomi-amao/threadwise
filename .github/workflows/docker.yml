@@ -64,7 +64,7 @@ jobs:
             type=raw,value=latest,enable={{is_default_branch}}
 
       - name: Build and push Docker image
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: ./apps/chat-ui/Dockerfile
@@ -118,7 +118,7 @@ jobs:
             type=raw,value=latest,enable={{is_default_branch}}
 
       - name: Build and push Docker image
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v7
         with:
           context: ./apps/ai_agent
           file: ./apps/ai_agent/Dockerfile
@@ -179,7 +179,7 @@ jobs:
         uses: docker/setup-buildx-action@v3
 
       - name: Build image for scanning
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v7
         with:
           context: ${{ matrix.image == 'chat-ui' && '.' || './apps/ai_agent' }}
           file: ${{ matrix.image == 'chat-ui' && './apps/chat-ui/Dockerfile' || './apps/ai_agent/Dockerfile' }}
