@@ -536,13 +536,30 @@ class ExternalSyncService:
                 }
             )
 
-        result = await asyncio.to_thread(
-            lambda: self.client.table("external_raw_events")
-            .upsert(data, on_conflict="provider,entity_type,external_id")
+        # A bulk upsert writes the same columns for every row: a row that lacks a
+        # key another row in the batch has gets NULL for it, not its current
+        # value or the column default. Mixing "reset" rows with the rest would
+        # null processing_status (and processed_at) on the others, and a NULL
+        # status is not `pending`, so no normalization pass would pick them up.
+        # So the rows that reset their status go in a call of their own.
+        resets = [row for row in data if "processing_status" in row]
+        rest = [row for row in data if "processing_status" not in row]
+
+        stored = 0
+        for rows in (resets, rest):
+            if not rows:
+                continue
+            result = await asyncio.to_thread(self._upsert_raw_events, rows)
+            stored += len(result.data) if result.data else 0
+
+        return stored
+
+    def _upsert_raw_events(self, rows: List[Dict[str, Any]]) -> Any:
+        return (
+            self.client.table("external_raw_events")
+            .upsert(rows, on_conflict="provider,entity_type,external_id")
             .execute()
         )
-
-        return len(result.data) if result.data else 0
 
     async def _get_existing_payloads(
         self, provider: str, events: List[Dict[str, Any]]

@@ -47,6 +47,8 @@ export const ENTITY_NAME = 'Atelier North (E2E)';
 const OPENING_BALANCE = 600_000;
 export const RIVAL_ENTITY_NAME = 'Rival Co (E2E)';
 const SIZES = ['S', 'M'] as const;
+const ARCHIVED_PRODUCT_NAME = 'Retired Wool Cap';
+const ARCHIVED_SKU = 'E2E-ARCHIVED';
 /** [name, price, external id]: the first has one old sale, the other two never sold. */
 const EXTRA_PRODUCTS = [
   ['Heritage Gilet', 150, 'e2e-prod-gilet'],
@@ -222,6 +224,32 @@ async function main() {
       )
       .select('id, name')
   )) as { id: string; name: string }[];
+
+  // One archived product, with an item that holds nothing: the pages leave it out until asked.
+  const archivedProduct = (await must(
+    'archived product',
+    supabase
+      .from('products')
+      .insert({
+        entity_id: entityId,
+        provider: 'shopify',
+        external_id: 'e2e-prod-archived',
+        name: ARCHIVED_PRODUCT_NAME,
+        product_type: 'apparel',
+        status: 'archived',
+        created_at: daysAgo(330),
+        variants: [
+          {
+            external_id: 'e2e-var-archived',
+            sku: ARCHIVED_SKU,
+            price: { amount: 30, currency: 'GBP' },
+            attributes: { SIZE: 'M' },
+          },
+        ],
+      })
+      .select('id')
+      .single()
+  )) as { id: string };
 
   // 4. Customers.
   const first = [
@@ -585,6 +613,21 @@ async function main() {
     'id, sku'
   );
   const itemIdBySku = new Map(inventoryItems.map(r => [r.sku, r.id]));
+  // The archived product's item, outside itemRows so the counts of the live stock stay as they are.
+  await must(
+    'archived inventory item',
+    supabase.from('inventory_items').insert({
+      entity_id: entityId,
+      product_id: archivedProduct.id,
+      provider: 'manual',
+      quantity_source: 'ledger',
+      variant_external_id: 'e2e-var-archived',
+      sku: ARCHIVED_SKU,
+      unit_cost: 10,
+      item_type: 'sellable',
+      created_at: daysAgo(320),
+    })
+  );
 
   const movementRows: Record<string, unknown>[] = [];
   const addMovement = (
@@ -1483,7 +1526,17 @@ async function main() {
       matched_by: 'user',
     })
   );
+  // What the rival's stock records are worth (sellable, at unit cost), by the on-hand view.
+  const rivalOnHand = (await must(
+    'rival on-hand view',
+    supabase.from('inventory_on_hand').select('on_hand, unit_cost, item_type').eq('entity_id', rid)
+  )) as { on_hand: number; unit_cost: number | null; item_type: string }[];
   const rival = {
+    stockRecords: money(
+      rivalOnHand
+        .filter(r => r.item_type !== 'sample')
+        .reduce((n, r) => n + Math.max(Number(r.on_hand), 0) * Number(r.unit_cost ?? 0), 0)
+    ),
     email: rivalEmail,
     entityName: RIVAL_ENTITY_NAME,
     orderNumbers: ['#R1', '#R2', '#R3'],
@@ -1565,6 +1618,8 @@ async function main() {
     let ms: number;
     if (journal.txnIndex !== undefined) {
       ms = new Date(String(txnRows[journal.txnIndex].occurred_at)).getTime();
+    } else if (journal.daysAgo !== undefined) {
+      ms = new Date(daysAgo(journal.daysAgo)).getTime();
     } else {
       ms = Math.min(periodDates[journal.period].start + journal.offsetDays * 86_400_000, yesterday);
     }
@@ -1610,7 +1665,57 @@ async function main() {
     to: iso(periodDates[which].end),
   });
   const countOf = (pred: (j: LedgerJournal) => boolean) => journals.filter(pred).length;
+
+  // The Inventory page's "stock against the books": the ledger's stock accounts (1031-1035)
+  // against the stock records (sellable items at unit cost, from the on-hand view), and the
+  // journals on those accounts since the last adjustment to them.
+  const STOCK_ACCOUNTS = ['1031', '1032', '1033', '1034', '1035'];
+  const stockNet = (j: LedgerJournal) =>
+    j.lines
+      .filter(l => STOCK_ACCOUNTS.includes(l.account))
+      .reduce((n, l) => n + (l.debit ?? 0) - (l.credit ?? 0), 0);
+  const stockJournals = dated.filter(
+    ({ journal }) =>
+      journal.status === 'posted' && journal.lines.some(l => STOCK_ACCOUNTS.includes(l.account))
+  );
+  const stockSince = stockJournals
+    .filter(({ journal }) => journal.type === 'adjustment')
+    .map(({ date }) => date)
+    .sort()
+    .at(-1)!;
+  const stockEntries = stockJournals
+    .filter(({ date }) => date > stockSince)
+    .sort((a, b) => b.date.localeCompare(a.date))
+    .map(({ journal, date }) => ({
+      description: journal.description,
+      date,
+      amount: money(stockNet(journal)),
+      invoice: journal.txnIndex !== undefined ? (MATCHED_PAYMENTS[journal.txnIndex] ?? null) : null,
+    }));
+  const onHandRows = (await must(
+    'on-hand view',
+    supabase
+      .from('inventory_on_hand')
+      .select('on_hand, unit_cost, item_type')
+      .eq('entity_id', entityId)
+  )) as { on_hand: number; unit_cost: number | null; item_type: string }[];
+  const stockRecords = money(
+    onHandRows
+      .filter(r => r.item_type !== 'sample')
+      .reduce((n, r) => n + Math.max(Number(r.on_hand), 0) * Number(r.unit_cost ?? 0), 0)
+  );
+  const stockBooks = money(stockJournals.reduce((n, { journal }) => n + stockNet(journal), 0));
+  const stock = {
+    books: stockBooks,
+    records: stockRecords,
+    difference: money(stockBooks - stockRecords),
+    since: stockSince,
+    entries: stockEntries,
+    entriesTotal: money(stockEntries.reduce((n, e) => n + e.amount, 0)),
+  };
+
   const ledger = {
+    stock,
     currentLabel: periodLabel(periodDates.current.end),
     previousLabel: periodLabel(periodDates.previous.end),
     currentFrom: range('current').from,
@@ -1887,6 +1992,7 @@ async function main() {
     orderCount: ORDER_COUNT,
     customerCount: customers.length,
     productCount: products.length,
+    archived: { productName: ARCHIVED_PRODUCT_NAME, sku: ARCHIVED_SKU },
     bankAccountCount: banks.length,
     transactionCount: TXN_COUNT,
     attachments,

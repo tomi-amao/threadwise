@@ -568,7 +568,7 @@ def build_cases() -> list[Case]:
         sql(
             "sql-product-count",
             "How many products do I have in my catalogue?",
-            "select count(*) from products",
+            "select count(*) from products where status <> 'archived'",
             lambda m: [m["products"]["total"]],
         ),
         # ── what the user is looking at ──────────────────────────────────────────────

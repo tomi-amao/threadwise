@@ -63,21 +63,25 @@ export function imageUrls(metadata: { images?: unknown[] } | null): string[] {
     .filter(url => url.length > 0);
 }
 
-/** Every product and what it has sold. Read in full: see paginate.server. */
+/**
+ * Every product and what it has sold. Read in full: see paginate.server. Archived products are
+ * left out unless asked for; their sales then show as uncatalogued, as before.
+ */
 export async function getProducts(
   supabase: SupabaseClient,
-  entityId: string
+  entityId: string,
+  { includeArchived = false }: { includeArchived?: boolean } = {}
 ): Promise<ProductRow[]> {
   const [products, orders, lines] = await Promise.all([
-    fetchAllRows<ProductDbRow>('products', (from, to) =>
-      supabase
+    fetchAllRows<ProductDbRow>('products', (from, to) => {
+      const query = supabase
         .from('products')
         .select('id, name, provider, status, metadata, variants')
-        .eq('entity_id', entityId)
-        .neq('status', 'archived')
+        .eq('entity_id', entityId);
+      return (includeArchived ? query : query.neq('status', 'archived'))
         .order('id')
-        .range(from, to)
-    ),
+        .range(from, to);
+    }),
     fetchAllRows<{ id: string; status: string; created_at: string }>('orders', (from, to) =>
       supabase
         .from('orders')

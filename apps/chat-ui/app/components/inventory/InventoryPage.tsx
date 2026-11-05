@@ -22,6 +22,7 @@ import { CompactHeader } from '~/components/ui/page-header';
 import { Segmented } from '~/components/ui/segmented';
 import { Tabs, tabId } from '~/components/ui/tabs';
 import type {
+  BooksVsStock as BooksVsStockData,
   InventoryItemRow,
   InventoryMovementsData,
   InventoryValuationItem,
@@ -29,6 +30,7 @@ import type {
 } from '~/lib/api/inventory.server';
 import { useUrlParams } from '~/lib/use-url-params';
 import { cn } from '~/lib/utils';
+import { BooksVsStock } from './BooksVsStock';
 import { ItemDrawer } from './ItemDrawer';
 import {
   MOVEMENT_LABEL,
@@ -54,6 +56,8 @@ export interface InventoryPageData {
     totalInventoryValue: number;
     totalUnitsPurchased: number;
   };
+  /** How the stock records stand against the books; null when it could not be read. */
+  booksVsStock: BooksVsStockData | null;
   errors: string[];
 }
 
@@ -117,7 +121,10 @@ function ItemCell({ entry, onOpen }: { entry: InventoryEntry; onOpen: () => void
       className="block max-w-[320px] rounded-sm text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
     >
       <span className="block truncate">{entry.name}</span>
-      <span className="block truncate font-mono text-xs text-text-2">{entry.sku ?? 'No SKU'}</span>
+      <span className="block truncate font-mono text-xs text-text-2">
+        {entry.sku ?? 'No SKU'}
+        {entry.archived && ' · Archived'}
+      </span>
     </button>
   );
 }
@@ -267,6 +274,7 @@ export function InventoryPage({ data }: { data: InventoryPageData }) {
   const q = sp.get('q') ?? '';
   const page = Math.max(1, Number(sp.get('page')) || 1);
   const selectedId = sp.get('item');
+  const showArchived = sp.get('archived') === '1';
 
   const entries = useMemo(
     () => buildEntries(data.allItems, data.stock.items),
@@ -471,6 +479,8 @@ export function InventoryPage({ data }: { data: InventoryPageData }) {
           />
         </div>
 
+        {data.booksVsStock && <BooksVsStock data={data.booksVsStock} />}
+
         <JumpTo
           items={flags.map(f => ({
             key: f.key,
@@ -520,6 +530,24 @@ export function InventoryPage({ data }: { data: InventoryPageData }) {
             <div className="max-w-full overflow-x-auto">
               <Segmented label="Filter" value={view} onChange={setView} options={VIEWS[tab]} />
             </div>
+          )}
+          {(tab === 'stock' || tab === 'items') && (
+            <Segmented<'hidden' | 'shown'>
+              label="Archived products"
+              value={showArchived ? 'shown' : 'hidden'}
+              onChange={v =>
+                apply(p => {
+                  if (v === 'shown') p.set('archived', '1');
+                  else p.delete('archived');
+                  p.delete('page');
+                  return p;
+                })
+              }
+              options={[
+                { value: 'hidden', label: 'Archived hidden' },
+                { value: 'shown', label: 'Archived shown' },
+              ]}
+            />
           )}
           {filtered && (
             <button

@@ -345,10 +345,14 @@ class ShopifyAdapter:
         cursor: Optional[str] = None,
         extra_params: Optional[Dict[str, Any]] = None,
         since: Optional[datetime] = None,
+        include_drafts: bool = False,
     ) -> PaginatedResult:
         """Fetch a single page from a Shopify endpoint.
 
         Args:
+            include_drafts: Products only: also fetch draft products. Shopify
+                returns active ones only by default here. Like ``since``, it is
+                baked into the cursor after the first page.
             since: Only fetch records updated at-or-after this time (Admin
                 API ``updated_at_min``). Only honored for endpoints in
                 SUPPORTS_UPDATED_SINCE and only on the first page — once
@@ -368,7 +372,7 @@ class ShopifyAdapter:
             if endpoint == "orders":
                 params["status"] = "any"
             elif endpoint == "products":
-                params["status"] = "active"
+                params["status"] = "active,draft" if include_drafts else "active"
             if since is not None and endpoint in SUPPORTS_UPDATED_SINCE:
                 params["updated_at_min"] = since.strftime("%Y-%m-%dT%H:%M:%S%z")
             if extra_params:
@@ -409,10 +413,12 @@ class ShopifyAdapter:
         endpoint: str,
         start_cursor: Optional[str] = None,
         since: Optional[datetime] = None,
+        include_drafts: bool = False,
     ) -> AsyncIterator[RawEventRecord]:
         """Stream all items from an endpoint as raw event records.
 
         Args:
+            include_drafts: Products only: also fetch draft products.
             since: Only fetch records updated at-or-after this time. Ignored
                 (full fetch) for endpoints not in SUPPORTS_UPDATED_SINCE.
         """
@@ -447,6 +453,7 @@ class ShopifyAdapter:
                     cursor,
                     extra_params=extra_params if not cursor else None,
                     since=since,
+                    include_drafts=include_drafts,
                 )
             except httpx.HTTPStatusError as e:
                 status_code = e.response.status_code

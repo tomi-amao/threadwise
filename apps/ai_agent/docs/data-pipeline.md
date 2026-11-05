@@ -161,6 +161,35 @@ The list endpoint's paging is undocumented; `MerchantAdapter.list_orders` pages 
 `to` = the oldest `created_at` seen and stops when a page brings nothing new. The API version
 is pinned (`Revolut-Api-Version: 2024-09-01`), because the response shape depends on it.
 
+## Stock quantities
+
+The store the business sells through decides how many it has. Nothing in the app asks for a stock
+count, and invoices never write one (see [Invoices](accounting.md#invoices)).
+
+- **Shopify:** an item's `available_quantity` is its on-hand (`quantity_source = 'shopify'`),
+  kept current by the inventory-level sync. Shopify items record no movement for a count change;
+  their movements are sales and disposals, kept for the cost each carried.
+  The products sync asks for active products only. **Sync with drafts** (the Sync menu on a
+  Shopify card, `include_drafts` on `POST /integrations/sources/{id}/sync`) also fetches drafts, and
+  fetches the products in full, because drafts that already exist were never fetched and an
+  incremental fetch would skip them. Archived products are never fetched. A draft arrives with
+  `products.status = 'draft'`.
+- **Squarespace:** an item is `ledger` sourced. The sync stores Squarespace's count and records
+  each change as an `ADJUSTMENT` movement (`count_change_note`: "Squarespace sync: 5 → 3"), and
+  on-hand is the sum of movements. Another store would take this path too.
+- **Samples** are counted on the ledger and never valued.
+
+Product and item rows are keyed by provider, so syncing a product from a second store never
+overwrites the first store's: the same product then exists twice, and the older one is put away
+by archiving its product (an archived product's items are hidden on the Inventory page and left
+out of the negative-stock check) and zeroing its count.
+
+Unit cost comes from the store's own item cost and is filled in only while an item's cost is
+zero. A later change in the store does not reach the app unless `SHOPIFY_ALLOW_UNIT_COST_OVERWRITE`
+is set; leave it off unless stock should be valued at the store's current cost, because a cost
+change moves stock value with no journal, and it shows as a difference in the books-versus-stock
+check (see [Stock value against the books](accounting.md#stock-value-against-the-books)).
+
 ## Raw events and their state
 
 `external_raw_events.processing_status` is one of `pending`, `processing`, `completed`, `failed`,

@@ -21,9 +21,11 @@ export async function loader({ request }: LoaderFunctionArgs) {
   const entity = await getUserEntity(request);
   // "Today" comes from the server so "slowing" is the same on the server render and in the browser.
   const today = new Date().toISOString().slice(0, 10);
+  // Archived products are shown only when the person asks (?archived=1).
+  const includeArchived = new URL(request.url).searchParams.get('archived') === '1';
   if (!entity) return { products: [], today, currency: 'GBP' };
   return {
-    products: await getProducts(getRequestSupabaseClient(request), entity.id),
+    products: await getProducts(getRequestSupabaseClient(request), entity.id, { includeArchived }),
     today,
     currency: entity.currency,
   };

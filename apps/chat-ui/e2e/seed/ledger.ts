@@ -33,6 +33,8 @@ export interface LedgerJournal {
   sourceType: string | null;
   /** Index into the seeded bank transactions, when the journal is a bank-feed one. */
   txnIndex?: number;
+  /** Dated this many days before the seed ran, instead of from its period. */
+  daysAgo?: number;
   lines: LedgerLine[];
 }
 
@@ -182,6 +184,21 @@ export const FIXED_JOURNALS: LedgerJournal[] = [
     null
   ),
   j('c10', 'current', 65, 'expense', 'Travel', [dr('7100', 400), cr('1010', 400)], 'posted', null),
+  // A stock-count true-up, dated so the bank-feed stock payments after it (the production-run
+  // journals, 1 to 6 days ago) are the ones the Inventory page lists against the books.
+  {
+    ...j(
+      'c13',
+      'current',
+      0,
+      'adjustment',
+      'Stock count true-up',
+      [dr('1033', 150), cr('5000', 150)],
+      'posted',
+      'manual'
+    ),
+    daysAgo: 4,
+  },
   j(
     'c11',
     'current',

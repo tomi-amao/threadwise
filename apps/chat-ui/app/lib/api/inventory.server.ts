@@ -124,6 +124,8 @@ export interface InventoryItemRow {
   attributes: Record<string, string>;
   /** All variants of the linked product */
   productVariants: ProductVariant[];
+  /** The linked product is archived (only listed when archived products are asked for) */
+  archived: boolean;
 }
 
 export interface ProductVariant {
@@ -150,8 +152,14 @@ export interface InventoryProductRow {
   createdAt: string;
 }
 
-/** Fetches all products with their linked inventory items. */
-export async function getInventoryProductList(supabase: SupabaseClient): Promise<{
+/**
+ * Fetches all products with their linked inventory items. Archived products, and with them their
+ * items, are left out unless asked for.
+ */
+export async function getInventoryProductList(
+  supabase: SupabaseClient,
+  { includeArchived = false }: { includeArchived?: boolean } = {}
+): Promise<{
   products: InventoryProductRow[];
   unlinkedItems: InventoryItemRow[];
   allItems: InventoryItemRow[];
@@ -161,14 +169,14 @@ export async function getInventoryProductList(supabase: SupabaseClient): Promise
   // Both lists are read in full (paged): a plain select() stops at the API's 1,000-row cap.
   // Paging needs a unique order, so these order by id and are sorted below.
   const productsData = (
-    await fetchAllRows<ProductDbRow>('products', (from, to) =>
-      supabase
+    await fetchAllRows<ProductDbRow>('products', (from, to) => {
+      const query = supabase
         .from('products')
-        .select('id, entity_id, name, provider, status, product_type, variants, created_at')
-        .neq('status', 'archived')
+        .select('id, entity_id, name, provider, status, product_type, variants, created_at');
+      return (includeArchived ? query : query.neq('status', 'archived'))
         .order('id')
-        .range(from, to)
-    )
+        .range(from, to);
+    })
   ).sort((a, b) => String(a.name ?? '').localeCompare(String(b.name ?? '')));
 
   const items = await fetchAllRows<ItemDbRow>('inventory items', (from, to) =>
@@ -228,6 +236,7 @@ export async function getInventoryProductList(supabase: SupabaseClient): Promise
       sellingPrice: variant?.price ?? null,
       attributes: variant?.attributes ?? {},
       productVariants,
+      archived: false,
     };
   }
 
@@ -236,6 +245,7 @@ export async function getInventoryProductList(supabase: SupabaseClient): Promise
     const linkedItems = (itemsByProduct.get(p.id) ?? []).map(item => {
       const row = rawItemToRow(item, variants);
       row.productName = p.name;
+      row.archived = p.status === 'archived';
       return row;
     });
     const uncostedCount = linkedItems.filter(i => i.unitCost <= 0).length;
@@ -513,7 +523,10 @@ export interface StockData {
   sampleCount: number;
 }
 
-export async function getStockLevels(supabase: SupabaseClient): Promise<StockData> {
+export async function getStockLevels(
+  supabase: SupabaseClient,
+  { includeArchived = false }: { includeArchived?: boolean } = {}
+): Promise<StockData> {
   // On-hand comes from the `inventory_on_hand` view — the single canonical
   // definition, shared with the dashboard, reports and the chat agent. Do not
   // re-derive it here from available_quantity or inventory_movements.
@@ -537,7 +550,7 @@ export async function getStockLevels(supabase: SupabaseClient): Promise<StockDat
       if (row.item_type === 'sample' || row.item_type === 'material') return true;
       if (!row.product_id) return false;
       const status = row.products?.status;
-      return row.products && status !== 'archived' && status !== 'draft';
+      return row.products && (status !== 'archived' || includeArchived) && status !== 'draft';
     })
     .map(row => {
       const onHand = Number(row.on_hand ?? 0);
@@ -575,3 +588,150 @@ export async function getStockLevels(supabase: SupabaseClient): Promise<StockDat
 
   return { items, totalOnHand, totalStockValue, lowStockCount, sampleCount };
 }
+
+// ─── Stock against the books ─────────────────────────────────────────────────
+
+/** The ledger's stock accounts: 1031 to 1035 (finished goods, trims, samples and so on). */
+const STOCK_ACCOUNTS = ['1031', '1032', '1033', '1034', '1035'];
+/** How many journals to list when nothing marks where to start (no adjustment to stock yet). */
+const RECENT_JOURNALS = 10;
+const MAX_JOURNALS = 200;
+
+/** A journal that moved the books' stock accounts, as the panel lists it. */
+export interface StockJournalEntry {
+  journalId: string;
+  date: string;
+  description: string | null;
+  /** Net debit to the stock accounts: money put into stock is positive, taken out negative. */
+  amount: number;
+  transactionId: string | null;
+  invoiceId: string | null;
+  invoiceNumber: string | null;
+}
+
+export interface BooksVsStock {
+  /** Posted balance of the stock accounts. */
+  books: number;
+  /** Sellable stock at unit cost, from the stock records (samples are never valued). */
+  stock: number;
+  difference: number;
+  reconciled: boolean;
+  /** The date of the last posted adjustment to a stock account; null if there never was one. */
+  since: string | null;
+  entries: StockJournalEntry[];
+  entriesTotal: number;
+}
+
+interface StockJournalDbRow {
+  id: string;
+  journal_date: string;
+  description: string | null;
+  source_type: string | null;
+  source_id: string | null;
+  journal_line_items: { debit: Num | null; credit: Num | null }[];
+}
+
+/**
+ * Whether the stock records tie to the books, and what moved the books since they last did.
+ *
+ * `inventory_gl_reconciliation` compares the two; nothing else shows it. A difference is
+ * usually stock paid for (journaled to the stock accounts when the payment arrived) that is not
+ * in the stock counts yet, so this lists the journals on the stock accounts after the last
+ * adjustment to them (a stock-count true-up, say), each with the invoice that was paid.
+ */
+export async function getBooksVsStock(supabase: SupabaseClient): Promise<BooksVsStock> {
+  const [recon, accounts] = await Promise.all([
+    supabase
+      .from('inventory_gl_reconciliation')
+      .select('gl_balance, subledger_value, variance, reconciled')
+      .maybeSingle(),
+    supabase.from('chart_of_accounts').select('id').in('account_number', STOCK_ACCOUNTS),
+  ]);
+  if (recon.error)
+    throw new Error(`Failed to compare stock with the books: ${recon.error.message}`);
+  if (accounts.error)
+    throw new Error(`Failed to load the stock accounts: ${accounts.error.message}`);
+  const books = Number(recon.data?.gl_balance ?? 0);
+  const stock = Number(recon.data?.subledger_value ?? 0);
+  const accountIds = (accounts.data ?? []).map(a => a.id as string);
+
+  const last = await supabase
+    .from('journals')
+    .select('journal_date, journal_line_items!inner(account_id)')
+    .eq('status', 'posted')
+    .eq('journal_type', 'adjustment')
+    .in('journal_line_items.account_id', accountIds)
+    .order('journal_date', { ascending: false })
+    .limit(1);
+  if (last.error)
+    throw new Error(`Failed to find the last stock adjustment: ${last.error.message}`);
+  const since = (last.data?.[0]?.journal_date as string | undefined)?.slice(0, 10) ?? null;
+
+  // Only the lines on the stock accounts come back (the inner join filters the embed too).
+  let query = supabase
+    .from('journals')
+    .select(
+      'id, journal_date, description, source_type, source_id, journal_line_items!inner(debit, credit, account_id)'
+    )
+    .eq('status', 'posted')
+    .in('journal_line_items.account_id', accountIds)
+    .order('journal_date', { ascending: false })
+    .limit(since ? MAX_JOURNALS : RECENT_JOURNALS);
+  if (since) query = query.gt('journal_date', `${since}T23:59:59.999Z`);
+  const moved = await query;
+  if (moved.error) throw new Error(`Failed to load the stock journals: ${moved.error.message}`);
+  const journals = (moved.data ?? []) as unknown as StockJournalDbRow[];
+
+  const transactionIds = journals
+    .filter(j => j.source_type === 'financial_transaction' && j.source_id)
+    .map(j => j.source_id as string);
+  const invoiceOf = new Map<string, { id: string; number: string }>();
+  if (transactionIds.length > 0) {
+    const links = await supabase
+      .from('invoice_payments')
+      .select('financial_transaction_id, invoice_id, invoices(invoice_number)')
+      .in('financial_transaction_id', transactionIds);
+    if (links.error) throw new Error(`Failed to load the invoices paid: ${links.error.message}`);
+    for (const link of (links.data ?? []) as unknown as {
+      financial_transaction_id: string;
+      invoice_id: string;
+      invoices: { invoice_number: string } | null;
+    }[]) {
+      if (link.invoices) {
+        invoiceOf.set(link.financial_transaction_id, {
+          id: link.invoice_id,
+          number: link.invoices.invoice_number,
+        });
+      }
+    }
+  }
+
+  const entries = journals.map((j): StockJournalEntry => {
+    const transactionId = j.source_type === 'financial_transaction' ? j.source_id : null;
+    const invoice = transactionId ? invoiceOf.get(transactionId) : undefined;
+    return {
+      journalId: j.id,
+      date: j.journal_date.slice(0, 10),
+      description: j.description,
+      amount: round2(
+        j.journal_line_items.reduce((n, l) => n + Number(l.debit ?? 0) - Number(l.credit ?? 0), 0)
+      ),
+      transactionId,
+      invoiceId: invoice?.id ?? null,
+      invoiceNumber: invoice?.number ?? null,
+    };
+  });
+
+  const difference = round2(books - stock);
+  return {
+    books,
+    stock,
+    difference,
+    reconciled: Math.abs(difference) < 0.01,
+    since,
+    entries,
+    entriesTotal: round2(entries.reduce((n, e) => n + e.amount, 0)),
+  };
+}
+
+const round2 = (n: number) => Math.round(n * 100) / 100;

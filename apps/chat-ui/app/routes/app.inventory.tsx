@@ -1,7 +1,8 @@
 /**
  * Inventory Route (Protected)
  *
- * Stock, items, movements and valuation. The loader reads the four datasets independently, so
+ * Stock, items, movements and valuation, and how the stock records stand against the books. The
+ * loader reads the datasets independently, so
  * one failing does not blank the others. The action edits an item (cost, type, product link);
  * recording a gift or write-off goes through /api/inventory.
  */
@@ -10,6 +11,7 @@ import type { ActionFunctionArgs, LoaderFunctionArgs, MetaFunction } from 'react
 import { useLoaderData } from 'react-router';
 import { InventoryPage, type InventoryPageData } from '~/components/inventory';
 import {
+  getBooksVsStock,
   getInventoryMovements,
   getInventoryProductList,
   getInventoryValuation,
@@ -43,12 +45,16 @@ export async function loader({ request }: LoaderFunctionArgs): Promise<Inventory
   await requireUser(request);
   // The signed-in user's own session: row-level security limits every read to their business.
   const supabase = getRequestSupabaseClient(request);
-  const [itemsResult, movementsResult, valuationResult, stockResult] = await Promise.allSettled([
-    getInventoryProductList(supabase),
-    getInventoryMovements(supabase),
-    getInventoryValuation(supabase),
-    getStockLevels(supabase),
-  ]);
+  // Archived products are shown only when the person asks (?archived=1).
+  const includeArchived = new URL(request.url).searchParams.get('archived') === '1';
+  const [itemsResult, movementsResult, valuationResult, stockResult, booksResult] =
+    await Promise.allSettled([
+      getInventoryProductList(supabase, { includeArchived }),
+      getInventoryMovements(supabase),
+      getInventoryValuation(supabase),
+      getStockLevels(supabase, { includeArchived }),
+      getBooksVsStock(supabase),
+    ]);
 
   const errors: string[] = [];
   const list = settledOr(
@@ -76,12 +82,15 @@ export async function loader({ request }: LoaderFunctionArgs): Promise<Inventory
     'Stock levels'
   );
 
+  const booksVsStock = settledOr(booksResult, null, errors, 'Stock against the books');
+
   return {
     allItems: list.allItems,
     products: list.products.map(p => ({ id: p.id, name: p.name })),
     stock,
     movements,
     valuation,
+    booksVsStock,
     errors,
   };
 }

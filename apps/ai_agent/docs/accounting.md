@@ -249,3 +249,29 @@ The lifecycle is in `services/invoice_rules.py` (pure functions, no I/O; tested 
 
 Routes: `POST /accounting/detect-duplicates`, `POST /accounting/reconcile-invoices`,
 `POST /accounting/clean-paypal`.
+
+## Stock value against the books
+
+Stock has two sides that are filled separately. The books' stock accounts (1031 to 1035) are
+debited when a supplier payment is journaled to them (the day it is paid, whether or not the goods
+have arrived) and credited by cost of goods sold. The stock records are the count in the store
+(`inventory_on_hand`, see [Stock quantities](data-pipeline.md#stock-quantities)) at each item's
+unit cost, sellable items only: samples are counted but never valued.
+
+`inventory_gl_reconciliation` is the database view that compares them: `gl_balance` (posted
+journals only), `subledger_value`, `variance` and `reconciled`. It is one of the
+`accounting_health_checks` (`/accounting/health-checks`, internal key), and the Inventory page
+shows it ("Stock against your books", `getBooksVsStock`, read as the signed-in user: the view is
+`security_invoker`, so it counts only their business).
+
+A difference is usually stock paid for and not yet in the counts. The panel lists the journals on
+the stock accounts after the last posted `adjustment` journal that touches them (a stock-count
+true-up, say), each with the invoice the payment settled, and says how far they account for the
+difference. It closes by itself once the store's counts catch up. A difference with no journals
+behind it is the stock records moving on their own, a count or a cost that changed with no
+journal, and a stock-count adjustment journal brings the books to the count. Nothing is posted
+from the panel.
+
+`inventory_negative_stock` (and so the `no_negative_stock` health check) leaves out items of
+archived products, which the Inventory page hides; the reconciliation still counts every item,
+floored at zero.

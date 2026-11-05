@@ -29,7 +29,7 @@ import {
 } from './model';
 
 export interface CardHandlers {
-  onSync: (forceFull: boolean) => void;
+  onSync: (forceFull: boolean, includeDrafts?: boolean) => void;
   onSyncEndpoint: (endpoint: string) => void;
   onValidateApiKey: () => void;
   onUpdateApiKey: (apiKey: string) => void;
@@ -561,6 +561,16 @@ export function IntegrationCard({
                     'Ignores the sync watermark and re-fetches full history. Use if data looks incomplete or was corrected later.',
                   onSelect: () => handlers.onSync(true),
                 },
+                ...(integration.provider === 'shopify'
+                  ? [
+                      {
+                        label: 'Sync with drafts',
+                        description:
+                          'Also brings in draft products, which are left out otherwise. Fetches all products again; orders and the rest stay incremental.',
+                        onSelect: () => handlers.onSync(false, true),
+                      },
+                    ]
+                  : []),
               ]}
             />
           </div>

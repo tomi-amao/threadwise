@@ -28,10 +28,10 @@ const TABLES: [table: string, owned: () => number][] = [
   ['transaction_attachments', () => seed.attachments.count],
   ['bank_accounts', () => seed.bankAccountCount],
   ['inventory_movements', () => seed.inventory.movementCount],
-  ['inventory_on_hand', () => seed.inventory.itemCount],
+  ['inventory_on_hand', () => seed.inventory.itemCount + 1],
   ['invoices', () => seed.invoices.total],
   ['invoice_payments', () => seed.invoices.paymentLinks],
-  ['products', () => seed.productCount + 3],
+  ['products', () => seed.productCount + 3 + 1],
   ['collections', () => seed.collections.count],
   ['collection_products', () => 5],
   ['collection_costs', () => seed.collections.autumn.costCount],
@@ -57,6 +57,8 @@ test.describe('without signing in', () => {
       'collection_costs',
       'transaction_attachments',
       'invoice_payments',
+      'inventory_gl_reconciliation',
+      'inventory_negative_stock',
     ]) {
       const result = await api('GET', table, 'limit=5');
       expect(result.rows, table).toEqual([]);
@@ -185,6 +187,19 @@ test.describe('signed in as the first business', () => {
 });
 
 test.describe('signed in as the other business', () => {
+  test('the stock-against-books view counts only the business asking', async () => {
+    const read = async (token: string) =>
+      (await api('GET', 'inventory_gl_reconciliation', 'select=gl_balance,subledger_value', token))
+        .rows[0];
+    const own = await read(mine);
+    expect(Number(own.gl_balance)).toBe(seed.ledger.stock.books);
+    expect(Number(own.subledger_value)).toBe(seed.ledger.stock.records);
+    // The rival has stock but no stock journals, so its books side is nothing.
+    const rivals = await read(theirs);
+    expect(Number(rivals.gl_balance)).toBe(0);
+    expect(Number(rivals.subledger_value)).toBe(seed.rival.stockRecords);
+  });
+
   test('sees only its own rows', async () => {
     expect((await api('GET', 'orders', 'select=id', theirs)).count).toBe(rival.orderNumbers.length);
     expect((await api('GET', 'customers', 'select=id', theirs)).count).toBe(
