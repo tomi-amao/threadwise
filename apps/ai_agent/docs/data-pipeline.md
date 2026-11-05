@@ -161,6 +161,17 @@ The list endpoint's paging is undocumented; `MerchantAdapter.list_orders` pages 
 `to` = the oldest `created_at` seen and stops when a page brings nothing new. The API version
 is pinned (`Revolut-Api-Version: 2024-09-01`), because the response shape depends on it.
 
+## Order lines and products
+
+An order line is linked to its product (`order_line_items.product_id`) when its order is loaded,
+by `product_external_id`, and only if the product is already in the app. A product that arrives
+later (a sync that starts after the first orders, or a product added to the store afterwards)
+would leave those lines unlinked for good, and the Products page would list it twice: once with
+the sales since it arrived, once by name with the sales before. So saving a product also links
+the unlinked lines of that business and provider that name it (`_link_order_lines`). Lines
+that name no product the app has stay unlinked, and the Products page lists them by name as
+"No longer sold".
+
 ## Stock quantities
 
 The store the business sells through decides how many it has. Nothing in the app asks for a stock
