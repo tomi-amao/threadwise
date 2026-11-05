@@ -75,12 +75,16 @@ export interface Summary {
   top: ProductRow | null;
 }
 
-export function summarise(products: ProductRow[]): Summary {
-  const top = [...products].sort(sorter('revenue'))[0] ?? null;
+/**
+ * The count and the best seller are of what is listed; units and revenue are of everything sold,
+ * so hiding archived products from the list does not make the business look smaller.
+ */
+export function summarise(listed: ProductRow[], everything: ProductRow[] = listed): Summary {
+  const top = [...listed].sort(sorter('revenue'))[0] ?? null;
   return {
-    count: products.length,
-    units: products.reduce((s, p) => s + p.units, 0),
-    revenue: products.reduce((s, p) => s + p.revenue, 0),
+    count: listed.length,
+    units: everything.reduce((s, p) => s + p.units, 0),
+    revenue: everything.reduce((s, p) => s + p.revenue, 0),
     top: top && top.revenue > 0 ? top : null,
   };
 }

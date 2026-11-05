@@ -49,6 +49,11 @@ export const RIVAL_ENTITY_NAME = 'Rival Co (E2E)';
 const SIZES = ['S', 'M'] as const;
 const ARCHIVED_PRODUCT_NAME = 'Retired Wool Cap';
 const ARCHIVED_SKU = 'E2E-ARCHIVED';
+/** Sold once, under a name that is no product any more. */
+const GONE_PRODUCT_NAME = 'Discontinued Scarf';
+/** [units, revenue] of the old sales of the archived product and of the product that is gone. */
+const ARCHIVED_SALE = [2, 60] as const;
+const GONE_SALE = [1, 20] as const;
 /** [name, price, external id]: the first has one old sale, the other two never sold. */
 const EXTRA_PRODUCTS = [
   ['Heritage Gilet', 150, 'e2e-prod-gilet'],
@@ -398,7 +403,34 @@ async function main() {
     total_price_amount: 150,
     created_at: oldestOrder.created_at,
   };
-  await insertChunked('order_line_items', 'order_line_items', [...lineRows, giletLine], 'id');
+  // Two more old sales the Products page keeps out of its list: an archived product's, and a
+  // sale of something that is no product any more.
+  const archivedLine = {
+    order_id: oldestOrder.id,
+    external_id: 'e2e-line-1001-archived',
+    product_id: archivedProduct.id,
+    product_name: ARCHIVED_PRODUCT_NAME,
+    quantity: ARCHIVED_SALE[0],
+    unit_price_amount: ARCHIVED_SALE[1] / ARCHIVED_SALE[0],
+    total_price_amount: ARCHIVED_SALE[1],
+    created_at: oldestOrder.created_at,
+  };
+  const goneLine = {
+    order_id: oldestOrder.id,
+    external_id: 'e2e-line-1001-gone',
+    product_id: null,
+    product_name: GONE_PRODUCT_NAME,
+    quantity: GONE_SALE[0],
+    unit_price_amount: GONE_SALE[1] / GONE_SALE[0],
+    total_price_amount: GONE_SALE[1],
+    created_at: oldestOrder.created_at,
+  };
+  await insertChunked(
+    'order_line_items',
+    'order_line_items',
+    [...lineRows, giletLine, archivedLine, goneLine],
+    'id'
+  );
 
   const feeFor = (amount: number) => money(amount * 0.029 + 0.2);
   const paymentRows = orders.map((o, i) => {
@@ -623,7 +655,9 @@ async function main() {
       quantity_source: 'ledger',
       variant_external_id: 'e2e-var-archived',
       sku: ARCHIVED_SKU,
-      unit_cost: 10,
+      // No cost: the movements history derives a sale from the order line of a costed item
+      // with no recorded sales, and this item's old sale is not meant to show up there.
+      unit_cost: 0,
       item_type: 'sellable',
       created_at: daysAgo(320),
     })
@@ -1256,11 +1290,16 @@ async function main() {
     }
   }
   addSale('Heritage Gilet', 1, 150, plan[0].n, plan[0].age);
-  const ranked = [...productStats.entries()].sort((a, b) => b[1].revenue - a[1].revenue);
+  addSale(ARCHIVED_PRODUCT_NAME, ARCHIVED_SALE[0], ARCHIVED_SALE[1], plan[0].n, plan[0].age);
+  addSale(GONE_PRODUCT_NAME, GONE_SALE[0], GONE_SALE[1], plan[0].n, plan[0].age);
+  // The list leaves these two out; the totals do not.
+  const unlisted = new Set([ARCHIVED_PRODUCT_NAME, GONE_PRODUCT_NAME]);
+  const listedStats = [...productStats.entries()].filter(([name]) => !unlisted.has(name));
+  const ranked = [...listedStats].sort((a, b) => b[1].revenue - a[1].revenue);
   const productSummary = {
     total: products.length + extraProducts.length,
-    selling: [...productStats.values()].filter(e => e.youngest <= 90).length,
-    slowing: [...productStats.values()].filter(e => e.youngest > 90).length,
+    selling: listedStats.filter(([, e]) => e.youngest <= 90).length,
+    slowing: listedStats.filter(([, e]) => e.youngest > 90).length,
     never: EXTRA_PRODUCTS.length - 1,
     units: [...productStats.values()].reduce((sum, e) => sum + e.units, 0),
     revenue: money([...productStats.values()].reduce((sum, e) => sum + e.revenue, 0)),
@@ -1992,7 +2031,13 @@ async function main() {
     orderCount: ORDER_COUNT,
     customerCount: customers.length,
     productCount: products.length,
-    archived: { productName: ARCHIVED_PRODUCT_NAME, sku: ARCHIVED_SKU },
+    archived: {
+      productName: ARCHIVED_PRODUCT_NAME,
+      sku: ARCHIVED_SKU,
+      goneName: GONE_PRODUCT_NAME,
+      hiddenCount: 2,
+      hiddenRevenue: money(ARCHIVED_SALE[1] + GONE_SALE[1]),
+    },
     bankAccountCount: banks.length,
     transactionCount: TXN_COUNT,
     attachments,

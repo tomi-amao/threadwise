@@ -64,15 +64,24 @@ export function ProductsPage({
   const openId = sp.get('product');
   const showArchived = sp.get('archived') === '1';
 
-  const summary = useMemo(() => summarise(products), [products]);
+  // The list leaves archived products out until asked; the totals keep their sales.
+  const listed = useMemo(
+    () => (showArchived ? products : products.filter(p => !p.archived)),
+    [products, showArchived]
+  );
+  const hiddenWithSales = useMemo(
+    () => (showArchived ? [] : products.filter(p => p.archived && p.revenue > 0)),
+    [products, showArchived]
+  );
+  const summary = useMemo(() => summarise(listed, products), [listed, products]);
   const counts = useMemo(
     () =>
-      Object.fromEntries(TABS.map(t => [t.id, products.filter(p => inTab(p, t.id, today)).length])),
-    [products, today]
+      Object.fromEntries(TABS.map(t => [t.id, listed.filter(p => inTab(p, t.id, today)).length])),
+    [listed, today]
   );
   const rows = useMemo(
-    () => products.filter(p => inTab(p, tab, today) && matchesSearch(p, q)).sort(sorter(sort)),
-    [products, tab, today, q, sort]
+    () => listed.filter(p => inTab(p, tab, today) && matchesSearch(p, q)).sort(sorter(sort)),
+    [listed, tab, today, q, sort]
   );
   const current = Math.min(page, Math.max(1, Math.ceil(rows.length / PAGE_SIZE)));
   const shown = rows.slice((current - 1) * PAGE_SIZE, current * PAGE_SIZE);
@@ -118,6 +127,26 @@ export function ProductsPage({
             }
           />
         </div>
+
+        {hiddenWithSales.length > 0 && (
+          <p className="text-[13px] text-text-2">
+            {int(hiddenWithSales.length)} archived{' '}
+            {hiddenWithSales.length === 1 ? 'product' : 'products'} with{' '}
+            {money(
+              hiddenWithSales.reduce((s, p) => s + p.revenue, 0),
+              currency
+            )}{' '}
+            in sales {hiddenWithSales.length === 1 ? 'is' : 'are'} left out of the list. The totals
+            above include them.{' '}
+            <button
+              type="button"
+              onClick={() => set({ archived: '1' })}
+              className="rounded-sm text-accent-text underline underline-offset-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              Show them
+            </button>
+          </p>
+        )}
 
         <JumpTo
           items={[
@@ -262,7 +291,7 @@ export function ProductsPage({
                             <span className="block max-w-[260px]">
                               <span className="block truncate">{p.name}</span>
                               <span className="block truncate font-mono text-xs text-text-2">
-                                Not in your catalogue
+                                No longer sold
                               </span>
                             </span>
                           )}

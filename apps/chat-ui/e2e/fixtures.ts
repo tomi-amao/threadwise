@@ -10,7 +10,15 @@ export interface SeedManifest {
   customerCount: number;
   productCount: number;
   /** An archived product and its item: left out of the pages until archived products are shown. */
-  archived: { productName: string; sku: string };
+  archived: {
+    productName: string;
+    sku: string;
+    /** Sold once under a name that is no product any more. */
+    goneName: string;
+    /** Rows with sales that the Products page leaves out of its list, and what they sold. */
+    hiddenCount: number;
+    hiddenRevenue: number;
+  };
   bankAccountCount: number;
   transactionCount: number;
   /** Stored balances plus every seeded transaction, as the dashboard derives it. */
