@@ -148,11 +148,13 @@ export async function getIntegrationsSummary(entityId?: string): Promise<Integra
  *
  * @param sourceId - The external source ID to sync
  * @param endpoint - Optional specific endpoint to sync (e.g., 'products', 'orders')
+ * @param includeDrafts - Shopify only: also sync draft products (left out by default)
  */
 export async function triggerSync(
   sourceId: string,
   endpoint?: string,
-  forceFull?: boolean
+  forceFull?: boolean,
+  includeDrafts?: boolean
 ): Promise<TriggerSyncResponse | null> {
   const baseUrl = getApiBaseUrl();
 
@@ -164,7 +166,11 @@ export async function triggerSync(
       },
       // force_full=false (default) fetches only records updated since each
       // endpoint's last successful sync; true re-fetches full history.
-      body: JSON.stringify({ endpoint, force_full: forceFull ?? false }),
+      body: JSON.stringify({
+        endpoint,
+        force_full: forceFull ?? false,
+        include_drafts: includeDrafts ?? false,
+      }),
     });
 
     if (!response.ok) {

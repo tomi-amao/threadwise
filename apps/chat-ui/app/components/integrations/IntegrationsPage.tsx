@@ -175,7 +175,12 @@ export function IntegrationsPage() {
   // Handle sync. forceFull=false (default) only fetches records updated
   // since each endpoint's last successful sync; true re-fetches full
   // history, ignoring any watermark.
-  const handleSync = async (sourceId: string, endpoint?: string, forceFull = false) => {
+  const handleSync = async (
+    sourceId: string,
+    endpoint?: string,
+    forceFull = false,
+    includeDrafts = false
+  ) => {
     setSyncingIds(prev => new Set([...prev, sourceId]));
 
     setActiveSyncSource({ id: sourceId, name: '' }); // Name can be set if needed
@@ -190,7 +195,7 @@ export function IntegrationsPage() {
     }
 
     try {
-      const response = await triggerSync(sourceId, endpoint, forceFull);
+      const response = await triggerSync(sourceId, endpoint, forceFull, includeDrafts);
       if (response?.status != 'triggered') {
         throw new Error('Sync did not trigger successfully');
       }
@@ -471,7 +476,8 @@ export function IntegrationsPage() {
                 key={integration.id}
                 integration={integration}
                 handlers={{
-                  onSync: forceFull => handleSync(integration.id, undefined, forceFull),
+                  onSync: (forceFull, includeDrafts) =>
+                    handleSync(integration.id, undefined, forceFull, includeDrafts),
                   onSyncEndpoint: endpoint => handleSync(integration.id, endpoint),
                   onValidateApiKey: () => handleValidateApiKey(integration.id),
                   onUpdateApiKey: apiKey => handleUpdateApiKey(integration.id, apiKey),

@@ -39,6 +39,7 @@ async def shopify_sync_all(ctx: inngest.Context) -> Dict[str, Any]:
         event_data: Dict[str, Any] = dict(ctx.event.data)
         source_id = event_data.get("source_id") or ""
         force_full = bool(event_data.get("force_full", False))
+        include_drafts = bool(event_data.get("include_drafts", False))
 
         if not source_id:
             raise ValueError("source_id is required")
@@ -79,6 +80,7 @@ async def shopify_sync_all(ctx: inngest.Context) -> Dict[str, Any]:
                     "source_id": source_id,
                     "endpoint": endpoint,
                     "force_full": force_full,
+                    "include_drafts": include_drafts,
                 },
             )
             results[endpoint] = endpoint_result
@@ -197,6 +199,7 @@ async def shopify_sync_endpoint(ctx: inngest.Context) -> Dict[str, Any]:
         endpoint = event_data.get("endpoint", "unknown")
         resume_cursor = event_data.get("cursor")
         force_full = bool(event_data.get("force_full", False))
+        include_drafts = bool(event_data.get("include_drafts", False))
 
         if not source_id or endpoint == "unknown":
             raise ValueError("source_id and endpoint are required")
@@ -220,8 +223,13 @@ async def shopify_sync_endpoint(ctx: inngest.Context) -> Dict[str, Any]:
             )
         )
 
+        # Drafts that already exist were not fetched before, so an incremental
+        # fetch (only what changed since the watermark) would miss them: fetch
+        # the products in full.
+        drafts_requested = include_drafts and endpoint == "products"
+
         since = None
-        if not force_full:
+        if not force_full and not drafts_requested:
 
             async def _get_watermark() -> Optional[str]:
                 watermark = await sync_service.get_sync_watermark(source_id, endpoint)
@@ -278,7 +286,9 @@ async def shopify_sync_endpoint(ctx: inngest.Context) -> Dict[str, Any]:
         pages_processed = 0
         batch: List[Dict[str, Any]] = []
 
-        async for record in adapter.stream_endpoint(endpoint, cursor, since=since):
+        async for record in adapter.stream_endpoint(
+            endpoint, cursor, since=since, include_drafts=include_drafts
+        ):
             batch.append(
                 {
                     "entity_type": record.entity_type,

@@ -169,6 +169,11 @@ count, and invoices never write one (see [Invoices](accounting.md#invoices)).
 - **Shopify:** an item's `available_quantity` is its on-hand (`quantity_source = 'shopify'`),
   kept current by the inventory-level sync. Shopify items record no movement for a count change;
   their movements are sales and disposals, kept for the cost each carried.
+  The products sync asks for active products only. **Sync with drafts** (the Sync menu on a
+  Shopify card, `include_drafts` on `POST /integrations/sources/{id}/sync`) also fetches drafts, and
+  fetches the products in full, because drafts that already exist were never fetched and an
+  incremental fetch would skip them. Archived products are never fetched. A draft arrives with
+  `products.status = 'draft'`.
 - **Squarespace:** an item is `ledger` sourced. The sync stores Squarespace's count and records
   each change as an `ADJUSTMENT` movement (`count_change_note`: "Squarespace sync: 5 → 3"), and
   on-hand is the sum of movements. Another store would take this path too.

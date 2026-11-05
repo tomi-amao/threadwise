@@ -104,6 +104,14 @@ class TriggerSyncRequest(BaseModel):
             "endpoints with no watermark yet still do a full fetch."
         ),
     )
+    include_drafts: bool = Field(
+        False,
+        description=(
+            "Shopify only: also sync draft products, which are left out by "
+            "default. Products are then fetched in full, since drafts that "
+            "exist already were never fetched."
+        ),
+    )
 
 
 class TriggerSyncResponse(BaseModel):
@@ -534,6 +542,12 @@ async def trigger_sync(source_id: str, request: Optional[TriggerSyncRequest] = N
 
         provider = source.get("provider", "squarespace")
         force_full = request.force_full if request else False
+        include_drafts = bool(request and request.include_drafts)
+        if include_drafts and provider != "shopify":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Draft products only exist in Shopify",
+            )
 
         # Trigger appropriate sync event based on provider
         if request and request.endpoint:
@@ -545,6 +559,7 @@ async def trigger_sync(source_id: str, request: Optional[TriggerSyncRequest] = N
                         "source_id": source_id,
                         "endpoint": request.endpoint,
                         "force_full": force_full,
+                        "include_drafts": include_drafts,
                     },
                 )
             )
@@ -559,6 +574,7 @@ async def trigger_sync(source_id: str, request: Optional[TriggerSyncRequest] = N
                     data={
                         "source_id": source_id,
                         "force_full": force_full,
+                        "include_drafts": include_drafts,
                     },
                 )
             )
