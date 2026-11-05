@@ -27,6 +27,20 @@ const openProduct = async (page: Page, name: string) => {
 };
 
 test.describe('products', () => {
+  test('an archived product is left out until archived products are shown', async ({ page }) => {
+    const name = readManifest().archived.productName;
+    await page.goto(`/products?q=${encodeURIComponent(name)}`);
+    await expect(page.getByText('Nothing matches.')).toBeVisible();
+
+    await page.getByRole('button', { name: 'Archived shown' }).click();
+    await expect(page).toHaveURL(/archived=1/);
+    await expect(table(page).locator('tr', { hasText: name })).toContainText('Archived');
+
+    await page.getByRole('button', { name: 'Archived hidden' }).click();
+    await expect(page).not.toHaveURL(/archived=/);
+    await expect(page.getByText('Nothing matches.')).toBeVisible();
+  });
+
   test('headline numbers: products, units, revenue, best seller', async ({ page }) => {
     await page.goto('/products');
     await expect(page.getByRole('heading', { level: 1 })).toBeVisible();

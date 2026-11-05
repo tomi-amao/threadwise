@@ -54,6 +54,8 @@ export interface InventoryEntry {
   state: StockState | null;
   linked: boolean;
   costed: boolean;
+  /** Its product is archived: listed on request, and left out of the headline numbers. */
+  archived: boolean;
 }
 
 export function stateOf(stock: StockLevelRow): StockState {
@@ -94,6 +96,7 @@ export function buildEntries(items: InventoryItemRow[], stock: StockLevelRow[]):
         // Samples and materials are never linked by design, so they are never "unlinked".
         linked: itemType !== 'sellable' || !!item.productId,
         costed: item.unitCost > 0,
+        archived: item.archived,
       };
     })
     .sort((a, b) => a.name.localeCompare(b.name) || (a.sku ?? '').localeCompare(b.sku ?? ''));
@@ -150,9 +153,12 @@ export interface Summary {
   needsAttention: number;
 }
 
-/** Headline numbers describe sellable stock only; samples and materials are excluded. */
+/**
+ * Headline numbers describe sellable stock only; samples and materials are excluded, and so are
+ * archived products, so showing them in the list does not change the numbers.
+ */
 export function summarise(entries: InventoryEntry[]): Summary {
-  const sellable = entries.filter(e => e.itemType === 'sellable');
+  const sellable = entries.filter(e => e.itemType === 'sellable' && !e.archived);
   const count = (state: StockState) => sellable.filter(e => e.state === state).length;
   const unlinked = sellable.filter(e => !e.linked).length;
   const uncosted = sellable.filter(e => !e.costed && !e.isUnlimited).length;

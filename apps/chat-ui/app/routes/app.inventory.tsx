@@ -45,12 +45,14 @@ export async function loader({ request }: LoaderFunctionArgs): Promise<Inventory
   await requireUser(request);
   // The signed-in user's own session: row-level security limits every read to their business.
   const supabase = getRequestSupabaseClient(request);
+  // Archived products are shown only when the person asks (?archived=1).
+  const includeArchived = new URL(request.url).searchParams.get('archived') === '1';
   const [itemsResult, movementsResult, valuationResult, stockResult, booksResult] =
     await Promise.allSettled([
-      getInventoryProductList(supabase),
+      getInventoryProductList(supabase, { includeArchived }),
       getInventoryMovements(supabase),
       getInventoryValuation(supabase),
-      getStockLevels(supabase),
+      getStockLevels(supabase, { includeArchived }),
       getBooksVsStock(supabase),
     ]);
 

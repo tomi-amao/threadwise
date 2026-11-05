@@ -124,6 +124,8 @@ export interface InventoryItemRow {
   attributes: Record<string, string>;
   /** All variants of the linked product */
   productVariants: ProductVariant[];
+  /** The linked product is archived (only listed when archived products are asked for) */
+  archived: boolean;
 }
 
 export interface ProductVariant {
@@ -150,8 +152,14 @@ export interface InventoryProductRow {
   createdAt: string;
 }
 
-/** Fetches all products with their linked inventory items. */
-export async function getInventoryProductList(supabase: SupabaseClient): Promise<{
+/**
+ * Fetches all products with their linked inventory items. Archived products, and with them their
+ * items, are left out unless asked for.
+ */
+export async function getInventoryProductList(
+  supabase: SupabaseClient,
+  { includeArchived = false }: { includeArchived?: boolean } = {}
+): Promise<{
   products: InventoryProductRow[];
   unlinkedItems: InventoryItemRow[];
   allItems: InventoryItemRow[];
@@ -161,14 +169,14 @@ export async function getInventoryProductList(supabase: SupabaseClient): Promise
   // Both lists are read in full (paged): a plain select() stops at the API's 1,000-row cap.
   // Paging needs a unique order, so these order by id and are sorted below.
   const productsData = (
-    await fetchAllRows<ProductDbRow>('products', (from, to) =>
-      supabase
+    await fetchAllRows<ProductDbRow>('products', (from, to) => {
+      const query = supabase
         .from('products')
-        .select('id, entity_id, name, provider, status, product_type, variants, created_at')
-        .neq('status', 'archived')
+        .select('id, entity_id, name, provider, status, product_type, variants, created_at');
+      return (includeArchived ? query : query.neq('status', 'archived'))
         .order('id')
-        .range(from, to)
-    )
+        .range(from, to);
+    })
   ).sort((a, b) => String(a.name ?? '').localeCompare(String(b.name ?? '')));
 
   const items = await fetchAllRows<ItemDbRow>('inventory items', (from, to) =>
@@ -228,6 +236,7 @@ export async function getInventoryProductList(supabase: SupabaseClient): Promise
       sellingPrice: variant?.price ?? null,
       attributes: variant?.attributes ?? {},
       productVariants,
+      archived: false,
     };
   }
 
@@ -236,6 +245,7 @@ export async function getInventoryProductList(supabase: SupabaseClient): Promise
     const linkedItems = (itemsByProduct.get(p.id) ?? []).map(item => {
       const row = rawItemToRow(item, variants);
       row.productName = p.name;
+      row.archived = p.status === 'archived';
       return row;
     });
     const uncostedCount = linkedItems.filter(i => i.unitCost <= 0).length;
@@ -513,7 +523,10 @@ export interface StockData {
   sampleCount: number;
 }
 
-export async function getStockLevels(supabase: SupabaseClient): Promise<StockData> {
+export async function getStockLevels(
+  supabase: SupabaseClient,
+  { includeArchived = false }: { includeArchived?: boolean } = {}
+): Promise<StockData> {
   // On-hand comes from the `inventory_on_hand` view — the single canonical
   // definition, shared with the dashboard, reports and the chat agent. Do not
   // re-derive it here from available_quantity or inventory_movements.
@@ -537,7 +550,7 @@ export async function getStockLevels(supabase: SupabaseClient): Promise<StockDat
       if (row.item_type === 'sample' || row.item_type === 'material') return true;
       if (!row.product_id) return false;
       const status = row.products?.status;
-      return row.products && status !== 'archived' && status !== 'draft';
+      return row.products && (status !== 'archived' || includeArchived) && status !== 'draft';
     })
     .map(row => {
       const onHand = Number(row.on_hand ?? 0);

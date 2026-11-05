@@ -47,6 +47,8 @@ export const ENTITY_NAME = 'Atelier North (E2E)';
 const OPENING_BALANCE = 600_000;
 export const RIVAL_ENTITY_NAME = 'Rival Co (E2E)';
 const SIZES = ['S', 'M'] as const;
+const ARCHIVED_PRODUCT_NAME = 'Retired Wool Cap';
+const ARCHIVED_SKU = 'E2E-ARCHIVED';
 /** [name, price, external id]: the first has one old sale, the other two never sold. */
 const EXTRA_PRODUCTS = [
   ['Heritage Gilet', 150, 'e2e-prod-gilet'],
@@ -222,6 +224,32 @@ async function main() {
       )
       .select('id, name')
   )) as { id: string; name: string }[];
+
+  // One archived product, with an item that holds nothing: the pages leave it out until asked.
+  const archivedProduct = (await must(
+    'archived product',
+    supabase
+      .from('products')
+      .insert({
+        entity_id: entityId,
+        provider: 'shopify',
+        external_id: 'e2e-prod-archived',
+        name: ARCHIVED_PRODUCT_NAME,
+        product_type: 'apparel',
+        status: 'archived',
+        created_at: daysAgo(330),
+        variants: [
+          {
+            external_id: 'e2e-var-archived',
+            sku: ARCHIVED_SKU,
+            price: { amount: 30, currency: 'GBP' },
+            attributes: { SIZE: 'M' },
+          },
+        ],
+      })
+      .select('id')
+      .single()
+  )) as { id: string };
 
   // 4. Customers.
   const first = [
@@ -585,6 +613,21 @@ async function main() {
     'id, sku'
   );
   const itemIdBySku = new Map(inventoryItems.map(r => [r.sku, r.id]));
+  // The archived product's item, outside itemRows so the counts of the live stock stay as they are.
+  await must(
+    'archived inventory item',
+    supabase.from('inventory_items').insert({
+      entity_id: entityId,
+      product_id: archivedProduct.id,
+      provider: 'manual',
+      quantity_source: 'ledger',
+      variant_external_id: 'e2e-var-archived',
+      sku: ARCHIVED_SKU,
+      unit_cost: 10,
+      item_type: 'sellable',
+      created_at: daysAgo(320),
+    })
+  );
 
   const movementRows: Record<string, unknown>[] = [];
   const addMovement = (
@@ -1949,6 +1992,7 @@ async function main() {
     orderCount: ORDER_COUNT,
     customerCount: customers.length,
     productCount: products.length,
+    archived: { productName: ARCHIVED_PRODUCT_NAME, sku: ARCHIVED_SKU },
     bankAccountCount: banks.length,
     transactionCount: TXN_COUNT,
     attachments,

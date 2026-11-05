@@ -130,6 +130,26 @@ test.describe('inventory', () => {
     await expect.poll(() => rows.count()).toBeGreaterThan(5);
   });
 
+  test('an archived product shows in stock and items only when asked, and leaves the numbers alone', async ({
+    page,
+  }) => {
+    const { sku } = manifest.archived;
+    await page.goto(`/inventory?tab=items&q=${sku}`);
+    await expect(page.getByText('Nothing matches.')).toBeVisible();
+
+    await page.getByRole('button', { name: 'Archived shown' }).click();
+    await expect(page).toHaveURL(/archived=1/);
+    const table = page.getByRole('region', { name: 'Inventory items' });
+    await expect(table.locator('tr', { hasText: sku })).toContainText('Archived');
+    // Showing it adds a row, not attention: the headline numbers are the same.
+    await expect(tile(page, 'Needs attention')).toContainText(String(attention));
+    await expect(tile(page, 'Stock value')).toContainText(gbp0(inv.stockValue));
+
+    await page.getByRole('button', { name: 'Archived hidden' }).click();
+    await expect(page).not.toHaveURL(/archived=/);
+    await expect(page.getByText('Nothing matches.')).toBeVisible();
+  });
+
   test('items tab flags unlinked and uncosted items', async ({ page }) => {
     await page.getByRole('tab', { name: /^Items/ }).click();
     const table = page.getByRole('region', { name: 'Inventory items' });

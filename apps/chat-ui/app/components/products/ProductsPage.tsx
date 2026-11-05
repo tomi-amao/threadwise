@@ -3,8 +3,9 @@
  *
  * What sells and what does not. Every product in the catalogue is listed, including the ones
  * that have never sold, and the tabs say where each stands: selling, slowing, never sold.
- * Revenue share is of the whole range, not of the current filter. Tab, sort, search and the
- * open product live in the URL.
+ * Revenue share is of the whole range, not of the current filter. Archived products are left out
+ * until the person asks for them. Tab, sort, search, that choice and the open product live in
+ * the URL.
  */
 
 import { useMemo } from 'react';
@@ -61,6 +62,7 @@ export function ProductsPage({
   const rawSort = sp.get('sort');
   const sort: Sort = isSort(rawSort) ? rawSort : 'revenue';
   const openId = sp.get('product');
+  const showArchived = sp.get('archived') === '1';
 
   const summary = useMemo(() => summarise(products), [products]);
   const counts = useMemo(
@@ -163,6 +165,15 @@ export function ProductsPage({
             onChange={v => set({ sort: v === 'revenue' ? null : v })}
             options={SORTS}
           />
+          <Segmented<'hidden' | 'shown'>
+            label="Archived products"
+            value={showArchived ? 'shown' : 'hidden'}
+            onChange={v => set({ archived: v === 'shown' ? '1' : null })}
+            options={[
+              { value: 'hidden', label: 'Archived hidden' },
+              { value: 'shown', label: 'Archived shown' },
+            ]}
+          />
           {filtered && (
             <button
               type="button"
@@ -244,6 +255,7 @@ export function ProductsPage({
                               <span className="block truncate">{p.name}</span>
                               <span className="block truncate font-mono text-xs text-text-2">
                                 {p.variant_count} {p.variant_count === 1 ? 'variant' : 'variants'}
+                                {p.status === 'archived' && ' · Archived'}
                               </span>
                             </button>
                           ) : (

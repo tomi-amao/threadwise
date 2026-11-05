@@ -9,6 +9,8 @@ export interface SeedManifest {
   /** Every customer, including those who never ordered. */
   customerCount: number;
   productCount: number;
+  /** An archived product and its item: left out of the pages until archived products are shown. */
+  archived: { productName: string; sku: string };
   bankAccountCount: number;
   transactionCount: number;
   /** Stored balances plus every seeded transaction, as the dashboard derives it. */
