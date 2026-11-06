@@ -200,6 +200,11 @@ source of truth; components use tokens only, never raw colours, so a theme can n
   can fall below 4.5:1.
 - **Dark is a peer, not a skin.** Every token has both values. Amber ramp steps darken toward
   brown in dark mode so charts keep their order.
+- **Brand logos are the one exception to the palette.** The Integrations page shows each
+  provider's real logo (Simple Icons, CC0, committed in `components/integrations/logos.tsx`) as a
+  white glyph on its brand colour, as app stores show them, so it reads the same in light and
+  dark. The colours are tokens too (`--brand-*`, one value for both themes), used only there.
+  The logo is decorative: the provider's name always sits beside it.
 
 ### Headers
 
@@ -225,6 +230,10 @@ page from these before inventing a component; if one is missing, add it to the k
   a view can be shared, survives a refresh, and the back button means something.
 - **Drawers for detail and edits; dialogs only to confirm.** Nothing destructive happens without a
   dialog that says what will happen. No `window.confirm`.
+- **Apps, not cards.** A page of connected things (Integrations) is a grid of tiles: one status
+  each, the most pressing one; the tile opens a drawer with everything that can be done with it.
+  Things not set up yet are tiles too, to connect. Escape on a menu inside a drawer closes the
+  menu, not the drawer.
 - **Every figure explains itself.** Accounting words are wrapped in `Term` (a definition one hover
   or focus away, real text in the page, Escape dismisses it). Every total can be opened down to
   the entries behind it.

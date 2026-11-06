@@ -25,10 +25,13 @@ export function AddIntegrationDrawer({
   open,
   onClose,
   onAdded,
+  provider,
 }: {
   open: boolean;
   onClose: () => void;
   onAdded: () => void;
+  /** The provider whose tile was clicked; the form starts on it. */
+  provider?: ProviderKey;
 }) {
   return (
     <Drawer
@@ -39,14 +42,20 @@ export function AddIntegrationDrawer({
       description="Choose a provider and give it its credentials"
       className="w-[min(560px,100vw)]"
     >
-      {open && <Form onDone={onAdded} />}
+      {open && <Form onDone={onAdded} initialProvider={provider} />}
     </Drawer>
   );
 }
 
-function Form({ onDone }: { onDone: () => void }) {
+function Form({
+  onDone,
+  initialProvider = 'shopify',
+}: {
+  onDone: () => void;
+  initialProvider?: ProviderKey;
+}) {
   const { entity } = useAuth();
-  const [provider, setProvider] = useState<ProviderKey>('shopify');
+  const [provider, setProvider] = useState<ProviderKey>(initialProvider);
   const [account, setAccount] = useState('');
   const [displayName, setDisplayName] = useState('');
   const [apiKey, setApiKey] = useState('');

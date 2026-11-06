@@ -45,6 +45,19 @@ export function Drawer({
         <Dialog.Overlay className="fixed inset-0 z-[60] bg-foreground/35 data-[state=closed]:animate-out data-[state=open]:animate-in data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0" />
         <Dialog.Content
           aria-describedby={description ? undefined : undefined}
+          onEscapeKeyDown={e => {
+            // Escape on an open menu or list inside the drawer (focus on its items, or on the
+            // button that popped it up) closes that, not the whole drawer. A plain disclosure
+            // (expanded in place, no pop-up) does not count: Escape still closes the drawer.
+            const target = e.target instanceof Element ? e.target : null;
+            if (
+              target?.closest(
+                '[role="menu"], [role="listbox"], [aria-haspopup][aria-expanded="true"]'
+              )
+            ) {
+              e.preventDefault();
+            }
+          }}
           onOpenAutoFocus={() => {
             openerRef.current = document.activeElement as HTMLElement | null;
           }}

@@ -69,6 +69,15 @@
   --sidebar-accent-foreground: #241b2c;
   --sidebar-border: #58436c1f;
   --sidebar-ring: #f59520;
+
+  /* Brand colours of the integrations' logos (Simple Icons), the same in both themes: each
+     logo is a white glyph on its colour. The only colours outside the palette; see "Brand
+     logos" in docs/design-language.md. */
+  --brand-shopify: #7ab55c;
+  --brand-squarespace: #000000;
+  --brand-paypal: #002991;
+  --brand-revolut: #191c1f;
+  --brand-zoho: #e42527;
 }
 
 .dark {
@@ -164,6 +173,11 @@
   --color-ramp-3: var(--ramp-3);
   --color-ramp-4: var(--ramp-4);
   --color-ramp-5: var(--ramp-5);
+  --color-brand-shopify: var(--brand-shopify);
+  --color-brand-squarespace: var(--brand-squarespace);
+  --color-brand-paypal: var(--brand-paypal);
+  --color-brand-revolut: var(--brand-revolut);
+  --color-brand-zoho: var(--brand-zoho);
 
   /* Fraunces for headlines, Geist for UI, Geist Mono for labels and numbers. */
   --font-serif: 'Fraunces Variable', Georgia, serif;
