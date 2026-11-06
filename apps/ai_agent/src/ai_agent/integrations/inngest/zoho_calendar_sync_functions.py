@@ -37,6 +37,7 @@ from ...services.external_sync_service import sync_service
 from ...services.tax_deadline_service import push_tax_deadlines
 from .channels import SyncProgressData, SyncStatusData, get_sync_channel
 from .config import get_client, utc_now_iso
+from .load_after import load_after_endpoint_sync
 
 logger = logging.getLogger(__name__)
 
@@ -464,6 +465,10 @@ async def _sync_calendar_events(ctx: inngest.Context, source_id: str) -> Dict[st
         lambda: sync_service.set_sync_watermark(
             source_id, endpoint, status="completed", synced_at=run_started_at
         ),
+    )
+
+    await load_after_endpoint_sync(
+        ctx, "zoho_calendar", source_id, endpoint, items_stored
     )
 
     return {

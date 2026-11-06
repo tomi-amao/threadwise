@@ -32,7 +32,7 @@ import { IncompleteTransactionsModal } from '~/components/integrations/Incomplet
 import { JournalGenerationModal } from '~/components/integrations/JournalGenerationModal';
 import { AddIntegrationDrawer } from './AddIntegrationDrawer';
 import { IntegrationCard } from './IntegrationCard';
-import { int, relativeTime } from './model';
+import { int, isStale, relativeTime } from './model';
 
 export function IntegrationsPage() {
   const { entity } = useAuth();
@@ -245,9 +245,15 @@ export function IntegrationsPage() {
     toast.loading('Validating API key...', { id: `validate-${sourceId}` });
 
     try {
-      await validateApiKey(sourceId);
+      // No toast when the key works: the card's "Key works" chip says so. Only a problem gets one.
+      const result = await validateApiKey(sourceId);
       await fetchData();
-      toast.success('API key validated successfully', { id: `validate-${sourceId}` });
+      if (!result) toast.error('The key could not be checked', { id: `validate-${sourceId}` });
+      else if (result.status === 'valid') toast.dismiss(`validate-${sourceId}`);
+      else
+        toast.warning(`The key was not accepted: ${result.message}`, {
+          id: `validate-${sourceId}`,
+        });
     } catch (error) {
       console.error('Failed to validate API key:', error);
       toast.error('Failed to validate API key', { id: `validate-${sourceId}` });
@@ -306,8 +312,7 @@ export function IntegrationsPage() {
     withMerchantBusy(sourceId, async () => {
       const result = await validateApiKey(merchantSourceId);
       if (!result) toast.error('The Merchant key could not be checked');
-      else if (result.status === 'valid') toast.success('Merchant key works');
-      else toast.warning(`Merchant key rejected: ${result.message}`);
+      else if (result.status !== 'valid') toast.warning(`Merchant key rejected: ${result.message}`);
     });
 
   const handleRemoveMerchantKey = (sourceId: string) =>
@@ -375,7 +380,8 @@ export function IntegrationsPage() {
       i.api_key_status === 'invalid' ||
       i.api_key_status === 'expired' ||
       i.failed_events_count > 0 ||
-      i.uncategorized_transactions_count > 0
+      i.uncategorized_transactions_count > 0 ||
+      isStale(i.last_synced_at)
   ).length;
   const items = integrations.reduce(
     (t, i) => t + (i.stats ? Object.values(i.stats).reduce((a, b) => a + b, 0) : 0),
@@ -441,7 +447,7 @@ export function IntegrationsPage() {
                     ? 'Source to look at'
                     : 'Sources to look at'
               }
-              caption="keys, failed events, uncategorised"
+              caption="keys, out-of-date syncs, failed events, uncategorised"
             />
             <Stat
               label="Last sync"

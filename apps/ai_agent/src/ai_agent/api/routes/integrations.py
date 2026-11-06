@@ -560,6 +560,9 @@ async def trigger_sync(source_id: str, request: Optional[TriggerSyncRequest] = N
                         "endpoint": request.endpoint,
                         "force_full": force_full,
                         "include_drafts": include_drafts,
+                        # Load what it fetched when it finishes, as a full sync does
+                        # (integrations/inngest/load_after.py).
+                        "load_after": True,
                     },
                 )
             )

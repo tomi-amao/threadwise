@@ -17,6 +17,7 @@ from ...integrations.shopify import ENDPOINTS, ShopifyAdapter
 from ...services.external_sync_service import sync_service
 from .channels import SyncProgressData, SyncStatusData, get_sync_channel
 from .config import get_client, utc_now_iso
+from .load_after import load_after_endpoint_sync
 
 logger = logging.getLogger(__name__)
 
@@ -376,6 +377,10 @@ async def shopify_sync_endpoint(ctx: inngest.Context) -> Dict[str, Any]:
                 function=shopify_sync_order_transactions,
                 data={"source_id": source_id},
             )
+
+        await load_after_endpoint_sync(
+            ctx, "shopify", source_id, endpoint, items_stored
+        )
 
         return {
             "status": "completed",

@@ -23,6 +23,11 @@ sync requested  ─▶  <provider>_sync_all  ─▶  <provider>_sync_endpoint  (
           bank_accounts, financial_transactions, calendar_events
 ```
 
+A full sync sends `<provider>/sync.completed` once, at its end. A sync of one endpoint (the
+"Sync one thing" buttons) sends it too when it succeeds: the route marks that event `load_after`,
+and the endpoint function calls `load_after_endpoint_sync` (`integrations/inngest/load_after.py`).
+A full sync invokes the same endpoint functions without the mark, so it still loads only once.
+
 Progress streams to the browser over Inngest realtime channels (`integrations/inngest/channels.py`,
 one channel per source), which the frontend subscribes to with a token from
 `POST /realtime/subscription-token`.
