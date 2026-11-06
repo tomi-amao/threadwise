@@ -47,7 +47,15 @@ class ZohoOAuthError(Exception):
     with an error body for these (see _post_token) rather than a non-2xx
     status, so this — not an httpx.HTTPStatusError — is what callers should
     actually catch.
+
+    `code` is Zoho's own error ("invalid_code" for a revoked or expired refresh token), or
+    None when Zoho's answer could not be read, so a caller can tell "this connection no
+    longer works" from "Zoho did not answer properly".
     """
+
+    def __init__(self, message: str, code: str | None = None):
+        super().__init__(message)
+        self.code = code
 
 
 def _state_secret() -> bytes:
@@ -151,7 +159,9 @@ async def _post_token(data: Dict[str, str]) -> Dict[str, Any]:
         ) from e
 
     if "error" in payload:
-        raise ZohoOAuthError(f"Zoho token request failed: {payload['error']}")
+        raise ZohoOAuthError(
+            f"Zoho token request failed: {payload['error']}", code=str(payload["error"])
+        )
 
     return cast(Dict[str, Any], payload)
 

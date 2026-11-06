@@ -31,6 +31,7 @@ from .channels import (
     get_journal_channel,
 )
 from .config import get_client
+from .notification_functions import journals_check_event
 
 logger = logging.getLogger(__name__)
 
@@ -269,6 +270,9 @@ async def generate_all_journals_job(ctx: inngest.Context) -> Dict[str, Any]:
         f"{total_created} created, {total_skipped} skipped, "
         f"{len(overall_errors)} errors"
     )
+
+    # Bring the "payments need journals" notification up to date with what is left.
+    await ctx.step.send_event("check-journals", journals_check_event(entity_id_str))
 
     return {
         "entity_id": entity_id_str,

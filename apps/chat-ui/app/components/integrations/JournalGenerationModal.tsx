@@ -841,6 +841,8 @@ export function JournalGenerationModal({ isOpen, onClose, entityId }: JournalGen
             </div>
           </div>
           <button
+            type="button"
+            aria-label="Close"
             onClick={isRunning ? undefined : onClose}
             disabled={isRunning}
             className={cn(

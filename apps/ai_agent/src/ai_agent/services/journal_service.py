@@ -3151,6 +3151,24 @@ class JournalService:
             "total_pairs_examined": total_examined,
         }
 
+    async def count_awaiting_journals(self, entity_id: UUID) -> int:
+        """How many records Generate journals would still journal, without journaling them.
+
+        The same four finders the pipeline uses (payments, settlements, inbound, expenses),
+        read only. A record the pipeline cannot journal (no account to post it to) stays
+        counted until someone fixes it, which is what a notification about it should say.
+        """
+        payments = await self._find_unjournaled_payments(entity_id)
+        settlements = await self._find_unjournaled_settlements(entity_id)
+        inbound = await self._find_unjournaled_inbound(entity_id)
+        expenses = await self._find_unjournaled_expenses(entity_id)
+        return (
+            len(payments)
+            + len(settlements)
+            + sum(len(items) for items in inbound.values())
+            + len(expenses)
+        )
+
     async def _find_unjournaled_payments(self, entity_id: UUID) -> List[UUID]:
         """Find captured payments without accrual journals.
 
