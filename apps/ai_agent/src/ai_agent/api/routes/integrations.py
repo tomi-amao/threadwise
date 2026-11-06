@@ -161,6 +161,8 @@ class IntegrationSummary(BaseModel):
     endpoint_sync_state: Optional[Dict[str, Dict[str, Any]]] = None
     # Revolut only: the Merchant key that syncs the invoices sent from Revolut.
     merchant: Optional[MerchantKeySummary] = None
+    # When the user hid it on the Integrations page; None when shown. It still syncs.
+    hidden_at: Optional[str] = None
 
 
 class ValidateApiKeyResponse(BaseModel):
@@ -402,6 +404,37 @@ async def update_api_key(source_id: str, request: UpdateApiKeyRequest):
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)
         )
+
+
+class SetHiddenRequest(BaseModel):
+    """Hide an integration on the Integrations page, or show it again."""
+
+    hidden: bool
+
+
+class SetHiddenResponse(BaseModel):
+    source_id: str
+    hidden_at: Optional[str]
+
+
+@router.put(
+    "/sources/{source_id}/hidden",
+    dependencies=[Depends(owned_source)],
+    response_model=SetHiddenResponse,
+)
+async def set_hidden(source_id: str, request: SetHiddenRequest):
+    """Hide an integration from the page, or show it again.
+
+    Only the page changes: a hidden integration stays connected and keeps syncing.
+    """
+    source = await sync_service.get_external_source(source_id)
+    if not source:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"External source not found: {source_id}",
+        )
+    hidden_at = await sync_service.set_hidden(source_id, request.hidden)
+    return SetHiddenResponse(source_id=source_id, hidden_at=hidden_at)
 
 
 class MerchantKeyResponse(BaseModel):
@@ -1696,6 +1729,7 @@ async def get_integrations_summary(user: CurrentUser, entity_id: Optional[str] =
                     failed_events_count=failed_count,
                     uncategorized_transactions_count=uncategorized_count,
                     endpoint_sync_state=endpoint_sync_state,
+                    hidden_at=source.get("hidden_at"),
                     merchant=(
                         MerchantKeySummary(
                             source_id=merchant["id"],

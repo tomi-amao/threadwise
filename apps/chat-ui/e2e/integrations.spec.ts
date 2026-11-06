@@ -21,6 +21,7 @@ interface Source {
   stats: Record<string, number> | null;
   api_key_status: 'pending' | 'valid' | 'invalid' | 'expired';
   api_key_last_validated_at: string | null;
+  hidden_at?: string | null;
   api_key_error: string | null;
   failed_events_count: number;
   uncategorized_transactions_count: number;
@@ -158,6 +159,13 @@ async function mockAgent(page: Page, initial: Source[] = SOURCES) {
             : { source_id: id, removed: true }
         );
       }
+      const hide = /^\/integrations\/sources\/([^/]+)\/hidden$/.exec(url.pathname);
+      if (hide) {
+        const [, id] = hide;
+        const hiddenAt = (body as { hidden: boolean }).hidden ? new Date().toISOString() : null;
+        sources = sources.map(s => (s.id === id ? { ...s, hidden_at: hiddenAt } : s));
+        return json({ source_id: id, hidden_at: hiddenAt });
+      }
       if (request.method() === 'DELETE') {
         const id = url.pathname.split('/').pop();
         sources = sources.filter(s => s.id !== id);
@@ -183,6 +191,18 @@ const tile = (page: Page, label: string) =>
     .filter({ has: page.locator('.eyebrow', { hasText: new RegExp(`^${label}$`) }) })
     .first();
 
+/** The tile of a connected app, by the start of its name ("Shopify", "Revolut"). */
+const appTile = (page: Page, name: string) =>
+  page.getByRole('button', { name: new RegExp(`^${name}\\b`) });
+
+/** Open a connected app from its tile; returns its detail, in the drawer. */
+async function openApp(page: Page, name: string) {
+  await appTile(page, name).click();
+  const detail = page.getByRole('dialog').getByRole('article');
+  await expect(detail).toBeVisible();
+  return detail;
+}
+
 test.describe('integrations', () => {
   test('the numbers across the top say how many sources, and how many need you', async ({
     page,
@@ -195,33 +215,48 @@ test.describe('integrations', () => {
     await expect(tile(page, 'Needs you')).toContainText('1');
   });
 
-  test('each source shows its state, and what needs a person is called out', async ({ page }) => {
+  test('each app is a tile that says how it stands', async ({ page }) => {
     await mockAgent(page);
     await page.goto('/integrations');
-    const shop = page.getByRole('article', { name: 'Atelier Shop' });
+    const apps = page.getByRole('region', { name: 'Your apps' });
+    await expect(apps.getByRole('listitem')).toHaveCount(3);
+    await expect(appTile(page, 'Shopify')).toHaveAccessibleName(/^Shopify Atelier Shop Up to date/);
+    await expect(appTile(page, 'Revolut')).toHaveAccessibleName(
+      /^Revolut Revolut Business Key rejected/
+    );
+    await expect(appTile(page, 'PayPal')).toContainText('Syncing');
+  });
+
+  test('opening an app shows what needs a person, with the action beside it', async ({ page }) => {
+    await mockAgent(page);
+    await page.goto('/integrations');
+    const shop = await openApp(page, 'Shopify');
+    await expect(page.getByRole('dialog')).toContainText('Atelier Shop');
     await expect(shop).toContainText('Up to date');
     await expect(shop).toContainText('Key works');
     await expect(shop.getByRole('button', { name: /^orders/i })).toContainText('1,200');
+    await page.keyboard.press('Escape');
+    await expect(page.getByRole('dialog')).toHaveCount(0);
 
-    const bank = page.getByRole('article', { name: 'Revolut Business' });
+    const bank = await openApp(page, 'Revolut');
     await expect(bank).toContainText('Key rejected');
     await expect(bank).toContainText('API key issue');
     await expect(bank).toContainText('The key was rejected by Revolut');
     await expect(bank).toContainText('3 failed events');
     await expect(bank).toContainText('5 uncategorised transactions');
     await expect(bank.getByRole('button', { name: 'Update API key' })).toBeVisible();
-
-    await expect(page.getByRole('article', { name: 'PayPal' })).toContainText('Syncing');
   });
 
-  test('the provider names the card, and what it is connected to goes under it', async ({
-    page,
-  }) => {
+  test('the open app is in the URL, so a link lands on it', async ({ page }) => {
     await mockAgent(page);
     await page.goto('/integrations');
-    const shop = page.getByRole('article', { name: 'Shopify, Atelier Shop' });
-    await expect(shop.getByRole('heading', { level: 2 })).toHaveText('Shopify');
-    await expect(shop).toContainText('Atelier Shop');
+    await openApp(page, 'PayPal');
+    await expect(page).toHaveURL(/[?&]app=src-pp/);
+    await page.keyboard.press('Escape');
+    await expect(page).not.toHaveURL(/app=/);
+
+    await page.goto('/integrations?app=src-shop');
+    await expect(page.getByRole('dialog')).toContainText('Atelier Shop');
   });
 
   test('a source that has not synced for two weeks is out of date, and needs you', async ({
@@ -237,23 +272,24 @@ test.describe('integrations', () => {
       base({ id: 'src-fresh', provider: 'paypal', display_name: 'PayPal' }),
     ]);
     await page.goto('/integrations');
-    const old = page.getByRole('article', { name: 'Squarespace, Old Site' });
-    await expect(old).toContainText('Out of date');
-    await expect(old).toContainText('Last synced 2 weeks ago');
-    await expect(page.getByRole('article', { name: /^PayPal/ })).toContainText('Up to date');
+    await expect(appTile(page, 'Squarespace')).toContainText('Out of date');
+    await expect(appTile(page, 'Squarespace')).toContainText('Last synced 2 weeks ago');
+    await expect(appTile(page, 'PayPal')).toContainText('Up to date');
     await expect(tile(page, 'Needs you')).toContainText('1');
+    const old = await openApp(page, 'Squarespace');
+    await expect(old).toContainText('Last synced 2 weeks ago: sync to bring it up to date');
   });
 
   test('a key that works gets no toast; one that is refused says so', async ({ page }) => {
     const agent = await mockAgent(page);
     await page.goto('/integrations');
     const toasts = page.locator('[data-sonner-toast]');
+    const shop = await openApp(page, 'Shopify');
+    const check = shop.getByRole('button', { name: 'Check the Shopify connection' });
 
-    await page.getByRole('button', { name: 'Check the Shopify connection' }).click();
+    await check.click();
     await expect.poll(() => agent.calls.filter(c => c.path.endsWith('/validate')).length).toBe(1);
-    await expect(page.getByRole('button', { name: 'Check the Shopify connection' })).toHaveText(
-      /Check$/
-    );
+    await expect(check).toHaveText(/Check$/);
     await expect(toasts.filter({ hasText: /validated|works/i })).toHaveCount(0);
 
     // Later routes win: from here on the agent refuses the key.
@@ -272,7 +308,7 @@ test.describe('integrations', () => {
               }),
             })
     );
-    await page.getByRole('button', { name: 'Check the Shopify connection' }).click();
+    await check.click();
     await expect(
       toasts.filter({ hasText: 'The key was not accepted: Shopify said 401' })
     ).toBeVisible();
@@ -281,7 +317,7 @@ test.describe('integrations', () => {
   test('a sync can be run, with a full resync one menu away', async ({ page }) => {
     const agent = await mockAgent(page);
     await page.goto('/integrations');
-    const shop = page.getByRole('article', { name: 'Atelier Shop' });
+    const shop = await openApp(page, 'Shopify');
     await shop.getByRole('button', { name: 'More ways to sync all data' }).click();
     const menu = page.getByRole('menu');
     await expect(menu).toContainText('Fetches only what changed');
@@ -296,26 +332,53 @@ test.describe('integrations', () => {
       .toBeGreaterThanOrEqual(2);
   });
 
-  test('the menu closes with Escape', async ({ page }) => {
+  test('the menu closes with Escape, and the app stays open', async ({ page }) => {
     await mockAgent(page);
     await page.goto('/integrations');
-    await page
-      .getByRole('article', { name: 'Atelier Shop' })
-      .getByRole('button', { name: 'More ways to sync all data' })
-      .click();
+    const shop = await openApp(page, 'Shopify');
+    await shop.getByRole('button', { name: 'More ways to sync all data' }).click();
     await expect(page.getByRole('menu')).toBeVisible();
     await page.keyboard.press('Escape');
     await expect(page.getByRole('menu')).toHaveCount(0);
+    await expect(shop).toBeVisible();
+  });
+
+  test('hiding moves an app to Hidden, still connected, and Show brings it back', async ({
+    page,
+  }) => {
+    const agent = await mockAgent(page);
+    await page.goto('/integrations');
+    const pp = await openApp(page, 'PayPal');
+    await pp.getByRole('button', { name: 'Hide' }).click();
+    await expect
+      .poll(() => agent.calls.find(c => c.path === '/integrations/sources/src-pp/hidden')?.body)
+      .toEqual({ hidden: true });
+    await page.keyboard.press('Escape');
+
+    const apps = page.getByRole('region', { name: 'Your apps' });
+    await expect(apps.getByRole('listitem')).toHaveCount(2);
+    const hidden = page.locator('details', { hasText: 'Hidden' });
+    await expect(hidden).toContainText('1 app, still connected and syncing');
+    // Still connected: it counts, and it is not offered as an app to connect.
+    await expect(tile(page, 'Connected')).toContainText('3');
+    await expect(page.getByRole('button', { name: /^Connect PayPal/ })).toHaveCount(0);
+
+    await hidden.locator('summary').click();
+    const again = await openApp(page, 'PayPal');
+    await again.getByRole('button', { name: 'Show' }).click();
+    await page.keyboard.press('Escape');
+    await expect(apps.getByRole('listitem')).toHaveCount(3);
+    await expect(page.locator('details', { hasText: 'Hidden' })).toHaveCount(0);
   });
 
   test('removing asks first, says what it does, and then removes', async ({ page }) => {
     const agent = await mockAgent(page);
     await page.goto('/integrations');
-    const pp = page.getByRole('article', { name: 'PayPal' });
+    const pp = await openApp(page, 'PayPal');
     await pp.getByRole('button', { name: /Remove/ }).click();
-    const dialog = page.getByRole('dialog').filter({ hasText: 'Remove PayPal?' });
-    await expect(dialog).toContainText('cannot be undone');
-    await dialog.getByRole('button', { name: 'Keep it' }).click();
+    const confirm = page.getByRole('dialog').filter({ hasText: 'Remove PayPal?' });
+    await expect(confirm).toContainText('cannot be undone');
+    await confirm.getByRole('button', { name: 'Keep it' }).click();
     expect(agent.calls.some(c => c.method === 'DELETE')).toBe(false);
 
     await pp.getByRole('button', { name: /Remove/ }).click();
@@ -323,20 +386,20 @@ test.describe('integrations', () => {
     await expect
       .poll(() => agent.calls.some(c => c.method === 'DELETE' && c.path.endsWith('/src-pp')))
       .toBe(true);
-    await expect(page.getByRole('article', { name: 'PayPal' })).toHaveCount(0);
+    await expect(appTile(page, 'PayPal')).toHaveCount(0);
+    await expect(page.getByRole('button', { name: /^Connect PayPal/ })).toBeVisible();
   });
 
-  test('a source is connected from a drawer, and the provider decides the fields', async ({
-    page,
-  }) => {
+  test('an app not connected yet is a tile that starts connecting it', async ({ page }) => {
     const agent = await mockAgent(page);
     await page.goto('/integrations');
-    await page.getByRole('button', { name: 'Add integration' }).first().click();
-    const d = page.getByRole('dialog');
-    await expect(d.getByRole('button', { name: 'Connect' })).toBeDisabled();
+    const add = page.getByRole('region', { name: 'Add an app' });
+    await expect(add.getByRole('button')).toHaveText([/Squarespace/, /Zoho Calendar/]);
 
-    await d.getByRole('radio', { name: /Squarespace/ }).click();
-    await expect(d.getByLabel(/Site ID/)).toBeVisible();
+    await page.getByRole('button', { name: /^Connect Squarespace/ }).click();
+    const d = page.getByRole('dialog');
+    await expect(d.getByRole('radio', { name: /Squarespace/ })).toBeChecked();
+    await expect(d.getByRole('button', { name: 'Connect' })).toBeDisabled();
     await d.getByLabel(/Site ID/).fill('site-123');
     await d.getByLabel(/API key/).fill('secret-key');
     await d.getByRole('button', { name: 'Connect' }).click();
@@ -352,12 +415,12 @@ test.describe('integrations', () => {
       });
   });
 
-  test('Revolut takes a Merchant key on its card, for the invoices sent from Revolut', async ({
+  test('Revolut takes a Merchant key in its detail, for the invoices sent from Revolut', async ({
     page,
   }) => {
     const agent = await mockAgent(page);
     await page.goto('/integrations');
-    const bank = page.getByRole('article', { name: 'Revolut Business' });
+    const bank = await openApp(page, 'Revolut');
     const invoices = bank.getByRole('region', { name: 'Invoices from Revolut' });
     await expect(invoices).toContainText('No Merchant key');
     // Without the key, the invoices cannot be synced on their own.
@@ -379,9 +442,7 @@ test.describe('integrations', () => {
       .toBe(true);
   });
 
-  test('the Merchant key can be removed, after confirming, and the card stays', async ({
-    page,
-  }) => {
+  test('the Merchant key can be removed, after confirming, and the app stays', async ({ page }) => {
     const agent = await mockAgent(
       page,
       SOURCES.map(s =>
@@ -399,7 +460,7 @@ test.describe('integrations', () => {
       )
     );
     await page.goto('/integrations');
-    const bank = page.getByRole('article', { name: 'Revolut Business' });
+    const bank = await openApp(page, 'Revolut');
     const invoices = bank.getByRole('region', { name: 'Invoices from Revolut' });
     await expect(invoices).toContainText('Key works');
     await invoices.getByRole('button', { name: 'Remove key' }).click();
@@ -416,11 +477,14 @@ test.describe('integrations', () => {
   });
 
   test('connecting Revolut can take the Merchant key at the same time', async ({ page }) => {
-    const agent = await mockAgent(page);
+    const agent = await mockAgent(
+      page,
+      SOURCES.filter(s => s.provider !== 'revolut')
+    );
     await page.goto('/integrations');
-    await page.getByRole('button', { name: 'Add integration' }).first().click();
+    await page.getByRole('button', { name: /^Connect Revolut/ }).click();
     const d = page.getByRole('dialog');
-    await d.getByRole('radio', { name: /Revolut/ }).click();
+    await expect(d.getByRole('radio', { name: /Revolut/ })).toBeChecked();
     await d.getByLabel(/Business ID/).fill('biz-2');
     await d.getByLabel(/^API key/).fill('business-token');
     await d.getByLabel(/Merchant secret key/).fill('sk_merchant');
@@ -437,20 +501,18 @@ test.describe('integrations', () => {
   test('no other provider asks for a Merchant key', async ({ page }) => {
     await mockAgent(page);
     await page.goto('/integrations');
-    // Only the Revolut card has an Invoices section (three sources are listed).
-    await expect(page.getByRole('region', { name: 'Invoices from Revolut' })).toHaveCount(1);
-    await page.getByRole('button', { name: 'Add integration' }).first().click();
-    const d = page.getByRole('dialog');
-    await d.getByRole('radio', { name: /Squarespace/ }).click();
-    await expect(d.getByLabel(/Merchant secret key/)).toHaveCount(0);
+    const shop = await openApp(page, 'Shopify');
+    await expect(shop.getByRole('region', { name: 'Invoices from Revolut' })).toHaveCount(0);
+    await page.keyboard.press('Escape');
+    await page.getByRole('button', { name: /^Connect Squarespace/ }).click();
+    await expect(page.getByRole('dialog').getByLabel(/Merchant secret key/)).toHaveCount(0);
   });
 
   test('Zoho signs in through Zoho instead of asking for a key', async ({ page }) => {
     await mockAgent(page);
-    await page.goto('/integrations?add=1');
-    await page.getByRole('button', { name: 'Add integration' }).first().click();
+    await page.goto('/integrations');
+    await page.getByRole('button', { name: /^Connect Zoho Calendar/ }).click();
     const d = page.getByRole('dialog');
-    await d.getByRole('radio', { name: /Zoho Calendar/ }).click();
     // A plain link to the app's own route, which signs the request and redirects to Zoho.
     await expect(d.getByRole('link', { name: /Connect with Zoho/ })).toHaveAttribute(
       'href',
@@ -472,7 +534,8 @@ test.describe('integrations', () => {
   test('with nothing connected it says where to start', async ({ page }) => {
     await mockAgent(page, []);
     await page.goto('/integrations');
-    await expect(page.getByText('Connect your first source.')).toBeVisible();
+    const first = page.getByRole('region', { name: 'Connect your first app' });
+    await expect(first.getByRole('button')).toHaveCount(5);
     await expect(page.locator('.eyebrow', { hasText: /^Needs you$/ })).toHaveCount(0);
   });
 
@@ -480,11 +543,16 @@ test.describe('integrations', () => {
     await page.emulateMedia({ reducedMotion: 'reduce' });
     await mockAgent(page);
     await page.goto('/integrations');
-    await expect(page.getByRole('article', { name: 'Atelier Shop' })).toBeVisible();
+    await expect(appTile(page, 'Shopify')).toBeVisible();
     await expectNoHorizontalOverflow(page);
     expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
 
-    await page.getByRole('button', { name: 'Add integration' }).first().click();
+    await openApp(page, 'Revolut');
+    await expectNoHorizontalOverflow(page);
+    expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+    await page.keyboard.press('Escape');
+
+    await page.getByRole('button', { name: /^Connect Squarespace/ }).click();
     await expect(page.getByRole('dialog')).toBeVisible();
     await expectNoHorizontalOverflow(page);
     expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);

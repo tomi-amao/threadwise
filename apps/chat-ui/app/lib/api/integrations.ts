@@ -42,6 +42,8 @@ export interface IntegrationSummary {
    * payment_requests endpoint). The agent keeps it as its own row; null until one is added.
    */
   merchant?: MerchantKey | null;
+  /** When it was hidden on the Integrations page; null when shown. A hidden one still syncs. */
+  hidden_at?: string | null;
 }
 
 export interface MerchantKey {
@@ -457,6 +459,30 @@ export async function deleteExternalSource(
   } catch (error) {
     console.error('Error deleting external source:', error);
     return null;
+  }
+}
+
+/**
+ * Hide an integration on the Integrations page, or show it again. Only the page changes: it
+ * stays connected and keeps syncing. Returns the new hidden_at, or undefined on failure.
+ */
+export async function setIntegrationHidden(
+  sourceId: string,
+  hidden: boolean
+): Promise<string | null | undefined> {
+  const baseUrl = getApiBaseUrl();
+  try {
+    const response = await agentFetch(`${baseUrl}/integrations/sources/${sourceId}/hidden`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ hidden }),
+    });
+    if (!response.ok) return undefined;
+    const body = (await response.json()) as { hidden_at: string | null };
+    return body.hidden_at;
+  } catch (error) {
+    console.error('Error hiding integration:', error);
+    return undefined;
   }
 }
 

@@ -1,17 +1,19 @@
 /**
  * IntegrationsPage
  *
- * The sources your books are built from. Each connected source shows whether it is healthy and
- * what needs a person; the routine (sync, load data) is a button away. Talks to the agent from
- * the browser, as before, and polls every 15 seconds so progress shows up without a refresh.
+ * The sources your books are built from, as a grid of apps. Each connected source is a tile that
+ * says whether it is healthy; clicking it opens a drawer with everything that can be done with it
+ * (the open one is `?app=<source id>` in the URL). Providers not connected yet are tiles to
+ * connect; hidden ones sit in a collapsed row and keep syncing. Talks to the agent from the
+ * browser, as before, and polls every 15 seconds so progress shows up without a refresh.
  */
 
 import { useCallback, useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router';
 import { toast } from 'sonner';
-import { BookOpen, Plus } from 'phosphor-react';
+import { BookOpen } from 'phosphor-react';
 import { Button } from '~/components/ui/button';
-import { EmptyState } from '~/components/ui/empty-state';
+import { Drawer } from '~/components/ui/drawer';
 import { CompactHeader } from '~/components/ui/page-header';
 import { Stat, StatStrip } from '~/components/ui/stat-strip';
 import { useAuth } from '~/providers/AuthProvider';
@@ -24,6 +26,7 @@ import {
   deleteExternalSource,
   saveMerchantKey,
   removeMerchantKey,
+  setIntegrationHidden,
   type IntegrationSummary,
 } from '~/lib/api/integrations';
 import { SyncProgressToast } from '~/components/integrations/SyncProgressToast';
@@ -31,8 +34,10 @@ import { NormalizationProgressToast } from '~/components/integrations/Normalizat
 import { IncompleteTransactionsModal } from '~/components/integrations/IncompleteTransactionsModal';
 import { JournalGenerationModal } from '~/components/integrations/JournalGenerationModal';
 import { AddIntegrationDrawer } from './AddIntegrationDrawer';
+import { AppTile, ConnectTile } from './AppTile';
 import { IntegrationCard } from './IntegrationCard';
-import { int, isStale, relativeTime } from './model';
+import { BrandLogo } from './logos';
+import { PROVIDERS, int, namesOf, needsYou, relativeTime, type ProviderKey } from './model';
 
 export function IntegrationsPage() {
   const { entity } = useAuth();
@@ -47,7 +52,10 @@ export function IntegrationsPage() {
   const [normalizingIds, setNormalizingIds] = useState<Set<string>>(new Set());
   const [reprocessingIds, setReprocessingIds] = useState<Set<string>>(new Set());
   const [removingIds, setRemovingIds] = useState<Set<string>>(new Set());
+  const [hidingIds, setHidingIds] = useState<Set<string>>(new Set());
   const [showAddForm, setShowAddForm] = useState(false);
+  // The provider whose connect tile was clicked, for the add form to start on.
+  const [addProvider, setAddProvider] = useState<ProviderKey | undefined>(undefined);
   const [activeSyncSource, setActiveSyncSource] = useState<{
     id: string;
     name: string;
@@ -347,6 +355,29 @@ export function IntegrationsPage() {
     }
   };
 
+  // Hide an integration on this page, or show it again. Only the page changes: it keeps syncing.
+  const handleToggleHidden = async (integration: IntegrationSummary) => {
+    const hide = !integration.hidden_at;
+    setHidingIds(prev => new Set([...prev, integration.id]));
+    try {
+      const result = await setIntegrationHidden(integration.id, hide);
+      if (result === undefined) {
+        toast.error(hide ? 'Could not hide it' : 'Could not show it');
+        return;
+      }
+      await fetchData();
+      toast.success(
+        hide ? 'Moved to Hidden. It stays connected and keeps syncing.' : 'Back with your apps'
+      );
+    } finally {
+      setHidingIds(prev => {
+        const next = new Set(prev);
+        next.delete(integration.id);
+        return next;
+      });
+    }
+  };
+
   // Handle removing an integration
   const handleRemove = async (sourceId: string) => {
     setRemovingIds(prev => new Set([...prev, sourceId]));
@@ -374,15 +405,65 @@ export function IntegrationsPage() {
     }
   };
 
-  const attention = integrations.filter(
-    i =>
-      i.sync_status === 'error' ||
-      i.api_key_status === 'invalid' ||
-      i.api_key_status === 'expired' ||
-      i.failed_events_count > 0 ||
-      i.uncategorized_transactions_count > 0 ||
-      isStale(i.last_synced_at)
-  ).length;
+  const attention = integrations.filter(needsYou).length;
+  const shown = integrations.filter(i => !i.hidden_at);
+  const hidden = integrations.filter(i => i.hidden_at);
+  // Providers with nothing connected yet are offered as tiles to connect.
+  const connected = new Set(integrations.map(i => i.provider));
+  const connectable = (Object.keys(PROVIDERS) as ProviderKey[]).filter(p => !connected.has(p));
+
+  // The open app is in the URL, so a link or a refresh lands on it.
+  const openId = searchParams.get('app');
+  const open = integrations.find(i => i.id === openId) ?? null;
+  const setOpen = (id: string | null) =>
+    setSearchParams(
+      prev => {
+        const next = new URLSearchParams(prev);
+        if (id) next.set('app', id);
+        else next.delete('app');
+        return next;
+      },
+      { replace: true }
+    );
+  const connect = (provider?: ProviderKey) => {
+    setAddProvider(provider);
+    setShowAddForm(true);
+  };
+
+  const handlersFor = (integration: IntegrationSummary) => ({
+    onSync: (forceFull: boolean, includeDrafts?: boolean) =>
+      handleSync(integration.id, undefined, forceFull, includeDrafts),
+    onSyncEndpoint: (endpoint: string) => handleSync(integration.id, endpoint),
+    onValidateApiKey: () => handleValidateApiKey(integration.id),
+    onUpdateApiKey: (apiKey: string) => handleUpdateApiKey(integration.id, apiKey),
+    onViewUncategorized: () =>
+      setUncategorizedModalSource({
+        id: integration.id,
+        entityId: integration.entity_id ?? undefined,
+      }),
+    onLoadData: (mode: 'hard' | 'soft') => handleLoadData(integration.id, mode),
+    onReprocessFailed: () => handleReprocessFailed(integration.id),
+    onRemove: () => {
+      setOpen(null);
+      handleRemove(integration.id);
+    },
+    onToggleHidden: () => handleToggleHidden(integration),
+    onSaveMerchantKey: (apiKey: string) => handleSaveMerchantKey(integration.id, apiKey),
+    onCheckMerchantKey: () =>
+      integration.merchant &&
+      handleCheckMerchantKey(integration.id, integration.merchant.source_id),
+    onRemoveMerchantKey: () => handleRemoveMerchantKey(integration.id),
+  });
+  const stateFor = (integration: IntegrationSummary) => ({
+    isSyncing: syncingIds.has(integration.id),
+    syncingEndpoint: syncingEndpoints.get(integration.id) || null,
+    isValidatingApiKey: validatingIds.has(integration.id),
+    isNormalizing: normalizingIds.has(integration.id),
+    isReprocessing: reprocessingIds.has(integration.id),
+    isRemoving: removingIds.has(integration.id),
+    isTogglingHidden: hidingIds.has(integration.id),
+    isBusyMerchantKey: merchantBusyIds.has(integration.id),
+  });
   const items = integrations.reduce(
     (t, i) => t + (i.stats ? Object.values(i.stats).reduce((a, b) => a + b, 0) : 0),
     0
@@ -403,7 +484,7 @@ export function IntegrationsPage() {
             Where the data <em>comes from.</em>
           </>
         }
-        description="Connect a store, a payment account or a bank. Each syncs on its own and shows when it needs you."
+        description="Your stores, payment accounts and banks. Each syncs on its own and shows when it needs you; open one to sync it or fix it."
         actions={
           <>
             {entity?.id && integrations.length > 0 && (
@@ -414,9 +495,6 @@ export function IntegrationsPage() {
                 <BookOpen size={16} weight="light" aria-hidden /> Generate journals
               </Button>
             )}
-            <Button onClick={() => setShowAddForm(true)}>
-              <Plus size={16} weight="bold" aria-hidden /> Add integration
-            </Button>
           </>
         }
       />
@@ -462,62 +540,97 @@ export function IntegrationsPage() {
           <p role="status" className="py-16 text-center text-[15px] text-text-2">
             Loading your integrations…
           </p>
-        ) : integrations.length === 0 ? (
-          <div className="overflow-hidden rounded-2xl border bg-row">
-            <EmptyState
-              eyebrow="Nothing connected"
-              title="Connect your first source."
-              description="Shopify, Squarespace, PayPal and Revolut each bring in what the books are built from: orders, payments and bank lines."
-              action={
-                <Button size="sm" onClick={() => setShowAddForm(true)}>
-                  <Plus size={14} weight="bold" aria-hidden /> Add integration
-                </Button>
-              }
-            />
-          </div>
         ) : (
-          <div className="space-y-4">
-            {integrations.map(integration => (
-              <IntegrationCard
-                key={integration.id}
-                integration={integration}
-                handlers={{
-                  onSync: (forceFull, includeDrafts) =>
-                    handleSync(integration.id, undefined, forceFull, includeDrafts),
-                  onSyncEndpoint: endpoint => handleSync(integration.id, endpoint),
-                  onValidateApiKey: () => handleValidateApiKey(integration.id),
-                  onUpdateApiKey: apiKey => handleUpdateApiKey(integration.id, apiKey),
-                  onViewUncategorized: () =>
-                    setUncategorizedModalSource({
-                      id: integration.id,
-                      entityId: integration.entity_id ?? undefined,
-                    }),
-                  onLoadData: mode => handleLoadData(integration.id, mode),
-                  onReprocessFailed: () => handleReprocessFailed(integration.id),
-                  onRemove: () => handleRemove(integration.id),
-                  onSaveMerchantKey: apiKey => handleSaveMerchantKey(integration.id, apiKey),
-                  onCheckMerchantKey: () =>
-                    integration.merchant &&
-                    handleCheckMerchantKey(integration.id, integration.merchant.source_id),
-                  onRemoveMerchantKey: () => handleRemoveMerchantKey(integration.id),
-                }}
-                state={{
-                  isSyncing: syncingIds.has(integration.id),
-                  syncingEndpoint: syncingEndpoints.get(integration.id) || null,
-                  isValidatingApiKey: validatingIds.has(integration.id),
-                  isNormalizing: normalizingIds.has(integration.id),
-                  isReprocessing: reprocessingIds.has(integration.id),
-                  isRemoving: removingIds.has(integration.id),
-                  isBusyMerchantKey: merchantBusyIds.has(integration.id),
-                }}
-              />
-            ))}
-          </div>
+          <>
+            {shown.length > 0 && (
+              <section aria-labelledby="apps-connected" className="space-y-3">
+                <h2 id="apps-connected" className="eyebrow">
+                  Your apps
+                </h2>
+                <ul className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                  {shown.map(integration => (
+                    <li key={integration.id}>
+                      <AppTile integration={integration} onOpen={() => setOpen(integration.id)} />
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            )}
+
+            {connectable.length > 0 && (
+              <section aria-labelledby="apps-add" className="space-y-3 pt-2">
+                <h2 id="apps-add" className="eyebrow">
+                  {integrations.length === 0 ? 'Connect your first app' : 'Add an app'}
+                </h2>
+                {integrations.length === 0 && (
+                  <p className="text-[15px] text-text-2">
+                    Shopify, Squarespace, PayPal and Revolut each bring in what the books are built
+                    from: orders, payments and bank lines.
+                  </p>
+                )}
+                <ul className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                  {connectable.map(provider => (
+                    <li key={provider}>
+                      <ConnectTile provider={provider} onConnect={() => connect(provider)} />
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            )}
+
+            {hidden.length > 0 && (
+              <details className="group rounded-2xl border bg-row px-5 py-4">
+                <summary className="cursor-pointer list-none rounded-sm text-[15px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                  <span className="eyebrow">Hidden</span>{' '}
+                  <span className="text-text-2">
+                    {int(hidden.length)} {hidden.length === 1 ? 'app' : 'apps'}, still connected and
+                    syncing
+                  </span>
+                </summary>
+                <ul className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                  {hidden.map(integration => (
+                    <li key={integration.id}>
+                      <AppTile integration={integration} onOpen={() => setOpen(integration.id)} />
+                    </li>
+                  ))}
+                </ul>
+              </details>
+            )}
+          </>
         )}
       </div>
 
+      <Drawer
+        open={!!open}
+        onOpenChange={o => !o && setOpen(null)}
+        eyebrow={open ? (namesOf(open).account ?? 'Integration') : 'Integration'}
+        title={
+          open ? (
+            <span className="flex items-center gap-3">
+              <BrandLogo provider={open.provider} size="sm" />
+              {namesOf(open).name}
+            </span>
+          ) : (
+            ''
+          )
+        }
+        description={open ? `What you can do with ${namesOf(open).name}` : undefined}
+        className="w-[min(640px,100vw)]"
+      >
+        {open && (
+          <IntegrationCard
+            key={open.id}
+            bare
+            integration={open}
+            handlers={handlersFor(open)}
+            state={stateFor(open)}
+          />
+        )}
+      </Drawer>
+
       <AddIntegrationDrawer
         open={showAddForm}
+        provider={addProvider}
         onClose={() => setShowAddForm(false)}
         onAdded={() => {
           setShowAddForm(false);

@@ -1,12 +1,25 @@
 /**
- * IntegrationCard: one connected source. The top says whether it is healthy; anything that needs
- * a person (a rejected key, failed events, uncategorised transactions) is a callout with the
- * action beside it; the bottom is the routine: sync, load data, remove. A Revolut card also holds
- * the Merchant key, which syncs the invoices sent from Revolut (see MerchantKeySection).
+ * IntegrationCard: one connected source, everything that can be done with it. The top says
+ * whether it is healthy; anything that needs a person (a rejected key, failed events,
+ * uncategorised transactions) is a callout with the action beside it; the bottom is the routine:
+ * sync, load data, hide, remove. A Revolut card also holds the Merchant key, which syncs the
+ * invoices sent from Revolut (see MerchantKeySection).
+ *
+ * The Integrations page shows it inside a drawer, opened from the source's tile (`bare`: the
+ * drawer's title already names it, so the card leaves out its own logo and name).
  */
 
 import { useState } from 'react';
-import { ArrowsClockwise, Database, Receipt, Sparkle, Trash, Warning } from 'phosphor-react';
+import {
+  ArrowsClockwise,
+  Database,
+  Eye,
+  EyeSlash,
+  Receipt,
+  Sparkle,
+  Trash,
+  Warning,
+} from 'phosphor-react';
 import { Button } from '~/components/ui/button';
 import { Chip } from '~/components/ui/chip';
 import { Field } from '~/components/ui/field';
@@ -21,14 +34,15 @@ import {
   KEY_STATUS,
   MERCHANT_ENDPOINT,
   MERCHANT_KEY_HELP,
-  SYNC_STATUS,
   int,
-  isStale,
   prettyEndpoint,
   providerOf,
   relativeTime,
+  namesOf,
   staleLabel,
+  statusOf,
 } from './model';
+import { BrandLogo } from './logos';
 
 export interface CardHandlers {
   onSync: (forceFull: boolean, includeDrafts?: boolean) => void;
@@ -39,6 +53,8 @@ export interface CardHandlers {
   onReprocessFailed: () => void;
   onRemove: () => void;
   onViewUncategorized: () => void;
+  /** Hide it on the page, or show it again (it keeps syncing either way). */
+  onToggleHidden?: () => void;
   /** Revolut only: add or replace, check and remove the Merchant key. */
   onSaveMerchantKey?: (apiKey: string) => void;
   onCheckMerchantKey?: () => void;
@@ -52,6 +68,7 @@ export interface CardState {
   isNormalizing: boolean;
   isReprocessing: boolean;
   isRemoving: boolean;
+  isTogglingHidden?: boolean;
   /** Saving, checking or removing the Merchant key. */
   isBusyMerchantKey?: boolean;
 }
@@ -285,10 +302,13 @@ export function IntegrationCard({
   integration,
   handlers,
   state,
+  bare = false,
 }: {
   integration: IntegrationSummary;
   handlers: CardHandlers;
   state: CardState;
+  /** Inside the drawer: no border of its own, and no logo or name (the drawer has them). */
+  bare?: boolean;
 }) {
   const config = providerOf(integration.provider);
   const oauth = config?.credential === 'oauth';
@@ -297,43 +317,34 @@ export function IntegrationCard({
 
   const total = integration.stats ? Object.values(integration.stats).reduce((a, b) => a + b, 0) : 0;
   const syncActive = state.isSyncing || integration.sync_status === 'syncing';
-  // A source whose last sync is over two weeks old is out of date, unless it is syncing or failed
-  // (those say so themselves).
-  const stale =
-    isStale(integration.last_synced_at) &&
-    integration.sync_status !== 'syncing' &&
-    integration.sync_status !== 'error';
-  const sync = stale
-    ? { label: 'Out of date', tone: 'active' as const }
-    : (SYNC_STATUS[integration.sync_status] ?? SYNC_STATUS.idle);
+  // Out of date (no sync for two weeks) unless it is syncing or failed: see statusOf.
+  const sync = statusOf(integration);
+  const stale = sync.stale;
   const key = KEY_STATUS[integration.api_key_status ?? 'pending'] ?? KEY_STATUS.pending;
   // The provider is the title ("Shopify"); the shop or account it is connected to goes under it.
-  const name = config?.name || integration.display_name || integration.provider;
-  const account =
-    integration.display_name && integration.display_name !== name
-      ? integration.display_name
-      : integration.entity_name || integration.external_account_id;
+  const { name, account } = namesOf(integration);
+  const hidden = !!integration.hidden_at;
   const topStats = integration.stats ? Object.entries(integration.stats).slice(0, 2) : [];
 
   return (
     <article
       aria-label={account ? `${name}, ${account}` : name}
       className={cn(
-        'rounded-2xl border bg-card transition-colors',
-        syncActive ? 'border-ring' : 'border-border'
+        !bare && 'rounded-2xl border bg-card transition-colors',
+        !bare && (syncActive ? 'border-ring' : 'border-border')
       )}
     >
-      <div className="space-y-5 p-6">
+      <div className={cn('space-y-5', !bare && 'p-6')}>
         <div className="flex flex-wrap items-start justify-between gap-4">
-          <div className="flex items-center gap-4">
-            <span className="flex size-12 shrink-0 items-center justify-center rounded-xl border bg-background text-text-2">
-              {config?.icon}
-            </span>
-            <div>
-              <h2 className="font-serif text-[26px] leading-tight tracking-[-0.02em]">{name}</h2>
-              {account && <p className="text-[14px] text-text-2">{account}</p>}
+          {!bare && (
+            <div className="flex items-center gap-4">
+              <BrandLogo provider={integration.provider} />
+              <div>
+                <h2 className="font-serif text-[26px] leading-tight tracking-[-0.02em]">{name}</h2>
+                {account && <p className="text-[14px] text-text-2">{account}</p>}
+              </div>
             </div>
-          </div>
+          )}
           <div className="flex flex-wrap items-center gap-2">
             <Chip
               tone={sync.tone}
@@ -442,7 +453,7 @@ export function IntegrationCard({
           </Callout>
         )}
 
-        <dl className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <dl className={cn('grid grid-cols-2 gap-3', !bare && 'lg:grid-cols-4')}>
           <div className="rounded-xl border bg-background px-4 py-3">
             <dt className="eyebrow">Last sync</dt>
             <dd
@@ -534,15 +545,34 @@ export function IntegrationCard({
         )}
 
         <div className="flex flex-wrap items-center justify-between gap-3 border-t pt-5">
-          <Button
-            variant="ghost"
-            size="sm"
-            className="text-text-2 hover:text-destructive"
-            disabled={state.isRemoving}
-            onClick={() => setConfirmingRemove(true)}
-          >
-            <Trash size={14} aria-hidden /> {state.isRemoving ? 'Removing…' : 'Remove'}
-          </Button>
+          <div className="flex flex-wrap items-center gap-1">
+            <Button
+              variant="ghost"
+              size="sm"
+              className="text-text-2 hover:text-destructive"
+              disabled={state.isRemoving}
+              onClick={() => setConfirmingRemove(true)}
+            >
+              <Trash size={14} aria-hidden /> {state.isRemoving ? 'Removing…' : 'Remove'}
+            </Button>
+            {handlers.onToggleHidden && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="text-text-2"
+                disabled={state.isTogglingHidden}
+                onClick={handlers.onToggleHidden}
+                title={
+                  hidden
+                    ? 'Put it back with your other apps'
+                    : 'Move it to Hidden on this page. It stays connected and keeps syncing.'
+                }
+              >
+                {hidden ? <Eye size={14} aria-hidden /> : <EyeSlash size={14} aria-hidden />}
+                {hidden ? 'Show' : 'Hide'}
+              </Button>
+            )}
+          </div>
           <div className="flex flex-wrap items-center gap-2">
             {(integration.sync_status === 'completed' || total > 0) && (
               <SplitMenu

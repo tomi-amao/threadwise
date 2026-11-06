@@ -15,6 +15,7 @@ import {
   UserCircle,
 } from 'phosphor-react';
 import type { ChipTone } from '~/components/ui/chip';
+import type { IntegrationSummary } from '~/lib/api/integrations';
 
 export type ProviderKey = 'squarespace' | 'revolut' | 'paypal' | 'shopify' | 'zoho_calendar';
 export type CredentialType = 'key' | 'compound' | 'oauth';
@@ -153,6 +154,60 @@ export function staleLabel(lastSyncedAt: string, now: number = Date.now()): stri
   }
   const months = Math.floor(days / 30);
   return `Last synced ${months} months ago`;
+}
+
+/**
+ * Where a source stands, in one label and tone, for its tile and its detail. Out of date wins
+ * over "Up to date" and "Idle", but a source that is syncing or failed says that instead.
+ */
+export function statusOf(i: IntegrationSummary): {
+  label: string;
+  tone: ChipTone;
+  stale: boolean;
+} {
+  const stale =
+    isStale(i.last_synced_at) && i.sync_status !== 'syncing' && i.sync_status !== 'error';
+  if (stale) return { label: 'Out of date', tone: 'active', stale };
+  const sync = SYNC_STATUS[i.sync_status] ?? SYNC_STATUS.idle;
+  return { ...sync, stale };
+}
+
+/** A source that needs a person: a failed sync, a refused key, failures, gaps, or out of date. */
+export function needsYou(i: IntegrationSummary): boolean {
+  return (
+    i.sync_status === 'error' ||
+    i.api_key_status === 'invalid' ||
+    i.api_key_status === 'expired' ||
+    i.failed_events_count > 0 ||
+    i.uncategorized_transactions_count > 0 ||
+    isStale(i.last_synced_at)
+  );
+}
+
+/**
+ * The one status a tile shows: the most pressing thing about the source. A refused key or a
+ * failed sync first, then a sync in progress, out of date, anything else that needs a person,
+ * and otherwise how its last sync went.
+ */
+export function tileStatusOf(i: IntegrationSummary): { label: string; tone: ChipTone } {
+  if (i.api_key_status === 'invalid' || i.api_key_status === 'expired')
+    return KEY_STATUS[i.api_key_status];
+  if (i.sync_status === 'error') return SYNC_STATUS.error;
+  if (i.sync_status === 'syncing') return SYNC_STATUS.syncing;
+  const status = statusOf(i);
+  if (status.stale) return status;
+  if (needsYou(i)) return { label: 'Needs you', tone: 'negative' };
+  return status;
+}
+
+/** The provider's name for the title, and the shop or account it is connected to. */
+export function namesOf(i: IntegrationSummary): { name: string; account: string | null } {
+  const name = providerOf(i.provider)?.name || i.display_name || i.provider;
+  const account =
+    i.display_name && i.display_name !== name
+      ? i.display_name
+      : i.entity_name || i.external_account_id || null;
+  return { name, account };
 }
 
 export const int = (n: number) => new Intl.NumberFormat('en-GB').format(n);
