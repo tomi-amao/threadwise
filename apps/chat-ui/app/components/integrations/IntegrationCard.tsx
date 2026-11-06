@@ -23,9 +23,11 @@ import {
   MERCHANT_KEY_HELP,
   SYNC_STATUS,
   int,
+  isStale,
   prettyEndpoint,
   providerOf,
   relativeTime,
+  staleLabel,
 } from './model';
 
 export interface CardHandlers {
@@ -295,14 +297,27 @@ export function IntegrationCard({
 
   const total = integration.stats ? Object.values(integration.stats).reduce((a, b) => a + b, 0) : 0;
   const syncActive = state.isSyncing || integration.sync_status === 'syncing';
-  const sync = SYNC_STATUS[integration.sync_status] ?? SYNC_STATUS.idle;
+  // A source whose last sync is over two weeks old is out of date, unless it is syncing or failed
+  // (those say so themselves).
+  const stale =
+    isStale(integration.last_synced_at) &&
+    integration.sync_status !== 'syncing' &&
+    integration.sync_status !== 'error';
+  const sync = stale
+    ? { label: 'Out of date', tone: 'active' as const }
+    : (SYNC_STATUS[integration.sync_status] ?? SYNC_STATUS.idle);
   const key = KEY_STATUS[integration.api_key_status ?? 'pending'] ?? KEY_STATUS.pending;
-  const name = integration.display_name || config?.name || integration.provider;
+  // The provider is the title ("Shopify"); the shop or account it is connected to goes under it.
+  const name = config?.name || integration.display_name || integration.provider;
+  const account =
+    integration.display_name && integration.display_name !== name
+      ? integration.display_name
+      : integration.entity_name || integration.external_account_id;
   const topStats = integration.stats ? Object.entries(integration.stats).slice(0, 2) : [];
 
   return (
     <article
-      aria-label={name}
+      aria-label={account ? `${name}, ${account}` : name}
       className={cn(
         'rounded-2xl border bg-card transition-colors',
         syncActive ? 'border-ring' : 'border-border'
@@ -316,13 +331,19 @@ export function IntegrationCard({
             </span>
             <div>
               <h2 className="font-serif text-[26px] leading-tight tracking-[-0.02em]">{name}</h2>
-              <p className="text-[14px] text-text-2">
-                {integration.entity_name || integration.external_account_id}
-              </p>
+              {account && <p className="text-[14px] text-text-2">{account}</p>}
             </div>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <Chip tone={sync.tone} dot>
+            <Chip
+              tone={sync.tone}
+              dot
+              title={
+                stale && integration.last_synced_at
+                  ? staleLabel(integration.last_synced_at)
+                  : undefined
+              }
+            >
               {sync.label}
             </Chip>
             <Chip tone={key.tone}>{key.label}</Chip>
@@ -422,8 +443,23 @@ export function IntegrationCard({
         )}
 
         <dl className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+          <div className="rounded-xl border bg-background px-4 py-3">
+            <dt className="eyebrow">Last sync</dt>
+            <dd
+              className={cn(
+                'mt-1 font-serif text-[22px] tabular-nums',
+                stale && 'text-accent-text'
+              )}
+            >
+              {relativeTime(integration.last_synced_at)}
+            </dd>
+            {stale && integration.last_synced_at && (
+              <dd className="text-[13px] text-accent-text">
+                {staleLabel(integration.last_synced_at)}: sync to bring it up to date
+              </dd>
+            )}
+          </div>
           {[
-            ['Last sync', relativeTime(integration.last_synced_at)],
             ['Items', int(total)],
             ...topStats.map(([type, count]) => [prettyEndpoint(type), int(count)]),
           ].map(([label, value]) => (

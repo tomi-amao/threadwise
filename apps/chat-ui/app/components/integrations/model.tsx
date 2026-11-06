@@ -135,6 +135,26 @@ export function relativeTime(value: string | null): string {
   return date.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
 }
 
+/** A source that last synced longer ago than this is out of date and needs a person. */
+export const STALE_AFTER_DAYS = 14;
+
+/** True when the last sync is older than STALE_AFTER_DAYS. A source never synced is not stale. */
+export function isStale(lastSyncedAt: string | null, now: number = Date.now()): boolean {
+  if (!lastSyncedAt) return false;
+  return now - new Date(lastSyncedAt).getTime() > STALE_AFTER_DAYS * 86_400_000;
+}
+
+/** "Last synced 3 weeks ago", for a stale source. */
+export function staleLabel(lastSyncedAt: string, now: number = Date.now()): string {
+  const days = Math.floor((now - new Date(lastSyncedAt).getTime()) / 86_400_000);
+  if (days < 60) {
+    const weeks = Math.floor(days / 7);
+    return `Last synced ${weeks} ${weeks === 1 ? 'week' : 'weeks'} ago`;
+  }
+  const months = Math.floor(days / 30);
+  return `Last synced ${months} months ago`;
+}
+
 export const int = (n: number) => new Intl.NumberFormat('en-GB').format(n);
 export const prettyEndpoint = (e: string) => e.replace(/_/g, ' ');
 

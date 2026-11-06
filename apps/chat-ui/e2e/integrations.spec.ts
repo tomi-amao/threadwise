@@ -214,6 +214,70 @@ test.describe('integrations', () => {
     await expect(page.getByRole('article', { name: 'PayPal' })).toContainText('Syncing');
   });
 
+  test('the provider names the card, and what it is connected to goes under it', async ({
+    page,
+  }) => {
+    await mockAgent(page);
+    await page.goto('/integrations');
+    const shop = page.getByRole('article', { name: 'Shopify, Atelier Shop' });
+    await expect(shop.getByRole('heading', { level: 2 })).toHaveText('Shopify');
+    await expect(shop).toContainText('Atelier Shop');
+  });
+
+  test('a source that has not synced for two weeks is out of date, and needs you', async ({
+    page,
+  }) => {
+    await mockAgent(page, [
+      base({
+        id: 'src-old',
+        provider: 'squarespace',
+        display_name: 'Old Site',
+        last_synced_at: new Date(Date.now() - 20 * 86_400_000).toISOString(),
+      }),
+      base({ id: 'src-fresh', provider: 'paypal', display_name: 'PayPal' }),
+    ]);
+    await page.goto('/integrations');
+    const old = page.getByRole('article', { name: 'Squarespace, Old Site' });
+    await expect(old).toContainText('Out of date');
+    await expect(old).toContainText('Last synced 2 weeks ago');
+    await expect(page.getByRole('article', { name: /^PayPal/ })).toContainText('Up to date');
+    await expect(tile(page, 'Needs you')).toContainText('1');
+  });
+
+  test('a key that works gets no toast; one that is refused says so', async ({ page }) => {
+    const agent = await mockAgent(page);
+    await page.goto('/integrations');
+    const toasts = page.locator('[data-sonner-toast]');
+
+    await page.getByRole('button', { name: 'Check the Shopify connection' }).click();
+    await expect.poll(() => agent.calls.filter(c => c.path.endsWith('/validate')).length).toBe(1);
+    await expect(page.getByRole('button', { name: 'Check the Shopify connection' })).toHaveText(
+      /Check$/
+    );
+    await expect(toasts.filter({ hasText: /validated|works/i })).toHaveCount(0);
+
+    // Later routes win: from here on the agent refuses the key.
+    await page.route(
+      url => url.port !== '5180' && url.pathname.endsWith('/validate'),
+      route =>
+        route.request().method() === 'OPTIONS'
+          ? route.fulfill({ status: 204, headers: CORS })
+          : route.fulfill({
+              headers: { ...CORS, 'content-type': 'application/json' },
+              body: JSON.stringify({
+                source_id: 'src-shop',
+                status: 'invalid',
+                message: 'Shopify said 401',
+                provider: 'shopify',
+              }),
+            })
+    );
+    await page.getByRole('button', { name: 'Check the Shopify connection' }).click();
+    await expect(
+      toasts.filter({ hasText: 'The key was not accepted: Shopify said 401' })
+    ).toBeVisible();
+  });
+
   test('a sync can be run, with a full resync one menu away', async ({ page }) => {
     const agent = await mockAgent(page);
     await page.goto('/integrations');

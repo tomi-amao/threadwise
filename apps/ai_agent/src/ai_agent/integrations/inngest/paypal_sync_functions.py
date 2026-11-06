@@ -17,6 +17,7 @@ from ...integrations.paypal import ENDPOINTS, PayPalAdapter
 from ...services.external_sync_service import sync_service
 from .channels import SyncProgressData, SyncStatusData, get_sync_channel
 from .config import get_client, utc_now_iso
+from .load_after import load_after_endpoint_sync
 
 logger = logging.getLogger(__name__)
 
@@ -341,6 +342,8 @@ async def paypal_sync_endpoint(ctx: inngest.Context) -> Dict[str, Any]:
                 source_id, endpoint, status="completed", synced_at=run_started_at
             ),
         )
+
+        await load_after_endpoint_sync(ctx, "paypal", source_id, endpoint, items_stored)
 
         return {
             "status": "completed",
