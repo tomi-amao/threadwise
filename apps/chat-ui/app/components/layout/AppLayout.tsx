@@ -1,8 +1,9 @@
 /**
  * App Layout Component
  *
- * Main layout wrapper for authenticated pages: the sidebar, the page, and the assistant
- * panel. The assistant's provider lives here, so a conversation survives navigation.
+ * Main layout wrapper for authenticated pages: the sidebar, the page, the assistant panel and
+ * the notifications drawer. Their providers live here, so a conversation survives navigation
+ * and the notifications are read once for every page.
  */
 
 import React from 'react';
@@ -12,6 +13,9 @@ import { SidebarProvider, useSidebar } from '~/providers/SidebarProvider';
 import { AssistantProvider, useOptionalAssistant } from '~/providers/AssistantProvider';
 import { AssistantPanel } from '~/components/assistant/AssistantPanel';
 import { AssistantLauncher } from '~/components/assistant/Launcher';
+import { NotificationsBell } from '~/components/notifications/NotificationsBell';
+import { NotificationsDrawer } from '~/components/notifications/NotificationsDrawer';
+import { NotificationsProvider } from '~/providers/NotificationsProvider';
 import { DEFAULT_PANEL, type PanelState } from '~/lib/assistant-panel';
 import { Sidebar } from './Sidebar';
 import { SpinnerGap, List } from 'phosphor-react';
@@ -55,6 +59,7 @@ function AppLayoutContent() {
               <List size={20} weight="light" />
             </Button>
             <p className="flex-1 text-lg font-medium tracking-tight">ThreadWise</p>
+            <NotificationsBell variant="header" />
             <AssistantLauncher variant="header" />
           </div>
         </div>
@@ -62,6 +67,7 @@ function AppLayoutContent() {
       </main>
 
       {assistant && !onChatPage && <AssistantPanel />}
+      <NotificationsDrawer />
     </div>
   );
 }
@@ -95,13 +101,15 @@ export function AppLayout({
 
   return (
     <SidebarProvider>
-      {assistant ? (
-        <AssistantProvider initialPanel={initialPanel}>
+      <NotificationsProvider>
+        {assistant ? (
+          <AssistantProvider initialPanel={initialPanel}>
+            <AppLayoutContent />
+          </AssistantProvider>
+        ) : (
           <AppLayoutContent />
-        </AssistantProvider>
-      ) : (
-        <AppLayoutContent />
-      )}
+        )}
+      </NotificationsProvider>
     </SidebarProvider>
   );
 }

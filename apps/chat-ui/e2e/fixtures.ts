@@ -148,6 +148,18 @@ export interface SeedManifest {
     bankBalance: number;
     /** A transaction attachment of the rival's, which the first business must not open. */
     attachmentId: string;
+    /** The rival's own notification, which the first business must never see. */
+    notificationTitle: string;
+  };
+  /** Notifications under the bell, newest first: resolved ones are not shown. */
+  notifications: {
+    /** Every notification of the first business, resolved included. */
+    total: number;
+    /** Titles of the open ones, newest first. */
+    shown: string[];
+    /** Titles of the open, unread ones, newest first. */
+    unread: string[];
+    resolvedTitle: string;
   };
   /** The one file attached to a seeded transaction (a Revolut receipt, as the sync stores it). */
   attachments: {

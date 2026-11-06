@@ -882,3 +882,22 @@ export async function removeInternalMove(): Promise<void> {
     `external_transaction_id=in.(${INTERNAL_MOVE_ID},${MERCHANT_PAYMENT_ID})`
   );
 }
+
+/** Every notification's read state, to put back after a test that marks some read. */
+export async function snapshotNotificationReads(): Promise<
+  { id: string; read_at: string | null }[]
+> {
+  return rest<{ id: string; read_at: string | null }[]>(
+    'GET',
+    'notifications',
+    'select=id,read_at&order=id'
+  );
+}
+
+export async function restoreNotificationReads(
+  before: { id: string; read_at: string | null }[]
+): Promise<void> {
+  for (const row of before) {
+    await rest('PATCH', 'notifications', `id=eq.${row.id}`, { read_at: row.read_at });
+  }
+}

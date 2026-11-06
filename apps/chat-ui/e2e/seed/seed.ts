@@ -1587,6 +1587,84 @@ async function main() {
     bankName: 'Rival Current',
     bankBalance: 9_375,
     attachmentId: rivalAttachment.id,
+    notificationTitle: 'Rival Shop access stopped working',
+  };
+
+  // 6f'. Notifications under the bell (the agent writes them; see services/notifications.py).
+  //      The first business has two unread, one read and one resolved (resolved ones are not
+  //      shown); the rival has one, which the first must never see.
+  const hoursAgo = (h: number) => new Date(Date.now() - h * 3_600_000).toISOString();
+  const notificationSpecs = [
+    {
+      kind: 'integration_access',
+      dedupe_key: 'integration_access:e2e-shop',
+      title: 'Shopify access stopped working',
+      body: 'Shopify refused the saved key. Update it to keep syncing.',
+      link: '/integrations',
+      created_at: hoursAgo(2),
+      updated_at: hoursAgo(2),
+    },
+    {
+      kind: 'journals_needed',
+      dedupe_key: 'journals_needed',
+      title: '12 payments need journals',
+      body: 'Generate journals to bring them into the books.',
+      link: '/journals',
+      created_at: hoursAgo(5),
+      updated_at: hoursAgo(5),
+    },
+    {
+      kind: 'integration_stale',
+      dedupe_key: 'integration_stale:e2e-bank',
+      title: "Revolut hasn't synced in 2 weeks",
+      body: null,
+      link: '/integrations',
+      created_at: hoursAgo(30),
+      updated_at: hoursAgo(30),
+      read_at: hoursAgo(20),
+    },
+    {
+      kind: 'integration_access',
+      dedupe_key: 'integration_access:e2e-old',
+      title: 'PayPal access stopped working',
+      body: null,
+      link: '/integrations',
+      created_at: hoursAgo(72),
+      updated_at: hoursAgo(48),
+      resolved_at: hoursAgo(48),
+    },
+  ];
+  // Every row carries every column: a bulk insert gives a column missing from one row NULL, not
+  // its default.
+  const notificationRow = (entity: string, spec: Record<string, unknown>) => ({
+    entity_id: entity,
+    body: null,
+    link: null,
+    created_at: hoursAgo(0),
+    updated_at: hoursAgo(0),
+    read_at: null,
+    resolved_at: null,
+    ...spec,
+  });
+  await must(
+    'notifications',
+    supabase.from('notifications').insert([
+      ...notificationSpecs.map(n => notificationRow(entityId, n)),
+      notificationRow(rid, {
+        kind: 'integration_access',
+        dedupe_key: 'integration_access:rival-shop',
+        title: rival.notificationTitle,
+        link: '/integrations',
+      }),
+    ])
+  );
+  const notifications = {
+    total: notificationSpecs.length,
+    shown: notificationSpecs.filter(n => !('resolved_at' in n)).map(n => n.title),
+    unread: notificationSpecs
+      .filter(n => !('read_at' in n) && !('resolved_at' in n))
+      .map(n => n.title),
+    resolvedTitle: 'PayPal access stopped working',
   };
 
   // 6g. The books: accounting periods, tax rates and journals (see ledger.ts for the figures).
@@ -2050,6 +2128,7 @@ async function main() {
     rival,
     ledger,
     collections,
+    notifications,
     seededAt: new Date().toISOString(),
   };
   mkdirSync(path.dirname(MANIFEST_FILE), { recursive: true });

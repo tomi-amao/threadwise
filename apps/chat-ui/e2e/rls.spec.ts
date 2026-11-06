@@ -38,6 +38,7 @@ const TABLES: [table: string, owned: () => number][] = [
   ['collection_plans', () => 1],
   ['collection_plan_lines', () => seed.collections.plan.lineCount],
   ['collection_plan_costs', () => seed.collections.plan.costCount],
+  ['notifications', () => seed.notifications.total],
 ];
 
 test.describe('without signing in', () => {
@@ -58,6 +59,7 @@ test.describe('without signing in', () => {
       'transaction_attachments',
       'invoice_payments',
       'inventory_gl_reconciliation',
+      'notifications',
       'inventory_negative_stock',
     ]) {
       const result = await api('GET', table, 'limit=5');
@@ -183,6 +185,38 @@ test.describe('signed in as the first business', () => {
     expect(order.rows).toEqual([]);
     const cancelled = await api('GET', 'orders', 'select=id&status=eq.cancelled', mine);
     expect(cancelled.count).toBe(0);
+  });
+});
+
+test.describe('notifications', () => {
+  test("a user can mark their own read, and can neither reword one nor touch the other business's", async () => {
+    const own = await api('GET', 'notifications', 'select=id,title,read_at&read_at=is.null', mine);
+    const target = own.rows[0] as { id: string; title: string };
+
+    // Rewording is refused: read_at is the only column a user may write.
+    const reworded = await api('PATCH', 'notifications', `id=eq.${target.id}`, mine, {
+      title: 'Changed',
+    });
+    expect(reworded.status).toBeGreaterThanOrEqual(400);
+    // Making one up is refused too.
+    const made = await api('POST', 'notifications', '', mine, {
+      entity_id: '00000000-0000-0000-0000-000000000000',
+      kind: 'x',
+      dedupe_key: 'x',
+      title: 'x',
+    });
+    expect(made.status).toBeGreaterThanOrEqual(400);
+
+    // The rival's is invisible, and marking it read matches nothing.
+    const rivals = await api('GET', 'notifications', 'select=id,title', theirs);
+    expect(rivals.rows.map(r => r.title)).toEqual([rival.notificationTitle]);
+    const rivalId = (rivals.rows[0] as { id: string }).id;
+    const crossed = await api('PATCH', 'notifications', `id=eq.${rivalId}`, mine, {
+      read_at: new Date().toISOString(),
+    });
+    expect(crossed.rows).toEqual([]);
+    const stillUnread = await api('GET', 'notifications', `id=eq.${rivalId}`, theirs);
+    expect((stillUnread.rows[0] as { read_at: string | null }).read_at).toBeNull();
   });
 });
 
