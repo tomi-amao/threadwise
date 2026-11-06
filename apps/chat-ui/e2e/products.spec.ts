@@ -41,6 +41,30 @@ test.describe('products', () => {
     await expect(page.getByText('Nothing matches.')).toBeVisible();
   });
 
+  test('archived rows with sales are hidden, say so, and stay in the totals', async ({ page }) => {
+    const a = readManifest().archived;
+    await page.goto('/products');
+    // Neither the archived product nor the sale with no product is listed...
+    await expect(table(page).locator('tr', { hasText: a.productName })).toHaveCount(0);
+    await expect(table(page).locator('tr', { hasText: a.goneName })).toHaveCount(0);
+    // ...the page says what it left out, and the totals still count it.
+    await expect(
+      page.getByText(`${a.hiddenCount} archived products with ${gbp0(a.hiddenRevenue)}`)
+    ).toBeVisible();
+    await expect(tile(page, 'Revenue')).toContainText(gbp0(p.revenue));
+    await expect(tile(page, 'Units sold')).toContainText(num(p.units));
+    await expect(tile(page, 'Products')).toContainText(num(p.total));
+
+    await page.getByRole('button', { name: 'Show them' }).click();
+    await expect(page).toHaveURL(/archived=1/);
+    await expect(table(page).locator('tr', { hasText: a.productName })).toContainText('Archived');
+    await expect(table(page).locator('tr', { hasText: a.goneName })).toContainText(
+      'No longer sold'
+    );
+    await expect(page.getByText('left out of the list')).toHaveCount(0);
+    await expect(tile(page, 'Revenue')).toContainText(gbp0(p.revenue));
+  });
+
   test('headline numbers: products, units, revenue, best seller', async ({ page }) => {
     await page.goto('/products');
     await expect(page.getByRole('heading', { level: 1 })).toBeVisible();

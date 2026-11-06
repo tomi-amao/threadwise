@@ -28,6 +28,11 @@ export interface ProductRow {
   /** Average selling price per unit. */
   average_price: number;
   last_sold_at: string | null;
+  /**
+   * Put away: an archived product, or something that sold but has no product any more (id is
+   * null). The page leaves these out of its list until asked, but not out of its totals.
+   */
+  archived: boolean;
 }
 
 interface ProductDbRow {
@@ -64,24 +69,22 @@ export function imageUrls(metadata: { images?: unknown[] } | null): string[] {
 }
 
 /**
- * Every product and what it has sold. Read in full: see paginate.server. Archived products are
- * left out unless asked for; their sales then show as uncatalogued, as before.
+ * Every product, archived ones included and marked, and what it has sold; what sold under a name
+ * with no product is listed too, marked archived. Read in full: see paginate.server.
  */
 export async function getProducts(
   supabase: SupabaseClient,
-  entityId: string,
-  { includeArchived = false }: { includeArchived?: boolean } = {}
+  entityId: string
 ): Promise<ProductRow[]> {
   const [products, orders, lines] = await Promise.all([
-    fetchAllRows<ProductDbRow>('products', (from, to) => {
-      const query = supabase
+    fetchAllRows<ProductDbRow>('products', (from, to) =>
+      supabase
         .from('products')
         .select('id, name, provider, status, metadata, variants')
-        .eq('entity_id', entityId);
-      return (includeArchived ? query : query.neq('status', 'archived'))
+        .eq('entity_id', entityId)
         .order('id')
-        .range(from, to);
-    }),
+        .range(from, to)
+    ),
     fetchAllRows<{ id: string; status: string; created_at: string }>('orders', (from, to) =>
       supabase
         .from('orders')
@@ -133,7 +136,7 @@ export async function getProducts(
   const row = (
     base: Pick<
       ProductRow,
-      'id' | 'name' | 'status' | 'provider' | 'thumbnail_url' | 'variant_count'
+      'id' | 'name' | 'status' | 'provider' | 'thumbnail_url' | 'variant_count' | 'archived'
     >,
     sales: Sales | undefined
   ): ProductRow => ({
@@ -154,6 +157,7 @@ export async function getProducts(
         provider: p.provider,
         thumbnail_url: imageUrls(p.metadata)[0] ?? null,
         variant_count: Array.isArray(p.variants) ? p.variants.length : 0,
+        archived: p.status === 'archived',
       },
       byKey.get(p.id)
     )
@@ -170,6 +174,7 @@ export async function getProducts(
           provider: null,
           thumbnail_url: null,
           variant_count: 0,
+          archived: true,
         },
         s
       )

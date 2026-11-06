@@ -506,6 +506,51 @@ class PersistenceService:
             lambda: self.client.table("order_line_items").insert(items_data).execute()
         )
 
+    async def _link_order_lines(
+        self,
+        entity_id: UUID,
+        provider: str,
+        product_external_id: str,
+        product_db_id: UUID,
+    ) -> int:
+        """Point order lines sold before this product reached the app at it.
+
+        A line is linked to its product when its order is loaded, and only if the
+        product is already there; a product that arrives later (a sync that
+        starts after the first orders, a product added to the store afterwards)
+        would leave those lines unlinked for good, and the Products page would
+        list the product twice: once with the sales since, once by name with
+        the sales before. Never raises: the product is saved either way.
+        """
+        linked = 0
+        try:
+            while True:
+                found = await asyncio.to_thread(
+                    lambda: self.client.table("order_line_items")
+                    .select("id, orders!inner(entity_id, provider)")
+                    .eq("product_external_id", product_external_id)
+                    .is_("product_id", "null")
+                    .eq("orders.entity_id", str(entity_id))
+                    .eq("orders.provider", provider)
+                    .limit(500)
+                    .execute()
+                )
+                ids = [row["id"] for row in (found.data or [])]
+                if not ids:
+                    return linked
+                await asyncio.to_thread(
+                    lambda: self.client.table("order_line_items")
+                    .update({"product_id": str(product_db_id)})
+                    .in_("id", ids)
+                    .execute()
+                )
+                linked += len(ids)
+        except Exception as e:
+            logger.warning(
+                "Failed to link order lines to product %s: %s", product_external_id, e
+            )
+            return linked
+
     async def _resolve_product_ids(
         self,
         entity_id: UUID,
@@ -699,6 +744,12 @@ class PersistenceService:
                     f"Enriched invoice product {enriched_existing} → "
                     f"provider={product.provider}, external_id={product.external_id}"
                 )
+                await self._link_order_lines(
+                    product.entity_id,
+                    product.provider,
+                    product.external_id,
+                    enriched_existing,
+                )
                 return enriched_existing
 
         # Standard upsert for new or already-provider-linked products
@@ -717,6 +768,10 @@ class PersistenceService:
             )
 
         product_db_id = _extract_id(result)
+
+        await self._link_order_lines(
+            product.entity_id, product.provider, product.external_id, product_db_id
+        )
 
         # Ensure an inventory_item stub exists for every variant.
         # Shopify cost sync behavior:
