@@ -44,6 +44,8 @@ export interface IntegrationSummary {
   merchant?: MerchantKey | null;
   /** When it was hidden on the Integrations page; null when shown. A hidden one still syncs. */
   hidden_at?: string | null;
+  /** How it signs in: a pasted key or token, or the provider's own sign-in (renews itself). */
+  auth_method?: 'key' | 'oauth';
 }
 
 export interface MerchantKey {
@@ -235,6 +237,34 @@ export async function createExternalSource(
  * builds the actual authorize URL (scopes, client_id, signed state).
  */
 export const ZOHO_CALENDAR_CONNECT_PATH = '/api/integrations/zoho/connect';
+
+/**
+ * Revolut Business sign-in. The connect route takes `client_id` plus either `source_id` (sign an
+ * existing Revolut integration in, keeping its data) or `account` and `name` (a new one), asks
+ * the agent as the user for the consent URL, and redirects to Revolut. Revolut comes back to the
+ * callback route, which finishes the sign-in as the user. The certificate route downloads the
+ * public certificate the business uploads in Revolut.
+ */
+export const REVOLUT_CONNECT_PATH = '/api/integrations/revolut/connect';
+export const REVOLUT_CERTIFICATE_PATH = '/api/integrations/revolut/certificate';
+
+export interface RevolutSetup {
+  /** False when this server has no Revolut key, so the sign-in is not offered. */
+  configured: boolean;
+  /** The redirect URI to save in Revolut Business beside the certificate. */
+  redirect_uri: string | null;
+}
+
+/** Whether Revolut sign-in is offered, and the redirect URI to give Revolut. */
+export async function getRevolutSetup(): Promise<RevolutSetup | null> {
+  try {
+    const response = await agentFetch(`${getApiBaseUrl()}/oauth/revolut/setup`);
+    if (!response.ok) return null;
+    return (await response.json()) as RevolutSetup;
+  } catch {
+    return null;
+  }
+}
 
 /**
  * Validate the API key for an integration
