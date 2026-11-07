@@ -674,6 +674,8 @@ async def normalize_source(ctx: inngest.Context) -> Dict[str, Any]:
             ),
         )
 
+        await _request_journals_check(ctx, source_id)
+
         return {
             "status": "completed",
             "source_id": source_id,
@@ -753,6 +755,28 @@ async def normalize_after_sync(ctx: inngest.Context) -> Dict[str, Any]:
     except Exception as e:
         ctx.logger.error(f"Error in post-sync normalization: {str(e)}")
         raise
+
+
+async def _request_journals_check(ctx: inngest.Context, source_id: Any) -> None:
+    """Ask for the business's "payments need journals" notification to be brought up to
+    date, now that new data has loaded. Best effort: the load has already succeeded, and
+    the daily check counts again tomorrow.
+    """
+    from ..integrations.inngest.notification_functions import journals_check_event
+    from ..services.external_sync_service import sync_service
+
+    try:
+        source = await ctx.step.run(
+            "get-source-for-journals-check",
+            lambda: sync_service.get_external_source(str(source_id)),
+        )
+        entity_id = (source or {}).get("entity_id")
+        if entity_id:
+            await ctx.step.send_event(
+                "check-journals", journals_check_event(str(entity_id))
+            )
+    except Exception as e:  # Inngest's step interrupts are BaseException, not caught
+        ctx.logger.warning(f"Could not request a journals check for {source_id}: {e}")
 
 
 async def _request_invoice_matching(ctx: inngest.Context, source_id: Any) -> None:

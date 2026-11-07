@@ -69,3 +69,43 @@ configured, so handle that.
 - **Inngest is the processing path.** `normalization/service.py` and
   `JournalService.generate_all_journals` run the same logic synchronously for tests, scripts and
   when Inngest is not running; new processing logic goes in the Inngest functions.
+
+## Notifications
+
+What needs the user is a row in `notifications` (migration `20261107000000_notifications.sql`),
+shown under the bell in the app's sidebar and phone header. The agent writes them with
+`services/notifications.py`:
+
+- `notify(entity_id, kind, key, title, body, link)` opens a notification about `key` (the thing
+  it is about, such as `integration_access:<source id>`), or refreshes the open one. Only one per
+  business and key is open at a time (a partial unique index), so a check that runs every day
+  does not pile up copies, and refreshing does not mark a read notification unread again.
+- `resolve(entity_id, key)` closes it when the problem is gone; the bell no longer lists it.
+- `link` is a path inside the app; anything else is refused (and the column checks it too).
+
+Users read their business's notifications in the browser through row-level security and may
+change only `read_at` (a column grant); they cannot create, reword or delete one.
+
+What opens and closes them is `services/integration_checks.py`, run by the Inngest functions in
+`integrations/inngest/notification_functions.py`:
+
+| Key                              | Opened when                                          | Resolved when         |
+| -------------------------------- | ---------------------------------------------------- | --------------------- |
+| `integration_access:<source id>` | the provider refuses the stored key                  | a check succeeds      |
+| `integration_stale:<source id>`  | no sync for 14 days (the page's amber "Last synced") | a sync within 14 days |
+| `journals_needed`                | Generate journals would still journal something      | nothing is left       |
+
+- `check_integrations_daily` (cron, 06:00 UTC) sends `notifications/integrations.check.requested`
+  for each business with an integration; `check_business_integrations` checks each source (one
+  step per source) and the journals count. Hidden integrations are checked like the rest.
+- The provider checks are `services/source_access.py`, shared with the page's Check key button.
+  Each answers works (`True`), refused (`False`: 401/403, an unknown shop, a revoked Zoho token,
+  a missing or malformed key) or no answer (`None`: a timeout, a 5xx, a rate limit). No answer
+  changes nothing, so a provider's bad night does not tell anyone their connection broke.
+- A refused key also sets `api_key_status` to `invalid`, so the page agrees with the bell; a
+  source whose key is refused gets no "hasn't synced" notification on top.
+- The journals count (`JournalService.count_awaiting_journals`, the pipeline's own four finders,
+  read only) is also refreshed after every load (`normalize_source` sends
+  `notifications/journals.check.requested`) and after Generate journals, debounced per business
+  for two minutes (`check_journals_after_load`). It links to `/integrations?journals=1`, which
+  opens Generate journals. Something the pipeline cannot journal stays counted until it is fixed.

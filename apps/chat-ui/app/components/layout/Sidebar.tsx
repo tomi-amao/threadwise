@@ -30,6 +30,7 @@ import { useAuth } from '~/providers/AuthProvider';
 import { useSidebar } from '~/providers/SidebarProvider';
 import { ThemeToggle } from '~/components/ui/theme-toggle';
 import { AssistantLauncher } from '~/components/assistant/Launcher';
+import { NotificationsBell } from '~/components/notifications/NotificationsBell';
 import { cn } from '~/lib/utils';
 
 interface NavItemProps {
@@ -113,6 +114,7 @@ export function Sidebar({ className }: SidebarProps) {
             onClick={closeMobile}
           />
           <AssistantLauncher variant="sidebar" collapsed={collapsed} onActivate={closeMobile} />
+          <NotificationsBell variant="sidebar" collapsed={collapsed} onActivate={closeMobile} />
         </div>
 
         <div className="mb-4">

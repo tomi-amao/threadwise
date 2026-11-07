@@ -259,6 +259,19 @@ test.describe('integrations', () => {
     await expect(page.getByRole('dialog')).toContainText('Atelier Shop');
   });
 
+  test('a link with ?journals=1 opens Generate journals, and closing it leaves the URL', async ({
+    page,
+  }) => {
+    // The "payments need journals" notification links here.
+    await mockAgent(page);
+    await page.goto('/integrations?journals=1');
+    const heading = page.getByRole('heading', { name: 'Generate Journals' });
+    await expect(heading).toBeVisible();
+    await page.getByRole('button', { name: 'Close', exact: true }).click();
+    await expect(heading).toBeHidden();
+    await expect(page).not.toHaveURL(/journals=/);
+  });
+
   test('a source that has not synced for two weeks is out of date, and needs you', async ({
     page,
   }) => {

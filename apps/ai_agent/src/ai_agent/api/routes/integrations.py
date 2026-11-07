@@ -16,6 +16,12 @@ from ...integrations.revolut.merchant import PROVIDER as MERCHANT_PROVIDER
 from ...normalization.inngest_functions import trigger_source_normalization
 from ...services.external_sync_service import sync_service
 from ...services.revolut_invoice_sync import merchant_source_for
+from ...services.source_access import (
+    check_revolut_merchant as _validate_revolut_merchant_api_key,
+)
+from ...services.source_access import (
+    check_source,
+)
 from ..deps import (
     CurrentUser,
     authorize_entity,
@@ -675,27 +681,9 @@ async def validate_api_key(source_id: str):
                 provider=provider,
             )
 
-        # Validate based on provider
-        is_valid = False
-        error_message = None
-
-        if provider == "squarespace":
-            is_valid, error_message = await _validate_squarespace_api_key(api_key)
-        elif provider == "revolut":
-            is_valid, error_message = await _validate_revolut_api_key(api_key)
-        elif provider == "revolut_merchant":
-            is_valid, error_message = await _validate_revolut_merchant_api_key(api_key)
-        elif provider == "paypal":
-            is_valid, error_message = await _validate_paypal_api_key(api_key)
-        elif provider == "shopify":
-            shop_domain = source.get("external_account_id", "")
-            is_valid, error_message = await _validate_shopify_api_key(
-                api_key, shop_domain
-            )
-        elif provider == "zoho_calendar":
-            is_valid, error_message = await _validate_zoho_calendar_api_key(api_key)
-        else:
-            error_message = f"Unknown provider: {provider}"
+        # Ask the provider. "Could not tell" (None) counts as not working here, as it
+        # always has: the person asked and gets the provider's answer, or the error.
+        is_valid, error_message = await check_source(source, api_key)
 
         # Update status
         if is_valid:
@@ -725,240 +713,6 @@ async def validate_api_key(source_id: str):
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)
         )
-
-
-async def _validate_squarespace_api_key(api_key: str) -> tuple[bool, Optional[str]]:
-    """Validate a Squarespace API key by making a test request."""
-    import httpx
-
-    try:
-        async with httpx.AsyncClient() as client:
-            response = await client.get(
-                "https://api.squarespace.com/1.0/commerce/inventory",
-                headers={
-                    "Authorization": f"Bearer {api_key}",
-                    "User-Agent": "ThreadWise/1.0",
-                },
-                params={"limit": 1},
-                timeout=10.0,
-            )
-
-            if response.status_code == 200:
-                return True, None
-            elif response.status_code == 401:
-                return False, "Invalid API key - authentication failed"
-            elif response.status_code == 403:
-                return False, "API key lacks required permissions"
-            else:
-                return False, f"API returned status {response.status_code}"
-    except httpx.TimeoutException:
-        return False, "Request timed out - check your network connection"
-    except Exception as e:
-        return False, f"Connection error: {str(e)}"
-
-
-async def _validate_revolut_api_key(api_key: str) -> tuple[bool, Optional[str]]:
-    """Validate a Revolut API key by making a test request."""
-    import httpx
-
-    try:
-        async with httpx.AsyncClient() as client:
-            response = await client.get(
-                "https://b2b.revolut.com/api/1.0/accounts",
-                headers={
-                    "Authorization": f"Bearer {api_key}",
-                    "User-Agent": "ThreadWise/1.0",
-                },
-                timeout=10.0,
-            )
-
-            if response.status_code == 200:
-                return True, None
-            elif response.status_code == 401:
-                return False, "Invalid API key - authentication failed"
-            elif response.status_code == 403:
-                return False, "API key lacks required permissions"
-            else:
-                return False, f"API returned status {response.status_code}"
-    except httpx.TimeoutException:
-        return False, "Request timed out - check your network connection"
-    except Exception as e:
-        return False, f"Connection error: {str(e)}"
-
-
-async def _validate_revolut_merchant_api_key(
-    api_key: str,
-) -> tuple[bool, Optional[str]]:
-    """Validate a Revolut Merchant secret key by listing one order."""
-    import httpx
-
-    from ...integrations.revolut.merchant import API_VERSION, MERCHANT_BASE_URL
-
-    try:
-        async with httpx.AsyncClient() as client:
-            response = await client.get(
-                f"{MERCHANT_BASE_URL}/api/orders",
-                headers={
-                    "Authorization": f"Bearer {api_key}",
-                    "Revolut-Api-Version": API_VERSION,
-                    "User-Agent": "ThreadWise/1.0",
-                },
-                params={"limit": 1},
-                timeout=10.0,
-            )
-
-            if response.status_code == 200:
-                return True, None
-            elif response.status_code == 401:
-                return False, (
-                    "Invalid key - use the Production secret key from "
-                    "Merchant, APIs in Revolut Business"
-                )
-            elif response.status_code == 403:
-                return False, "Key lacks access to orders"
-            else:
-                return False, f"API returned status {response.status_code}"
-    except httpx.TimeoutException:
-        return False, "Request timed out - check your network connection"
-    except Exception as e:
-        return False, f"Connection error: {str(e)}"
-
-
-async def _validate_paypal_api_key(api_key: str) -> tuple[bool, Optional[str]]:
-    """Validate PayPal credentials by attempting OAuth2 token exchange.
-
-    The api_key is expected to be a JSON string: {"client_id":"...","secret":"..."}
-    """
-    import json
-    import os
-
-    import httpx
-
-    try:
-        creds = json.loads(api_key)
-        client_id = creds.get("client_id")
-        secret = creds.get("secret")
-
-        if not client_id or not secret:
-            return False, "PayPal credentials must include 'client_id' and 'secret'"
-
-        base_url = os.environ.get("PAYPAL_API_URL", "https://api-m.paypal.com")
-
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                f"{base_url}/v1/oauth2/token",
-                auth=(client_id, secret),
-                data={"grant_type": "client_credentials"},
-                headers={"Accept": "application/json"},
-                timeout=10.0,
-            )
-
-            if response.status_code == 200:
-                return True, None
-            elif response.status_code == 401:
-                return False, "Invalid client_id or secret - authentication failed"
-            else:
-                return False, f"PayPal API returned status {response.status_code}"
-    except json.JSONDecodeError:
-        return (
-            False,
-            'PayPal credentials must be valid JSON: {"client_id":"...","secret":"..."}',
-        )
-    except httpx.TimeoutException:
-        return False, "Request timed out - check your network connection"
-    except Exception as e:
-        return False, f"Connection error: {str(e)}"
-
-
-async def _validate_shopify_api_key(
-    api_key: str, shop_domain: str
-) -> tuple[bool, Optional[str]]:
-    """Validate Shopify credentials via OAuth 2.0 client credentials grant."""
-    import json
-
-    import httpx
-
-    if not shop_domain:
-        return (
-            False,
-            "Shop domain is required - set it as the Account ID when creating the source",
-        )
-
-    try:
-        creds = json.loads(api_key)
-        client_id = creds.get("client_id")
-        client_secret = creds.get("client_secret")
-
-        if not client_id or not client_secret:
-            return (
-                False,
-                "Shopify credentials must include 'client_id' and 'client_secret'",
-            )
-
-        token_url = f"https://{shop_domain}/admin/oauth/access_token"
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.post(
-                token_url,
-                headers={"Content-Type": "application/x-www-form-urlencoded"},
-                data={
-                    "grant_type": "client_credentials",
-                    "client_id": client_id,
-                    "client_secret": client_secret,
-                },
-            )
-        if resp.status_code == 200:
-            return True, None
-        elif resp.status_code == 401:
-            return False, "Invalid client_id or client_secret - authentication failed"
-        elif resp.status_code == 404:
-            return False, f"Shop not found: {shop_domain}"
-        else:
-            logger.error(
-                f"Shopify API validation failed with status {resp.status_code}: {resp.text}"
-            )
-            return False, f"Shopify API returned status {resp.status_code} "
-    except json.JSONDecodeError:
-        return (
-            False,
-            'Credentials must be valid JSON: {"client_id":"...","client_secret":"..."}',
-        )
-    except httpx.TimeoutException:
-        return False, "Request timed out - check your network connection"
-    except Exception as e:
-        return False, f"Connection error: {str(e)}"
-
-
-async def _validate_zoho_calendar_api_key(api_key: str) -> tuple[bool, Optional[str]]:
-    """Validate a Zoho Calendar connection by refreshing its access token.
-
-    api_key is expected to be a JSON string:
-    {"refresh_token": "...", "api_domain": "..."} — same storage shape as
-    every other provider's compound credentials, just sourced from a
-    3-legged OAuth flow (integrations/zoho_calendar/oauth.py) rather than a
-    client-credentials grant, so there's no client_id/client_secret pair to
-    check here — only whether the refresh token Zoho already issued us is
-    still good.
-    """
-    import json
-
-    from ...integrations.zoho_calendar.oauth import ZohoOAuthError, refresh_access_token
-
-    try:
-        creds = json.loads(api_key)
-    except json.JSONDecodeError:
-        return False, "Zoho Calendar credentials are corrupted (not valid JSON)"
-
-    refresh_token = creds.get("refresh_token")
-    if not refresh_token:
-        return False, "Zoho Calendar credentials are missing a refresh_token"
-
-    try:
-        await refresh_access_token(refresh_token)
-        return True, None
-    except ZohoOAuthError as e:
-        return False, f"Zoho Calendar token refresh failed: {e}"
-    except Exception as e:
-        return False, f"Connection error: {str(e)}"
 
 
 @router.get(

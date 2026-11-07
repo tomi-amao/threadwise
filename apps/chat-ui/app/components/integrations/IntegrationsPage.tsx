@@ -412,6 +412,11 @@ export function IntegrationsPage() {
   const connected = new Set(integrations.map(i => i.provider));
   const connectable = (Object.keys(PROVIDERS) as ProviderKey[]).filter(p => !connected.has(p));
 
+  // ?journals=1 opens Generate journals: the "payments need journals" notification links here.
+  const journalsInUrl = searchParams.get('journals') === '1';
+  const journalsEntityId =
+    journalModalSource?.entityId ?? (journalsInUrl ? (entity?.id ?? null) : null);
+
   // The open app is in the URL, so a link or a refresh lands on it.
   const openId = searchParams.get('app');
   const open = integrations.find(i => i.id === openId) ?? null;
@@ -674,12 +679,21 @@ export function IntegrationsPage() {
         />
       )}
 
-      {journalModalSource && (
+      {journalsEntityId && (
         <JournalGenerationModal
           isOpen={true}
-          entityId={journalModalSource.entityId}
+          entityId={journalsEntityId}
           onClose={() => {
             setJournalModalSource(null);
+            if (journalsInUrl)
+              setSearchParams(
+                prev => {
+                  const next = new URLSearchParams(prev);
+                  next.delete('journals');
+                  return next;
+                },
+                { replace: true }
+              );
             fetchData();
           }}
         />
