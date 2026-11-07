@@ -1759,6 +1759,9 @@ async function main() {
     journalRows,
     'id'
   );
+  // One request for every line: the database checks that each journal balances when a request
+  // commits (migration 20261108000000_ledger_guards), so a chunk boundary must never split a
+  // journal's lines.
   await insertChunked(
     'journal_line_items',
     'journal_line_items',
@@ -1773,7 +1776,8 @@ async function main() {
         effective_date: `${date}T12:00:00Z`,
       }))
     ),
-    'id'
+    'id',
+    Number.MAX_SAFE_INTEGER
   );
 
   const accountType = Object.fromEntries(ACCOUNTS.map(a => [a[0], a[2]]));
