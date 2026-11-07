@@ -43,6 +43,7 @@ import {
   statusOf,
 } from './model';
 import { BrandLogo } from './logos';
+import { RevolutSignInSection, revolutReconnectHref } from './RevolutSignIn';
 
 export interface CardHandlers {
   onSync: (forceFull: boolean, includeDrafts?: boolean) => void;
@@ -311,7 +312,8 @@ export function IntegrationCard({
   bare?: boolean;
 }) {
   const config = providerOf(integration.provider);
-  const oauth = config?.credential === 'oauth';
+  const revolutSignedIn = integration.provider === 'revolut' && integration.auth_method === 'oauth';
+  const oauth = config?.credential === 'oauth' || revolutSignedIn;
   const [editingKey, setEditingKey] = useState(false);
   const [confirmingRemove, setConfirmingRemove] = useState(false);
 
@@ -382,10 +384,14 @@ export function IntegrationCard({
             action={
               oauth ? (
                 <a
-                  href={ZOHO_CALENDAR_CONNECT_PATH}
+                  href={
+                    revolutSignedIn
+                      ? revolutReconnectHref(integration.id)
+                      : ZOHO_CALENDAR_CONNECT_PATH
+                  }
                   className="text-[14px] text-accent-text underline underline-offset-4 hover:text-foreground"
                 >
-                  Reconnect with Zoho
+                  {revolutSignedIn ? 'Reconnect with Revolut' : 'Reconnect with Zoho'}
                 </a>
               ) : (
                 <Button variant="outline" size="sm" onClick={() => setEditingKey(true)}>
@@ -535,6 +541,8 @@ export function IntegrationCard({
             </div>
           </div>
         )}
+
+        {integration.provider === 'revolut' && <RevolutSignInSection integration={integration} />}
 
         {integration.provider === 'revolut' && (
           <MerchantKeySection

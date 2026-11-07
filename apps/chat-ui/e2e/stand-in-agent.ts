@@ -726,6 +726,10 @@ function send(res: import('node:http').ServerResponse, status: number, body: unk
   res.end(JSON.stringify(body));
 }
 
+// The Revolut sign-in this stand-in started last (see /oauth/revolut/*).
+const REVOLUT_STATE = 'e2e-revolut-state';
+let revolutUpgrade = false;
+
 createServer(async (req, res) => {
   if (req.method === 'GET' && req.url === '/health') return send(res, 200, { ok: true });
 
@@ -739,6 +743,31 @@ createServer(async (req, res) => {
     return send(res, 200, {
       url: `http://localhost:${process.env.E2E_PORT ?? 5180}/integrations?zoho_calendar=connected`,
     });
+  }
+
+  // Revolut sign-in: the consent URL (the test answers Revolut's page itself) and the exchange,
+  // which only accepts the code and the state this stand-in handed out.
+  if (req.method === 'POST' && req.url === '/oauth/revolut/authorize-url') {
+    let raw = '';
+    for await (const chunk of req) raw += chunk;
+    const body = JSON.parse(raw || '{}') as { client_id?: string; source_id?: string };
+    if (!body.client_id) return send(res, 400, { detail: { reason: 'invalid_client_id' } });
+    revolutUpgrade = !!body.source_id;
+    const query = new URLSearchParams({ client_id: body.client_id, state: REVOLUT_STATE });
+    return send(res, 200, {
+      url: `https://business.revolut.com/app-confirm?${query}`,
+      state: REVOLUT_STATE,
+    });
+  }
+  if (req.method === 'POST' && req.url === '/oauth/revolut/exchange') {
+    let raw = '';
+    for await (const chunk of req) raw += chunk;
+    const body = JSON.parse(raw || '{}') as { code?: string; state?: string };
+    if (body.state !== REVOLUT_STATE)
+      return send(res, 400, { detail: { reason: 'invalid_state' } });
+    if (body.code !== 'e2e-code')
+      return send(res, 400, { detail: { reason: 'token_exchange_failed' } });
+    return send(res, 200, { status: 'connected', source_id: 'src-bank', upgraded: revolutUpgrade });
   }
 
   if (req.method === 'POST' && req.url === '/accounting/inventory/disposal') {

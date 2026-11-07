@@ -39,6 +39,23 @@ import { IntegrationCard } from './IntegrationCard';
 import { BrandLogo } from './logos';
 import { PROVIDERS, int, namesOf, needsYou, relativeTime, type ProviderKey } from './model';
 
+/** What a failed Revolut sign-in says, by the reason code the callback route passes back. */
+const REVOLUT_ERRORS: Record<string, string> = {
+  access_denied: 'Revolut access was not allowed, so nothing changed.',
+  sign_in_expired:
+    'The Revolut sign-in took too long or was started in another browser. Try again.',
+  state_mismatch: 'That Revolut sign-in was not started here, so it was refused.',
+  invalid_state: 'The Revolut sign-in took too long. Try again.',
+  invalid_client_id:
+    'That client ID does not look right. Copy it from Revolut Business, Settings, APIs.',
+  token_exchange_failed:
+    'Revolut did not accept the sign-in. Check the certificate and redirect URI are saved in Revolut for this client ID.',
+  no_access: 'Revolut signed in, but the accounts could not be read with it.',
+  not_configured: 'Revolut sign-in is not set up on this server.',
+  wrong_business: 'That Revolut sign-in was started for a different business.',
+  agent_unreachable: 'ThreadWise could not reach its server. Try again in a moment.',
+};
+
 export function IntegrationsPage() {
   const { entity } = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -111,6 +128,30 @@ export function IntegrationsPage() {
     const interval = setInterval(fetchData, 15000);
     return () => clearInterval(interval);
   }, [fetchData]);
+
+  // The Revolut sign-in's callback route redirects back here with ?revolut= and, on failure, a
+  // short reason code. Consumed once on mount, like the Zoho result below.
+  useEffect(() => {
+    const result = searchParams.get('revolut');
+    if (!result) return;
+    if (result === 'connected' || result === 'upgraded') {
+      toast.success(
+        result === 'upgraded'
+          ? 'Revolut is signed in. It renews itself from now on.'
+          : 'Revolut connected'
+      );
+      fetchData();
+    } else {
+      const reason = searchParams.get('reason') || '';
+      toast.error(
+        REVOLUT_ERRORS[reason] ?? `Revolut could not be connected (${reason || 'unknown error'})`
+      );
+    }
+    const next = new URLSearchParams(searchParams);
+    next.delete('revolut');
+    next.delete('reason');
+    setSearchParams(next, { replace: true });
+  }, []);
 
   // The Zoho Calendar OAuth callback redirects back here with a
   // ?zoho_calendar= result — this app never sees the OAuth flow itself

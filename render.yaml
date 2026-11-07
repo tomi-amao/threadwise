@@ -88,6 +88,11 @@ services:
       # accounts.zoho.com or accounts.zoho.eu: the data centre the Zoho account is on.
       - key: ZOHO_ACCOUNTS_DOMAIN
         sync: false
+      # Optional: Revolut Business sign-in. An RSA private key (PEM, newlines as \n) that signs
+      # Revolut token requests; each business uploads its certificate from the Integrations page.
+      # The redirect URI defaults to FRONTEND_URL + /api/integrations/revolut/callback.
+      - key: REVOLUT_PRIVATE_KEY
+        sync: false
 
   # Pub/sub for streaming and the LangGraph run queue. Reachable only on Render's private network.
   - type: keyvalue

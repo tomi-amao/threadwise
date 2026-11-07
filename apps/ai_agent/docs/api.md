@@ -86,10 +86,14 @@ Router guard: **entity**, except `/entities` (**internal**).
 
 ## OAuth (`/oauth`, `api/routes/oauth.py`)
 
-| Method | Path                           | Guard                  |
-| ------ | ------------------------------ | ---------------------- |
-| GET    | `/zoho_calendar/authorize-url` | user                   |
-| GET    | `/zoho_calendar/callback`      | public; signed `state` |
+| Method | Path                           | Guard                                          |
+| ------ | ------------------------------ | ---------------------------------------------- |
+| GET    | `/zoho_calendar/authorize-url` | user                                           |
+| GET    | `/zoho_calendar/callback`      | public; signed `state`                         |
+| GET    | `/revolut/setup`               | user                                           |
+| GET    | `/revolut/certificate`         | user                                           |
+| POST   | `/revolut/authorize-url`       | user; source owned                             |
+| POST   | `/revolut/exchange`            | user; signed `state` for the caller's business |
 
 ## Realtime (`/realtime`, `api/routes/realtime.py`)
 

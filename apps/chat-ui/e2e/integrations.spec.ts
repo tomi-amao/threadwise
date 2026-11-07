@@ -22,6 +22,7 @@ interface Source {
   api_key_status: 'pending' | 'valid' | 'invalid' | 'expired';
   api_key_last_validated_at: string | null;
   hidden_at?: string | null;
+  auth_method?: 'key' | 'oauth';
   api_key_error: string | null;
   failed_events_count: number;
   uncategorized_transactions_count: number;
@@ -98,6 +99,8 @@ const SOURCES: Source[] = [
   }),
 ];
 
+const REVOLUT_REDIRECT_URI = 'http://localhost:5180/api/integrations/revolut/callback';
+
 const CORS = {
   'access-control-allow-origin': '*',
   // `*` does not cover Authorization, so it is named.
@@ -106,7 +109,11 @@ const CORS = {
 };
 
 /** Answer the agent's endpoints. Returns what was asked of it, and lets a test change the list. */
-async function mockAgent(page: Page, initial: Source[] = SOURCES) {
+async function mockAgent(
+  page: Page,
+  initial: Source[] = SOURCES,
+  { revolutSignIn = false }: { revolutSignIn?: boolean } = {}
+) {
   let sources = [...initial];
   const calls: { method: string; path: string; body: unknown }[] = [];
   // Only the agent's address: the app's own modules live under /app/components/integrations/ too.
@@ -128,6 +135,12 @@ async function mockAgent(page: Page, initial: Source[] = SOURCES) {
       if (!/^Bearer \S+/.test(request.headers()['authorization'] ?? ''))
         return json({ detail: 'Missing bearer token' }, 401);
       if (url.pathname === '/integrations/summary') return json(sources);
+      if (url.pathname === '/oauth/revolut/setup')
+        return json(
+          revolutSignIn
+            ? { configured: true, redirect_uri: REVOLUT_REDIRECT_URI }
+            : { configured: false, redirect_uri: null }
+        );
       let body: unknown = null;
       try {
         body = request.postDataJSON();
@@ -542,6 +555,111 @@ test.describe('integrations', () => {
     await mockAgent(page);
     await page.goto('/api/integrations/zoho/connect');
     await expect(page.getByText('Zoho Calendar connected').first()).toBeVisible();
+  });
+
+  test('Revolut signs in through Revolut when this server offers it', async ({ page }) => {
+    await mockAgent(
+      page,
+      SOURCES.filter(s => s.provider !== 'revolut'),
+      { revolutSignIn: true }
+    );
+    let consent: URL | null = null;
+    // Nothing reaches the real Revolut. Playwright does not route the target of a redirect, so
+    // the app's connect route is answered with its own response, minus the redirect: the
+    // consent URL is kept for the test, and a stand-in Revolut page is shown instead.
+    await page.route(
+      url => url.hostname === 'revolut.com' || url.hostname.endsWith('.revolut.com'),
+      route => route.abort()
+    );
+    await page.route('**/api/integrations/revolut/connect?*', async route => {
+      const response = await route.fetch({ maxRedirects: 0 });
+      consent = new URL(response.headers()['location']);
+      return route.fulfill({
+        status: 200,
+        headers: {
+          'content-type': 'text/html',
+          'set-cookie': response.headers()['set-cookie'] ?? '',
+        },
+        body: '<h1>Revolut consent</h1>',
+      });
+    });
+    await page.goto('/integrations');
+    await page.getByRole('button', { name: /^Connect Revolut/ }).click();
+    const d = page.getByRole('dialog');
+    await expect(d.getByRole('link', { name: /Download certificate/ })).toHaveAttribute(
+      'href',
+      '/api/integrations/revolut/certificate'
+    );
+    await expect(d.getByText(REVOLUT_REDIRECT_URI)).toBeVisible();
+    await expect(d.getByLabel(/API key/)).toHaveCount(0);
+    await expectNoHorizontalOverflow(page);
+    expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+    const connect = d.getByRole('button', { name: /Connect with Revolut/ });
+    await expect(connect).toBeDisabled();
+    await d.getByLabel(/Business ID/).fill('biz-9');
+    await d.getByLabel(/Client ID/).fill('client-123');
+    await connect.click();
+
+    // The app asked the agent as the user and sent the browser to Revolut, read-only scope and
+    // all decided by the agent; the state is kept in an HttpOnly cookie for the callback.
+    await expect(page.getByRole('heading', { name: 'Revolut consent' })).toBeVisible();
+    expect(consent!.searchParams.get('client_id')).toBe('client-123');
+    const cookie = (await page.context().cookies()).find(c => c.name === 'tw_revolut_sign_in');
+    expect(cookie).toMatchObject({ httpOnly: true, sameSite: 'Lax' });
+
+    // Revolut sends the browser back with a one-time code.
+    await page.goto(
+      `/api/integrations/revolut/callback?code=e2e-code&state=${consent!.searchParams.get('state')}`
+    );
+    await expect(page).toHaveURL(/\/integrations$/);
+    await expect(page.getByText('Revolut connected').first()).toBeVisible();
+    expect(
+      (await page.context().cookies()).find(c => c.name === 'tw_revolut_sign_in')
+    ).toBeUndefined();
+  });
+
+  test('a Revolut sign-in Revolut sends back to another browser is refused', async ({ page }) => {
+    await mockAgent(page);
+    // No cookie: this browser never started a sign-in, so the code is not used.
+    await page.goto('/api/integrations/revolut/callback?code=e2e-code&state=e2e-revolut-state');
+    await expect(page.getByText(/started in another browser/).first()).toBeVisible();
+  });
+
+  test('a Revolut integration with a pasted token can switch to the sign-in in place', async ({
+    page,
+  }) => {
+    await mockAgent(page, SOURCES, { revolutSignIn: true });
+    await page.goto('/integrations');
+    const bank = await openApp(page, 'Revolut');
+    const signIn = bank.getByRole('region', { name: 'Revolut sign-in' });
+    await expect(signIn).toContainText('Pasted token');
+    await signIn.getByRole('button', { name: 'Set up Revolut sign-in' }).click();
+    await expect(signIn.getByText(REVOLUT_REDIRECT_URI)).toBeVisible();
+    // The form names this integration, so the sign-in replaces its token and keeps its data.
+    await expect(signIn.locator('input[type=hidden][name=source_id]')).toHaveValue('src-bank');
+    await expectNoHorizontalOverflow(page);
+    expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+    await expect(signIn.getByRole('button', { name: /Connect with Revolut/ })).toBeDisabled();
+  });
+
+  test('a signed-in Revolut integration says so and can reconnect', async ({ page }) => {
+    await mockAgent(
+      page,
+      SOURCES.map(s =>
+        s.provider === 'revolut'
+          ? { ...s, auth_method: 'oauth', api_key_status: 'valid', api_key_error: null }
+          : s
+      ),
+      { revolutSignIn: true }
+    );
+    await page.goto('/integrations');
+    const bank = await openApp(page, 'Revolut');
+    const signIn = bank.getByRole('region', { name: 'Revolut sign-in' });
+    await expect(signIn).toContainText('Signed in with Revolut');
+    await expect(signIn.getByRole('link', { name: 'Reconnect with Revolut' })).toHaveAttribute(
+      'href',
+      '/api/integrations/revolut/connect?source_id=src-bank'
+    );
   });
 
   test('with nothing connected it says where to start', async ({ page }) => {
