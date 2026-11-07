@@ -57,7 +57,7 @@ real dependencies, a production-build-breaking route naming issue). What's left:
   `langgraph.json`: regenerate it when that file changes. Guide:
   `apps/ai_agent/docs/deploy-render.md`.
 - Frontend tests are Playwright end-to-end tests (see "Frontend tests" below); there is no
-  unit-test runner. Backend has 31 test files under `apps/ai_agent/tests/` (see "Backend tests"
+  unit-test runner. Backend has 32 test files under `apps/ai_agent/tests/` (see "Backend tests"
   below); the integrations are mostly untested.
 
 ## Commands (run from repo root unless noted)
@@ -144,7 +144,7 @@ pushed with `GITHUB_TOKEN` does not trigger other workflows.)
 
 ### Backend tests
 
-`apps/ai_agent/tests/` has 31 test files (about 650 tests). Run without a `.env`, as CI does, so
+`apps/ai_agent/tests/` has 32 test files (about 690 tests). Run without a `.env`, as CI does, so
 `tests/conftest.py` sets `INNGEST_DEV=1` — without it the Inngest SDK refuses to build a client and
 every module that imports the app fails at collection. Don't rely on your local `.env` for that.
 `test_scoped_sql.py`, `test_chat_agent.py`, `test_actions.py` and the evals use the local Supabase

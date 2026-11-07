@@ -64,7 +64,7 @@ or description strings). All of Black, isort, flake8, mypy and bandit are clean 
 finding is yours. Pre-commit hooks (root `.pre-commit-config.yaml`, invoked via Husky) run
 Black/isort/flake8/mypy/bandit on changed Python files at commit time.
 
-There are 31 test files (about 650 tests). The database-backed ones (`test_scoped_sql.py`,
+There are 32 test files (about 690 tests). The database-backed ones (`test_scoped_sql.py`,
 `test_chat_agent.py`, `test_actions.py`, `test_evals.py`, `test_ledger_guards.py`) use the local
 Supabase stack (and most the e2e seed manifest) and skip those parts when they are absent. The
 ledger's suite is `test_journal_types.py` (every journal type, on a stand-in database that keeps
