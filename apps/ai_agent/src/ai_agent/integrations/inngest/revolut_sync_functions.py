@@ -23,6 +23,7 @@ from ...integrations.common import resolve_sync_since
 from ...integrations.revolut import ENDPOINTS, RevolutAdapter
 from ...integrations.revolut.merchant import ENDPOINT as MERCHANT_ENDPOINT
 from ...integrations.revolut.merchant import MerchantAdapter, is_invoice
+from ...integrations.revolut.oauth import RevolutOAuthError
 from ...integrations.revolut.receipts import (
     ReceiptRef,
     known_receipt_ids,
@@ -348,7 +349,7 @@ async def revolut_sync_endpoint(ctx: inngest.Context) -> Dict[str, Any]:
                 "API key not found - please configure credentials"
             )
 
-        adapter = RevolutAdapter(api_key=api_key, page_size=100)
+        adapter = RevolutAdapter(api_key=api_key, page_size=100, source_id=source_id)
 
         cursor = resume_cursor or source.get("sync_cursor")
         items_stored = 0
@@ -486,6 +487,11 @@ async def revolut_sync_endpoint(ctx: inngest.Context) -> Dict[str, Any]:
             raise inngest.NonRetriableError(
                 f"Revolut API authentication failed: {e}"
             ) from e
+        # A revoked or expired Revolut sign-in fails the same way on every retry.
+        if isinstance(e, RevolutOAuthError) and e.refused:
+            raise inngest.NonRetriableError(
+                f"Revolut sign-in no longer works, reconnect it: {e}"
+            ) from e
 
         raise
 
@@ -538,7 +544,7 @@ async def revolut_sync_receipts(ctx: inngest.Context) -> Dict[str, Any]:
         raise inngest.NonRetriableError(
             "API key not found - please configure credentials"
         )
-    adapter = RevolutAdapter(api_key=api_key, page_size=100)
+    adapter = RevolutAdapter(api_key=api_key, page_size=100, source_id=source_id)
 
     def _client():
         client = get_supabase_client()

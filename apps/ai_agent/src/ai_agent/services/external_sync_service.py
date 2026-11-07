@@ -246,6 +246,15 @@ class ExternalSyncService:
         except Exception as e:
             logger.error(f"Failed to update API key status: {e}")
 
+    async def set_auth_method(self, source_id: str, method: str) -> None:
+        """Record how a source signs in: 'key' (pasted) or 'oauth' (provider sign-in)."""
+        await asyncio.to_thread(
+            lambda: self.client.table("external_sources")
+            .update({"auth_method": method})
+            .eq("id", source_id)
+            .execute()
+        )
+
     async def set_hidden(self, source_id: str, hidden: bool) -> Optional[str]:
         """Hide or show a source on the Integrations page. Returns the new hidden_at."""
         hidden_at = datetime.now(timezone.utc).isoformat() if hidden else None

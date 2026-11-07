@@ -69,14 +69,36 @@ async def check_squarespace(api_key: str) -> Check:
         return None, f"Connection error: {str(e)}"
 
 
-async def check_revolut(api_key: str) -> Check:
-    """Revolut Business: list the accounts."""
+async def check_revolut(api_key: str, source_id: Optional[str] = None) -> Check:
+    """Revolut Business: list the accounts.
+
+    A key that is a Revolut sign-in (integrations/revolut/oauth.py) first mints an access token
+    from its refresh token; a refused refresh means the user has to reconnect.
+    """
+    from ..integrations.revolut.oauth import (
+        RevolutOAuthError,
+        access_token_for,
+        parse_credentials,
+        store_rotated_for,
+    )
+
+    creds = parse_credentials(api_key)
+    token = api_key
+    if creds:
+        try:
+            token = await access_token_for(creds, store_rotated_for(source_id))
+        except RevolutOAuthError as e:
+            if e.refused:
+                return False, (
+                    "Revolut sign-in has expired or was revoked - reconnect with Revolut"
+                )
+            return None, f"Revolut sign-in could not be renewed: {e}"
     try:
         async with httpx.AsyncClient() as client:
             response = await client.get(
                 "https://b2b.revolut.com/api/1.0/accounts",
                 headers={
-                    "Authorization": f"Bearer {api_key}",
+                    "Authorization": f"Bearer {token}",
                     "User-Agent": USER_AGENT,
                 },
                 timeout=TIMEOUT,
@@ -84,7 +106,12 @@ async def check_revolut(api_key: str) -> Check:
         if response.status_code == 200:
             return True, None
         if response.status_code == 401:
-            return False, "Invalid API key - authentication failed"
+            if creds:
+                return False, "Revolut refused the sign-in - reconnect with Revolut"
+            return False, (
+                "Invalid API key - authentication failed. Pasted tokens expire after "
+                "about 40 minutes: connect with Revolut so it renews itself"
+            )
         if response.status_code == 403:
             return False, "API key lacks required permissions"
         return _unexpected("Revolut", response.status_code)
@@ -252,7 +279,7 @@ async def check_source(source: Dict[str, Any], api_key: Optional[str]) -> Check:
     if provider == "squarespace":
         return await check_squarespace(api_key)
     if provider == "revolut":
-        return await check_revolut(api_key)
+        return await check_revolut(api_key, source.get("id"))
     if provider == "revolut_merchant":
         return await check_revolut_merchant(api_key)
     if provider == "paypal":

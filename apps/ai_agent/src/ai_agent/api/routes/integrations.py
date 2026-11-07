@@ -169,6 +169,8 @@ class IntegrationSummary(BaseModel):
     merchant: Optional[MerchantKeySummary] = None
     # When the user hid it on the Integrations page; None when shown. It still syncs.
     hidden_at: Optional[str] = None
+    # How it signs in: "key" (a pasted key or token) or "oauth" (the provider's sign-in).
+    auth_method: str = "key"
 
 
 class ValidateApiKeyResponse(BaseModel):
@@ -396,6 +398,8 @@ async def update_api_key(source_id: str, request: UpdateApiKeyRequest):
             )
 
         await sync_service.update_api_key(source_id, request.api_key)
+        # A pasted key replaces any provider sign-in the source had.
+        await sync_service.set_auth_method(source_id, "key")
 
         return UpdateApiKeyResponse(
             source_id=source_id,
@@ -1484,6 +1488,7 @@ async def get_integrations_summary(user: CurrentUser, entity_id: Optional[str] =
                     uncategorized_transactions_count=uncategorized_count,
                     endpoint_sync_state=endpoint_sync_state,
                     hidden_at=source.get("hidden_at"),
+                    auth_method=source.get("auth_method") or "key",
                     merchant=(
                         MerchantKeySummary(
                             source_id=merchant["id"],
