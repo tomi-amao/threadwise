@@ -253,6 +253,42 @@ disconnecting revokes the token; write endpoints take a JSON string in a query p
 body; event times are in a nested `dateandtime` object. `reconcile_calendar_events` marks an
 event `cancelled` when a pull no longer returns it.
 
+## Revolut Business sign-in (OAuth)
+
+A pasted Revolut access token stops working after about 40 minutes. The sign-in replaces it with
+Revolut's OAuth flow, in `integrations/revolut/oauth.py` and `api/routes/oauth.py`:
+
+- **One-time setup, per business.** ThreadWise holds one RSA private key (`REVOLUT_PRIVATE_KEY`).
+  The Integrations page offers its public certificate (`GET /oauth/revolut/certificate`, made
+  from the key) and the redirect URI (`GET /oauth/revolut/setup`). The business uploads the
+  certificate in Revolut Business (Settings, APIs, Business API), saves the redirect URI there,
+  and pastes back the client ID Revolut gives it.
+- **Start.** The app's `/api/integrations/revolut/connect` route asks
+  `POST /oauth/revolut/authorize-url` as the user, with the client ID and either `source_id` (an
+  existing Revolut integration, signed in in place, its data kept; a reconnect reuses its stored
+  client ID) or a business ID for a new one. The agent signs a `state` (HMAC-SHA256 with a key
+  derived from the private key; business, source, client ID; 10 minutes). The app keeps it in an
+  HttpOnly, SameSite=Lax cookie scoped to the Revolut routes and redirects to Revolut's consent
+  page, scope `READ` only.
+- **Callback.** Revolut sends the browser to the app's `/api/integrations/revolut/callback`, not to
+  this backend, so the user's session is there. The route refuses a state that is not the cookie's
+  (a sign-in started in another browser), then calls `POST /oauth/revolut/exchange` as the user.
+  The agent verifies the state, requires its business to be the caller's (and the source, again,
+  to be theirs), exchanges the code with a client assertion (an RS256 JWT: `iss` the redirect
+  URI's host, `sub` the client ID, `aud` https://revolut.com, five minutes), checks the token can
+  read the accounts, and stores `{"auth": "oauth", "client_id", "refresh_token"}` as the source's
+  Vault key with `auth_method = 'oauth'` (a non-secret column the page reads).
+- **Use.** `RevolutAdapter` and `check_revolut` read the stored key with `parse_credentials`: a
+  sign-in mints an access token from the refresh token (`access_token_for`, cached in memory
+  until five minutes before it expires); anything else is used as a pasted token, as before. If
+  Revolut ever returns a new refresh token it is stored (`store_rotated_for`). A refused refresh
+  (`invalid_grant` and similar) makes the key check say "reconnect" (and the daily check notify),
+  and stops a sync without retries.
+
+Pasting a token on the card again (`PUT /integrations/sources/{id}/api-key`) sets `auth_method`
+back to `key`. Revolut has no token revocation endpoint: to cut access, remove the certificate in
+Revolut Business, which makes the stored refresh token useless.
+
 ## Adding a provider
 
 1. An API client in `integrations/<provider>/`.
