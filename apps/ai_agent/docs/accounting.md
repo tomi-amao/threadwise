@@ -101,6 +101,9 @@ Rules every journal follows:
   6. `UNCATEGORISED_FALLBACK` (8090 Miscellaneous Expense), and the journal is written as **draft**
      for a person to review, rather than posted to a guess.
 - Header accounts (`is_header = true`) are never posting targets. `6999` is not a valid fallback.
+- A foreign-currency transaction with no confirmed GBP amount (a PayPal item whose conversion was
+  not found, `metadata.fx_pending`) is journaled as **draft** too, so a foreign amount is never
+  posted without its GBP value. See [PayPal in other currencies](data-pipeline.md#paypal-in-other-currencies).
 - Account ids are cached in memory; call `clear_account_cache()` after changing the chart.
 
 `POST /accounting/journals/suggest-accounts` asks an LLM for a better account for each draft; the

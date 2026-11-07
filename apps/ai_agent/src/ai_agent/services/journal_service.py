@@ -90,6 +90,18 @@ def _compute_gbp_equivalent(txn: dict, native_amount: Decimal) -> Optional[float
     return round(base_float, 4)
 
 
+FX_PENDING_NOTE = " [DRAFT — GBP amount pending]"
+
+
+def fx_pending(txn: dict) -> bool:
+    """A foreign-currency row whose GBP amount is not confirmed yet (a PayPal item
+    before its conversion is applied, see PayPalCleaningService.apply_conversion_rates).
+    Its journal is a draft: posting it would put a foreign amount in the ledger with no
+    GBP value."""
+    meta = txn.get("metadata") or {}
+    return bool(meta.get("fx_pending")) and txn.get("fx_rate") is None
+
+
 def merchant_fee(
     txn: dict, journal_amount: Decimal, journal_currency: str = "GBP"
 ) -> Decimal:
@@ -887,10 +899,11 @@ class JournalService:
             entity_id=entity_id,
             journal_type="sales_receipt",
             journal_date=txn.get("occurred_at", datetime.now(timezone.utc).isoformat()),
-            description=f"PayPal sale: {counterparty or description_text}",
+            description=f"PayPal sale: {counterparty or description_text}"
+            + (FX_PENDING_NOTE if fx_pending(txn) else ""),
             source_type="financial_transaction",
             source_id=financial_transaction_id,
-            status="posted",
+            status="draft" if fx_pending(txn) else "posted",
             line_items=line_items,
         )
 
@@ -1000,10 +1013,11 @@ class JournalService:
             entity_id=entity_id,
             journal_type="refund",
             journal_date=txn.get("occurred_at", datetime.now(timezone.utc).isoformat()),
-            description=f"Refund from {counterparty or description_text}",
+            description=f"Refund from {counterparty or description_text}"
+            + (FX_PENDING_NOTE if fx_pending(txn) else ""),
             source_type="financial_transaction",
             source_id=financial_transaction_id,
-            status="posted",
+            status="draft" if fx_pending(txn) else "posted",
             line_items=line_items,
         )
 
@@ -1882,6 +1896,10 @@ class JournalService:
                 **gbp_equiv_field,
             },
         ]
+
+        if fx_pending(txn):
+            journal_status = "draft"
+            journal_description += FX_PENDING_NOTE
 
         journal = await self._create_journal(
             entity_id=entity_id,

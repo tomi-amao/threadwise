@@ -229,6 +229,34 @@ Persistence must be idempotent (the same input gives the same database state), w
 before children, link each canonical row to its raw event, and update the raw event's state on
 success and failure.
 
+## PayPal in other currencies
+
+A PayPal item carries no GBP amount. PayPal records a conversion as separate `T0200` items (one in
+each currency) with the same invoice id or the same second, so a foreign-currency payment gets its
+GBP amount in two steps:
+
+1. The normaliser stores it with the GBP amount pending: `fx_rate` NULL, `base_amount` the foreign
+   amount (the column is NOT NULL) and `metadata.fx_pending`. A journal built while it is pending is
+   a draft, never posted: the expense, sales receipt and refund journals check `fx_pending`
+   (`journal_service.fx_pending`), and the funding journal drafts any foreign row with no rate.
+2. At the end of every PayPal load `normalize_source` runs
+   `PayPalCleaningService.apply_conversion_rates`: for each pending row that is its group's only
+   foreign item and whose amount a `T0200` in its currency carries exactly, the GBP `T0200` gives
+   `base_amount` and the rate (`_calc_fx_from_conversions`, the cleaning pipeline's own
+   calculation), and `fx_pending` is cleared. It changes only rows with no rate and no journal, and
+   nothing but those two figures, so the ledger does not move. A payment from a foreign balance, a
+   conversion between two foreign currencies or a part conversion stays pending for a person.
+
+A reload (hard mode) of a PayPal item keeps what was worked out after its first load
+(`PersistenceService._keep_paypal_cleaning`): a confirmed rate rather than the provisional amount,
+and an exclusion set by the clean-up (a conversion or pass-through item, a Revolut duplicate)
+rather than counting the item again. The row's journal was built from those. Checked
+against the stored data in November 2026: of 99 counted foreign rows it reproduces 88 exactly and
+leaves 11 pending, none different.
+
+The rest of PayPal's clean-up (excluding conversion and pass-through items, matching Revolut) is
+still `POST /accounting/clean-paypal`, run by hand before generating journals.
+
 ## Zoho Calendar (OAuth)
 
 Every other provider uses credentials the user pastes in. Zoho Calendar needs a real three-legged
