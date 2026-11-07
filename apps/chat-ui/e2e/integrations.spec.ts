@@ -568,7 +568,7 @@ test.describe('integrations', () => {
     // the app's connect route is answered with its own response, minus the redirect: the
     // consent URL is kept for the test, and a stand-in Revolut page is shown instead.
     await page.route(
-      url => url.hostname.endsWith('revolut.com'),
+      url => url.hostname === 'revolut.com' || url.hostname.endsWith('.revolut.com'),
       route => route.abort()
     );
     await page.route('**/api/integrations/revolut/connect?*', async route => {

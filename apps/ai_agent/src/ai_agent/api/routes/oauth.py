@@ -383,5 +383,5 @@ async def revolut_exchange(body: RevolutExchangeRequest, user: CurrentUser):
 
     await sync_service.set_auth_method(result_id, "oauth")
     await sync_service.update_api_key_status(result_id, "valid")
-    revolut_oauth.remember_access_token(refresh_token, tokens)
+    revolut_oauth.remember_access_token(client_id, refresh_token, tokens)
     return {"status": "connected", "source_id": result_id, "upgraded": bool(source_id)}

@@ -205,7 +205,7 @@ def _state_secret() -> bytes:
         serialization.PrivateFormat.PKCS8,
         serialization.NoEncryption(),
     )
-    return hashlib.sha256(b"threadwise-revolut-oauth-state\x00" + der).digest()
+    return hmac.new(der, b"threadwise-revolut-oauth-state", hashlib.sha256).digest()
 
 
 def _sign(payload_b64: str) -> str:
@@ -358,27 +358,32 @@ def parse_credentials(stored: str) -> Optional[Dict[str, str]]:
     return None
 
 
-# sha256(refresh token) -> (access token, expires at). In memory only, never persisted, keyed by
-# a hash so the refresh token itself is not held as a dict key.
-_access_tokens: Dict[str, tuple[str, float]] = {}
+# client ID -> (refresh token, access token, expires at). In memory only, never persisted. One
+# entry per business (each has its own client ID); an entry counts only for the refresh token it
+# was minted from, so a reconnect with a new refresh token never reuses an old access token.
+_access_tokens: Dict[str, tuple[str, str, float]] = {}
 
 RotatedCallback = Callable[[str], Awaitable[None]]
 
 
-def _cache_key(refresh_token: str) -> str:
-    return hashlib.sha256(refresh_token.encode("utf-8")).hexdigest()
-
-
-def remember_access_token(refresh_token: str, tokens: Dict[str, Any]) -> None:
+def remember_access_token(
+    client_id: str, refresh_token: str, tokens: Dict[str, Any]
+) -> None:
     expires_in = int(tokens.get("expires_in") or 2400)
-    _access_tokens[_cache_key(refresh_token)] = (
+    _access_tokens[client_id] = (
+        refresh_token,
         str(tokens["access_token"]),
         time.time() + expires_in - REFRESH_BUFFER_SECONDS,
     )
 
 
-def forget_access_token(refresh_token: str) -> None:
-    _access_tokens.pop(_cache_key(refresh_token), None)
+def _cached_access_token(client_id: str, refresh_token: str) -> Optional[str]:
+    entry = _access_tokens.get(client_id)
+    if entry is None or entry[2] <= time.time():
+        return None
+    if not hmac.compare_digest(entry[0].encode("utf-8"), refresh_token.encode("utf-8")):
+        return None
+    return entry[1]
 
 
 async def access_token_for(
@@ -390,14 +395,13 @@ async def access_token_for(
     credentials JSON so it can be stored; the old one may stop working.
     """
     refresh_token = creds["refresh_token"]
-    cached = _access_tokens.get(_cache_key(refresh_token))
-    if cached and cached[1] > time.time():
-        return cached[0]
+    cached = _cached_access_token(creds["client_id"], refresh_token)
+    if cached is not None:
+        return cached
 
     tokens = await refresh(refresh_token, creds["client_id"])
     new_refresh = tokens.get("refresh_token")
     if isinstance(new_refresh, str) and new_refresh and new_refresh != refresh_token:
-        forget_access_token(refresh_token)
         refresh_token = new_refresh
         if on_rotated is not None:
             await on_rotated(credentials_json(creds["client_id"], new_refresh))
@@ -405,7 +409,7 @@ async def access_token_for(
             logger.warning(
                 "Revolut rotated a refresh token but nothing stored the new one"
             )
-    remember_access_token(refresh_token, tokens)
+    remember_access_token(creds["client_id"], refresh_token, tokens)
     return str(tokens["access_token"])
 
 

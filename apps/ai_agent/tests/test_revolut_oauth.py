@@ -248,6 +248,24 @@ class TestTokens:
         assert run(oauth.access_token_for(creds)) == "a2"
         assert calls == ["r1", "r1"]
 
+    def test_a_new_refresh_token_never_reuses_an_old_access_token(self, monkeypatch):
+        async def fake_refresh(refresh_token, client_id):
+            return {"access_token": f"for-{refresh_token}", "expires_in": 2399}
+
+        monkeypatch.setattr(oauth, "refresh", fake_refresh)
+        old = {"client_id": CLIENT_ID, "refresh_token": "r1"}
+        new = {"client_id": CLIENT_ID, "refresh_token": "r2"}  # a reconnect
+        assert run(oauth.access_token_for(old)) == "for-r1"
+        assert run(oauth.access_token_for(new)) == "for-r2"
+
+    def test_the_cache_holds_no_digest_of_the_refresh_token(self, monkeypatch):
+        async def fake_refresh(refresh_token, client_id):
+            return {"access_token": "a1", "expires_in": 2399}
+
+        monkeypatch.setattr(oauth, "refresh", fake_refresh)
+        run(oauth.access_token_for({"client_id": CLIENT_ID, "refresh_token": "r1"}))
+        assert list(oauth._access_tokens) == [CLIENT_ID]
+
     def test_a_rotated_refresh_token_is_handed_back_to_store(self, monkeypatch):
         async def fake_refresh(refresh_token, client_id):
             return {"access_token": "a1", "refresh_token": "r2", "expires_in": 2399}

@@ -220,7 +220,9 @@ class ExternalSyncService:
             # Reset api_key_status to pending
             await self.update_api_key_status(source_id, "pending")
 
-            logger.info(f"Updated API key for source {source_id}")
+            # The id can come from a request: no line breaks in the log (log injection).
+            safe_id = str(source_id).replace("\r", "").replace("\n", "")
+            logger.info("Updated API key for source %s", safe_id)
             return True
         except Exception as e:
             logger.error(f"Failed to update API key: {e}")
