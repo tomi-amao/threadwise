@@ -57,9 +57,8 @@ real dependencies, a production-build-breaking route naming issue). What's left:
   `langgraph.json`: regenerate it when that file changes. Guide:
   `apps/ai_agent/docs/deploy-render.md`.
 - Frontend tests are Playwright end-to-end tests (see "Frontend tests" below); there is no
-  unit-test runner. Backend has 11 test files under `apps/ai_agent/tests/` (see "Backend tests"
-  below); the services behind `journal_service`, `account_mapping` and the integrations are mostly
-  untested.
+  unit-test runner. Backend has 31 test files under `apps/ai_agent/tests/` (see "Backend tests"
+  below); the integrations are mostly untested.
 
 ## Commands (run from repo root unless noted)
 
@@ -145,13 +144,15 @@ pushed with `GITHUB_TOKEN` does not trigger other workflows.)
 
 ### Backend tests
 
-`apps/ai_agent/tests/` has 11 test files (about 260 tests). Run without a `.env`, as CI does, so
+`apps/ai_agent/tests/` has 31 test files (about 650 tests). Run without a `.env`, as CI does, so
 `tests/conftest.py` sets `INNGEST_DEV=1` — without it the Inngest SDK refuses to build a client and
 every module that imports the app fails at collection. Don't rely on your local `.env` for that.
 `test_scoped_sql.py`, `test_chat_agent.py`, `test_actions.py` and the evals use the local Supabase
 stack and the e2e seed manifest (`pnpm db:fresh`) and skip those parts when they are absent; CI runs
-them in `.github/workflows/backend-data.yml`. `journal_service`, `account_mapping`, the integrations
-and the whole frontend (outside Playwright) have little or no direct coverage.
+them in `.github/workflows/backend-data.yml`; `test_ledger_guards.py` (the database's ledger rules)
+needs only the local stack. The ledger has its own suite (`test_journal_types.py`,
+`test_account_mapping.py`, `test_ledger_guards.py`; see `apps/ai_agent/docs/accounting.md`). The
+integrations and the whole frontend (outside Playwright) have little or no direct coverage.
 
 ## Architecture
 
