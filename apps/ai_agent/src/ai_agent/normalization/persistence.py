@@ -42,7 +42,7 @@ from .models import (
 )
 from .normalizer import NormalizationResult
 from .utils import extract_id as _extract_id
-from .utils import extract_rows
+from .utils import extract_row, extract_rows
 
 logger = logging.getLogger(__name__)
 
@@ -1519,6 +1519,9 @@ class PersistenceService:
             "created_at": (txn.created_at.isoformat() if txn.created_at else None),
         }
 
+        if data["source"] == "paypal":
+            await self._keep_paypal_cleaning(data)
+
         result = await asyncio.to_thread(
             lambda: self.client.table("financial_transactions")
             .upsert(data, on_conflict="source,external_transaction_id")
@@ -1534,6 +1537,40 @@ class PersistenceService:
             )
 
         return _extract_id(result)
+
+    async def _keep_paypal_cleaning(self, data: Dict[str, Any]) -> None:
+        """When a PayPal item is loaded again (a hard reload), keep what was worked out
+        after it was first loaded, instead of putting the raw item's values back:
+
+        - a confirmed GBP amount (from PayPal's conversion items), when the item comes in
+          with its GBP amount pending;
+        - an exclusion (a conversion or pass-through item, a duplicate of a Revolut
+          transaction), with its description, when the item comes in not excluded.
+
+        The row's journal was built from those; undoing them would leave the row and its
+        journal disagreeing, or let an excluded item be journaled as money that moved.
+        """
+        existing = extract_row(
+            await asyncio.to_thread(
+                lambda: self.client.table("financial_transactions")
+                .select("fx_rate, base_amount, excluded_reason, status, description")
+                .eq("source", data["source"])
+                .eq("external_transaction_id", data["external_transaction_id"])
+                .limit(1)
+                .execute()
+            )
+        )
+        if not existing:
+            return
+        metadata = data.get("metadata") or {}
+        if metadata.get("fx_pending") and existing.get("fx_rate") is not None:
+            data["fx_rate"] = existing["fx_rate"]
+            data["base_amount"] = existing["base_amount"]
+            data["metadata"] = {k: v for k, v in metadata.items() if k != "fx_pending"}
+        if existing.get("excluded_reason") and not data.get("excluded_reason"):
+            data["excluded_reason"] = existing["excluded_reason"]
+            data["status"] = existing.get("status") or "excluded"
+            data["description"] = existing.get("description") or data["description"]
 
     async def _get_bank_account_id(
         self,

@@ -226,10 +226,12 @@ is Inngest-orchestrated, under `integrations/inngest/`:
   so read it into a `Dict[str, Any]`; and a function wrapped by `@client.create_function` becomes an
   Inngest `Function`, which is **not callable**, so shared logic goes in a plain undecorated helper
   (see `_sync_squarespace_endpoint`). `step.run` accepts handler args and sync callables.
-- Known gap: the PayPal normalizer leaves `base_amount` empty for foreign-currency transactions on
-  purpose, but `CanonicalFinancialTransaction.base_amount` and the `financial_transactions` column
-  are required, so those rows fail validation. Marked with a `type: ignore` in
-  `normalization/paypal_normalizer.py`; it needs a decision on how to convert them to GBP.
+- A foreign-currency PayPal item is stored with its GBP amount pending (`fx_rate` NULL,
+  `base_amount` = the foreign amount, `metadata.fx_pending`), and the end of each PayPal load fills
+  it in from PayPal's own `T0200` conversion items (`PayPalCleaningService.apply_conversion_rates`),
+  only on rows with no rate and no journal; a hard reload keeps a confirmed rate and the clean-up's
+  exclusions. Never post a pending row: its journal is a draft (`journal_service.fx_pending`).
+  Details: `docs/data-pipeline.md`.
 - Two Revolut syncs bypass raw events and normalisation on purpose and write straight to
   app tables: receipts (`revolut_sync_receipts` → `transaction_attachments`) and the
   invoices sent from Revolut (`revolut_merchant_sync`, the Revolut integration's

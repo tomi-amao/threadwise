@@ -35,10 +35,11 @@ real dependencies, a production-build-breaking route naming issue). What's left:
 - Secrets in git history (the repo is public; all 221 commits were scanned in October 2026).
   `apps/chat-ui/.env.local` was tracked until 2026-09-16 (`0a34506`) and is in two commits
   (`0114007`, `fae76f5`), but it holds only localhost settings and placeholders, not live keys. The
-  real exposure is a **hosted Supabase Postgres password** that `b1da36c` (2026-01-10) committed in
-  `apps/ai_agent/utils/tools.py` (removed in `8fe96ce`, but still in history on `main`). Treat it as
-  exposed: unless the database password has been rotated since, rotate it in the Supabase
-  dashboard, because deleting the file does not remove it from history. The scan found no Google,
+  one real exposure was a **hosted Supabase Postgres password** that `b1da36c` (2026-01-10) committed
+  in `apps/ai_agent/utils/tools.py` (removed in `8fe96ce`, but still in history on `main`). That
+  password has since been rotated (confirmed 2026-11-07), so the one in history no longer works;
+  if a secret ever lands in a commit again, rotate it, because deleting the file does not remove
+  it from history. The scan found no Google,
   LangSmith, OpenAI, Stripe, AWS or GitHub keys, and the Supabase JWTs in history are the public
   local demo keys. Secret-scanning alert #1 (a Stripe webhook secret) is a false positive: it is
   Supabase's commented-out example in a compose template. Never put real secrets in a tracked file.

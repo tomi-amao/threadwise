@@ -656,6 +656,9 @@ async def normalize_source(ctx: inngest.Context) -> Dict[str, Any]:
                 ),
             )
 
+        if provider == "paypal":
+            await _apply_paypal_conversion_rates(ctx, source_id)
+
         # Publish final completion status
         await realtime.publish(
             client=inngest_client,
@@ -755,6 +758,37 @@ async def normalize_after_sync(ctx: inngest.Context) -> Dict[str, Any]:
     except Exception as e:
         ctx.logger.error(f"Error in post-sync normalization: {str(e)}")
         raise
+
+
+async def _paypal_conversion_rates_for_source(source_id: str) -> Dict[str, Any]:
+    from ..services.external_sync_service import sync_service
+    from ..services.paypal_cleaning_service import paypal_cleaning_service
+
+    source = await sync_service.get_external_source(str(source_id))
+    entity_id = (source or {}).get("entity_id")
+    if not entity_id:
+        return {"applied": 0, "reason": "source not found"}
+    result: Dict[str, Any] = await paypal_cleaning_service.apply_conversion_rates(
+        UUID(str(entity_id))
+    )
+    return result
+
+
+async def _apply_paypal_conversion_rates(ctx: inngest.Context, source_id: Any) -> None:
+    """Give foreign-currency PayPal rows their GBP amount from PayPal's conversion items,
+    before anything journals them. Best effort: a row left pending is journaled as a
+    draft, never posted at the foreign amount.
+    """
+    try:
+        result = await ctx.step.run(
+            "apply-paypal-conversion-rates",
+            lambda: _paypal_conversion_rates_for_source(str(source_id)),
+        )
+        ctx.logger.info(f"PayPal conversion rates for {source_id}: {result}")
+    except Exception as e:  # Inngest's step interrupts are BaseException, not caught
+        ctx.logger.warning(
+            f"Could not apply PayPal conversion rates for {source_id}: {e}"
+        )
 
 
 async def _request_journals_check(ctx: inngest.Context, source_id: Any) -> None:

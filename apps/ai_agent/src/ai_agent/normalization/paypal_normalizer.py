@@ -6,8 +6,10 @@ and transforms them into canonical financial models.
 Key behaviours:
 - ``reference`` is folded into ``description`` (the DB no longer has a
   ``reference`` column).
-- FX fields (``currency_code``, ``base_currency_code``, ``fx_rate``,
-  ``base_amount``) are populated from PayPal's amount structures.
+- A GBP item gets ``base_amount`` = ``amount``. A foreign-currency item is stored
+  with its GBP amount pending (``fx_rate`` NULL, ``metadata.fx_pending``) until
+  ``PayPalCleaningService.apply_conversion_rates`` fills it in from PayPal's own
+  T0200 conversion items, after the load.
 """
 
 import logging
@@ -247,22 +249,25 @@ class PayPalNormalizer(FinancialNormalizer):
             # Base amount / FX rate
             # -----------------------------------------------------------------
             base_currency = "GBP"
+            fx_pending = False
             if currency == base_currency:
                 fx_rate = None
                 base_amount = amount_value
             else:
-                # PayPal Transaction Search API does not return a converted
-                # GBP amount.  Setting base_amount to the raw foreign-currency
-                # value (the prior behaviour) caused those amounts to be treated
-                # as GBP in cash-flow reports.  Instead, leave both fields NULL
-                # so that a downstream FX enrichment step or manual correction
-                # must fill them in before the transaction can be accurately
-                # reported.
-                base_amount = None
+                # A PayPal item carries no GBP amount: PayPal records the conversion
+                # as separate T0200 items with the same timestamp or invoice. The
+                # GBP amount is filled in from those after the load
+                # (PayPalCleaningService.apply_conversion_rates). Until then the
+                # column (NOT NULL) holds the foreign amount, fx_rate stays NULL and
+                # metadata.fx_pending says the GBP figure is not confirmed: the
+                # journal engine drafts a journal with no confirmed rate rather than
+                # posting it.
+                base_amount = amount_value
                 fx_rate = None
+                fx_pending = True
                 warnings.append(
                     f"Foreign-currency transaction ({currency} {amount_value}): "
-                    f"base_amount and fx_rate left NULL — FX enrichment required"
+                    "GBP amount pending its PayPal conversion"
                 )
 
             # -----------------------------------------------------------------
@@ -272,6 +277,8 @@ class PayPalNormalizer(FinancialNormalizer):
                 "transaction_event_code": event_code,
                 "transaction_status": txn_info.get("transaction_status"),
             }
+            if fx_pending:
+                metadata["fx_pending"] = True
 
             # Invoice reference — critical for invoice matching
             invoice_id = txn_info.get("invoice_id")
@@ -366,10 +373,7 @@ class PayPalNormalizer(FinancialNormalizer):
                 currency_code=currency,
                 base_currency_code=base_currency,
                 fx_rate=fx_rate,
-                # Known gap: None for foreign-currency PayPal rows (see above), but the
-                # model and the NOT NULL column require a value, so those rows fail
-                # validation today. Needs a decision on how to convert them.
-                base_amount=base_amount,  # type: ignore[arg-type]
+                base_amount=base_amount,
                 status=txn_model_status,
                 excluded_reason=txn_excluded_reason,
                 metadata=metadata,

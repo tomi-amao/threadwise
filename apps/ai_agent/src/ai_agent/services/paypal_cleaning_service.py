@@ -672,7 +672,9 @@ class PayPalCleaningService:
         # Calculate fx_rate and base_amount from T0200 pair
         fx_rate, base_amount = self._calc_fx_from_conversions(auth_expense, t0200s)
         if fx_rate and base_amount:
-            await self._update_fx(auth_expense["id"], fx_rate, base_amount)
+            await self._update_fx(
+                auth_expense["id"], fx_rate, base_amount, auth_expense.get("metadata")
+            )
 
         # Handle T0700 passthrough funding (personal funds)
         for txn in t0700s:
@@ -928,6 +930,91 @@ class PayPalCleaningService:
         return fx_rate.quantize(Decimal("0.00000001")), gbp_amount
 
     # =====================================================================
+    # CONVERSION RATES AFTER A LOAD
+    # =====================================================================
+
+    def conversion_rates(
+        self,
+        txns: List[Dict[str, Any]],
+        only_missing: bool = True,
+    ) -> Dict[str, Tuple[Decimal, Decimal]]:
+        """The rate and GBP amount of each foreign-currency PayPal row, from the T0200
+        conversion items PayPal recorded with it. Pure: reads nothing, writes nothing.
+
+        Groups as the cleaning pipeline does (invoice id, else the same second) and uses
+        the same calculation (``_calc_fx_from_conversions``), so cleaning later agrees.
+        A row is given a rate only when it is the group's one foreign-currency item that
+        is not itself a conversion, and a T0200 in its currency carries its exact amount;
+        anything less certain is left pending for a person (its journal is a draft).
+        ``only_missing=False`` also answers rows that already have a rate, to check this
+        against stored figures.
+        """
+        rates: Dict[str, Tuple[Decimal, Decimal]] = {}
+        for group in self._group_transactions(txns).values():
+            t0200s = [t for t in group if _event_code(t) == "T0200"]
+            if not t0200s:
+                continue
+            foreign = [
+                t
+                for t in group
+                if _event_code(t) != "T0200"
+                and not t.get("excluded_reason")
+                and (t.get("currency_code") or "GBP").strip()
+                != (t.get("base_currency_code") or "GBP").strip()
+            ]
+            if len(foreign) != 1:
+                continue
+            txn = foreign[0]
+            if only_missing and txn.get("fx_rate") is not None:
+                continue
+            currency = (txn.get("currency_code") or "").strip()
+            amount = _dec(txn.get("amount"))
+            if not any(
+                (t.get("currency_code") or "").strip() == currency
+                and abs(_dec(t.get("amount")) - amount) <= AMOUNT_TOLERANCE
+                for t in t0200s
+            ):
+                continue
+            fx_rate, base_amount = self._calc_fx_from_conversions(txn, t0200s)
+            if fx_rate and base_amount:
+                rates[txn["id"]] = (fx_rate, base_amount)
+        return rates
+
+    async def apply_conversion_rates(self, entity_id: UUID) -> Dict[str, Any]:
+        """Fill in the GBP amount of foreign-currency PayPal rows that have none, from
+        PayPal's own conversion items. Run after every PayPal load.
+
+        Only rows with no rate and no journal are changed, so nothing already in the
+        ledger moves; it changes nothing else (no exclusions, no descriptions), which
+        stays the cleaning pipeline's job.
+        """
+        txns = await self._fetch_all_paypal_rows(entity_id)
+        rates = self.conversion_rates(txns)
+        journaled = await self._journaled_ids(list(rates))
+        by_id = {t["id"]: t for t in txns}
+        applied = 0
+        for txn_id, (fx_rate, base_amount) in rates.items():
+            if txn_id in journaled:
+                continue
+            await self._update_fx(
+                txn_id, fx_rate, base_amount, by_id[txn_id].get("metadata")
+            )
+            applied += 1
+        pending = sum(
+            1
+            for t in txns
+            if (t.get("metadata") or {}).get("fx_pending")
+            and not t.get("excluded_reason")
+            and t["id"] not in rates
+        )
+        return {
+            "entity_id": str(entity_id),
+            "applied": applied,
+            "skipped_journaled": len(rates) - applied,
+            "still_pending": pending,
+        }
+
+    # =====================================================================
     # ENRICHMENT
     # =====================================================================
 
@@ -992,6 +1079,56 @@ class PayPalCleaningService:
         result = await asyncio.to_thread(_query)
         return extract_rows(result)
 
+    async def _fetch_all_paypal_rows(self, entity_id: UUID) -> List[Dict[str, Any]]:
+        """Every PayPal transaction of the entity, excluded ones included (a T0200 the
+        cleaning pipeline excluded still says what a payment converted to), past the
+        1000-row page limit."""
+
+        def _query() -> List[Dict[str, Any]]:
+            rows: List[Dict[str, Any]] = []
+            page = 1000
+            offset = 0
+            while True:
+                result = (
+                    self.client.table("financial_transactions")
+                    .select(
+                        "id, amount, currency_code, base_currency_code, base_amount, "
+                        "fx_rate, direction, created_at, metadata, excluded_reason"
+                    )
+                    .eq("entity_id", str(entity_id))
+                    .eq("source", "paypal")
+                    .order("id")
+                    .range(offset, offset + page - 1)
+                    .execute()
+                )
+                batch = extract_rows(result)
+                rows.extend(batch)
+                if len(batch) < page:
+                    return rows
+                offset += page
+
+        return await asyncio.to_thread(_query)
+
+    async def _journaled_ids(self, transaction_ids: List[str]) -> Set[str]:
+        """Which of these transactions already have a journal, of any status."""
+        if not transaction_ids:
+            return set()
+
+        def _query() -> Set[str]:
+            found: Set[str] = set()
+            for i in range(0, len(transaction_ids), 200):
+                result = (
+                    self.client.table("journals")
+                    .select("source_id")
+                    .eq("source_type", "financial_transaction")
+                    .in_("source_id", transaction_ids[i : i + 200])
+                    .execute()
+                )
+                found |= {str(r["source_id"]) for r in extract_rows(result)}
+            return found
+
+        return await asyncio.to_thread(_query)
+
     async def _fetch_revolut_transactions(
         self,
         entity_id: UUID,
@@ -1047,18 +1184,23 @@ class PayPalCleaningService:
         transaction_id: str,
         fx_rate: Decimal,
         base_amount: Decimal,
+        metadata: Optional[Dict[str, Any]] = None,
     ) -> None:
-        """Update fx_rate and base_amount on a transaction."""
+        """Update fx_rate and base_amount on a transaction; a confirmed rate also
+        clears ``metadata.fx_pending``."""
+        update: Dict[str, Any] = {
+            "fx_rate": str(fx_rate),
+            "base_amount": str(base_amount),
+        }
+        if metadata and "fx_pending" in metadata:
+            update["metadata"] = {
+                k: v for k, v in metadata.items() if k != "fx_pending"
+            }
 
-        def _update(tid=transaction_id, rate=str(fx_rate), amt=str(base_amount)):
+        def _update(tid=transaction_id, data=update):
             return (
                 self.client.table("financial_transactions")
-                .update(
-                    {
-                        "fx_rate": rate,
-                        "base_amount": amt,
-                    }
-                )
+                .update(data)
                 .eq("id", tid)
                 .execute()
             )
