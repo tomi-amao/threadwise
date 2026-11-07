@@ -1,7 +1,9 @@
 /**
  * AddIntegrationDrawer: connect a new source. Pick the provider, say which account, give it its
  * credentials. Zoho Calendar is different: it signs in through Zoho, so there is nothing to type.
- * Revolut takes a second, optional key: the Merchant key, for the invoices sent from Revolut.
+ * Revolut signs in through Revolut too, after a one-time certificate setup (RevolutSignIn.tsx),
+ * when this server offers it; otherwise it takes a pasted token. Its Merchant key, for the
+ * invoices sent from Revolut, is optional here with a token and added on the card after a sign-in.
  */
 
 import { useState } from 'react';
@@ -20,6 +22,7 @@ import {
 import { cn } from '~/lib/utils';
 import { useAuth } from '~/providers/AuthProvider';
 import { MERCHANT_KEY_HELP, PROVIDERS, type ProviderKey } from './model';
+import { RevolutConnectForm, useRevolutSetup } from './RevolutSignIn';
 
 export function AddIntegrationDrawer({
   open,
@@ -64,6 +67,9 @@ function Form({
   const [merchantKey, setMerchantKey] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const revolutSetup = useRevolutSetup();
+  const revolutSignIn =
+    provider === 'revolut' && revolutSetup?.configured ? revolutSetup.redirect_uri : null;
 
   const config = PROVIDERS[provider];
   const compound = config.credential === 'compound';
@@ -113,7 +119,7 @@ function Form({
   };
 
   return (
-    <form onSubmit={submit} className="space-y-6" noValidate>
+    <div className="space-y-6">
       <div className="rounded-xl border bg-card px-4 py-3">
         <div className="eyebrow">Connecting for</div>
         <div className="mt-1 text-[15px]">{entity?.name || 'No business yet'}</div>
@@ -149,91 +155,102 @@ function Form({
         </div>
       </fieldset>
 
-      {oauth ? (
-        <div className="space-y-3 rounded-xl border bg-background p-4">
-          <p className="text-[14px] text-text-2">
-            Zoho Calendar signs in through Zoho instead of a pasted key. You will be asked to log in
-            and allow access, so use the account whose calendar you want synced.
-          </p>
-          {entity?.id && (
-            <a href={ZOHO_CALENDAR_CONNECT_PATH} className={buttonVariants({})}>
-              <CalendarBlank size={16} aria-hidden /> Connect with Zoho
-            </a>
-          )}
-        </div>
+      {revolutSignIn ? (
+        <RevolutConnectForm redirectUri={revolutSignIn} />
       ) : (
-        <>
-          <Field label={`${config.accountLabel} (required)`}>
-            <Input
-              placeholder={config.accountPlaceholder}
-              value={account}
-              onChange={e => setAccount(e.target.value)}
-              autoComplete="off"
-            />
-          </Field>
-          <Field label="Display name (optional)">
-            <Input
-              placeholder="My store"
-              value={displayName}
-              onChange={e => setDisplayName(e.target.value)}
-            />
-          </Field>
-          {compound ? (
-            <div className="space-y-4">
-              <div className="grid gap-4 sm:grid-cols-2">
-                <Field label="Client ID (required)">
-                  <Input
-                    value={clientId}
-                    onChange={e => setClientId(e.target.value)}
-                    autoComplete="off"
-                  />
-                </Field>
-                <Field
-                  label={provider === 'shopify' ? 'Client secret (required)' : 'Secret (required)'}
-                >
-                  <PasswordInput
-                    value={secret}
-                    onChange={e => setSecret(e.target.value)}
-                    autoComplete="off"
-                  />
-                </Field>
-              </div>
-              <p className="text-[13px] text-text-2">{config.keyHelp}</p>
+        <form onSubmit={submit} className="space-y-6" noValidate>
+          {oauth ? (
+            <div className="space-y-3 rounded-xl border bg-background p-4">
+              <p className="text-[14px] text-text-2">
+                Zoho Calendar signs in through Zoho instead of a pasted key. You will be asked to
+                log in and allow access, so use the account whose calendar you want synced.
+              </p>
+              {entity?.id && (
+                <a href={ZOHO_CALENDAR_CONNECT_PATH} className={buttonVariants({})}>
+                  <CalendarBlank size={16} aria-hidden /> Connect with Zoho
+                </a>
+              )}
             </div>
           ) : (
-            <Field label="API key (required)" hint={config.keyHelp}>
-              <PasswordInput
-                value={apiKey}
-                onChange={e => setApiKey(e.target.value)}
-                autoComplete="off"
-              />
-            </Field>
+            <>
+              <Field label={`${config.accountLabel} (required)`}>
+                <Input
+                  placeholder={config.accountPlaceholder}
+                  value={account}
+                  onChange={e => setAccount(e.target.value)}
+                  autoComplete="off"
+                />
+              </Field>
+              <Field label="Display name (optional)">
+                <Input
+                  placeholder="My store"
+                  value={displayName}
+                  onChange={e => setDisplayName(e.target.value)}
+                />
+              </Field>
+              {compound ? (
+                <div className="space-y-4">
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <Field label="Client ID (required)">
+                      <Input
+                        value={clientId}
+                        onChange={e => setClientId(e.target.value)}
+                        autoComplete="off"
+                      />
+                    </Field>
+                    <Field
+                      label={
+                        provider === 'shopify' ? 'Client secret (required)' : 'Secret (required)'
+                      }
+                    >
+                      <PasswordInput
+                        value={secret}
+                        onChange={e => setSecret(e.target.value)}
+                        autoComplete="off"
+                      />
+                    </Field>
+                  </div>
+                  <p className="text-[13px] text-text-2">{config.keyHelp}</p>
+                </div>
+              ) : (
+                <Field label="API key (required)" hint={config.keyHelp}>
+                  <PasswordInput
+                    value={apiKey}
+                    onChange={e => setApiKey(e.target.value)}
+                    autoComplete="off"
+                  />
+                </Field>
+              )}
+              {provider === 'revolut' && (
+                <Field
+                  label="Merchant secret key, for invoices (optional)"
+                  hint={MERCHANT_KEY_HELP}
+                >
+                  <PasswordInput
+                    value={merchantKey}
+                    onChange={e => setMerchantKey(e.target.value)}
+                    autoComplete="off"
+                  />
+                </Field>
+              )}
+            </>
           )}
-          {provider === 'revolut' && (
-            <Field label="Merchant secret key, for invoices (optional)" hint={MERCHANT_KEY_HELP}>
-              <PasswordInput
-                value={merchantKey}
-                onChange={e => setMerchantKey(e.target.value)}
-                autoComplete="off"
-              />
-            </Field>
-          )}
-        </>
-      )}
 
-      {error && (
-        <p
-          role="alert"
-          className="flex items-start gap-2 rounded-xl border border-destructive/30 bg-destructive/5 px-4 py-3 text-[14px] text-destructive"
-        >
-          <Warning size={16} aria-hidden className="mt-0.5 shrink-0" /> {error}
-        </p>
+          {error && (
+            <p
+              role="alert"
+              className="flex items-start gap-2 rounded-xl border border-destructive/30 bg-destructive/5 px-4 py-3 text-[14px] text-destructive"
+            >
+              <Warning size={16} aria-hidden className="mt-0.5 shrink-0" /> {error}
+            </p>
+          )}
+          {!oauth && (
+            <Button type="submit" disabled={busy || !ready}>
+              {busy ? 'Connecting…' : 'Connect'}
+            </Button>
+          )}
+        </form>
       )}
-      {!oauth && (
-        <Button type="submit" disabled={busy || !ready}>
-          {busy ? 'Connecting…' : 'Connect'}
-        </Button>
-      )}
-    </form>
+    </div>
   );
 }

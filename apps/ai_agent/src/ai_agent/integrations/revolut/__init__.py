@@ -12,6 +12,7 @@ from typing import Any, AsyncIterator, Dict, List, Optional
 import httpx
 
 from ..common import PaginatedResult, RawEventRecord
+from .oauth import access_token_for, parse_credentials, store_rotated_for
 
 logger = logging.getLogger(__name__)
 
@@ -58,19 +59,32 @@ class RevolutAdapter:
         api_key: str,
         page_size: int = 100,
         timeout: float = 30.0,
+        source_id: Optional[str] = None,
     ):
         """Initialize the Revolut adapter.
 
         Args:
-            api_key: Revolut Business API access token
+            api_key: The source's stored key: Revolut sign-in credentials (JSON with a client
+                ID and refresh token, see ``oauth.py``), or a pasted access token
             page_size: Number of items per page for transactions (default: 100)
             timeout: Request timeout in seconds
+            source_id: The source the key belongs to, so a rotated refresh token is stored
         """
         self.api_key = api_key
         self.page_size = page_size
         self.timeout = timeout
-        self._headers = {
-            "Authorization": f"Bearer {api_key}",
+        self._credentials = parse_credentials(api_key)
+        self._on_rotated = store_rotated_for(source_id)
+
+    async def _auth_headers(self) -> Dict[str, str]:
+        """Request headers with a working access token (minted from the sign-in if there is one)."""
+        token = (
+            await access_token_for(self._credentials, self._on_rotated)
+            if self._credentials
+            else self.api_key
+        )
+        return {
+            "Authorization": f"Bearer {token}",
             "Content-Type": "application/json",
             "User-Agent": "ThreadWise/1.0",
         }
@@ -92,10 +106,11 @@ class RevolutAdapter:
         Raises:
             httpx.HTTPStatusError: If request fails
         """
+        headers = await self._auth_headers()
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             response = await client.get(
                 url,
-                headers=self._headers,
+                headers=headers,
                 params=params or {},
             )
             if response.is_error:
@@ -380,8 +395,9 @@ class RevolutAdapter:
     ) -> tuple[bytes, str]:
         """One receipt file: its bytes and content type."""
         url = f"{EXPENSES_URL}/{expense_id}/receipts/{receipt_id}/content"
+        headers = await self._auth_headers()
         async with httpx.AsyncClient(timeout=self.timeout) as client:
-            response = await client.get(url, headers=self._headers)
+            response = await client.get(url, headers=headers)
             response.raise_for_status()
             content_type = response.headers.get(
                 "content-type", "application/octet-stream"

@@ -262,7 +262,16 @@ internal_move_legs`) is stored excluded with `metadata.internal_move`: the norma
   `inventory_items`, `payments`, `bank_accounts`, `financial_transactions`,
   `calendar_events`.
 
-### OAuth providers (Zoho Calendar)
+### OAuth providers (Zoho Calendar, Revolut Business)
+
+Revolut Business also signs in with OAuth (`integrations/revolut/oauth.py`, the `/oauth/revolut/*`
+routes): one app-wide RSA key (`REVOLUT_PRIVATE_KEY`) signs a JWT client assertion, each business
+uploads its certificate in Revolut and gets a client ID, and the refresh token goes into Vault as
+`{"auth": "oauth", "client_id", "refresh_token"}` (`external_sources.auth_method = 'oauth'`).
+Unlike Zoho, Revolut's callback is the **app's** route (`/api/integrations/revolut/callback`),
+which checks the state against a cookie and calls `POST /oauth/revolut/exchange` as the user; the
+agent requires the state's business to be the caller's. `RevolutAdapter`/`check_revolut` accept
+either that JSON or a pasted access token. Details: `docs/data-pipeline.md`.
 
 Every provider above authenticates via a credentials-only grant — Shopify/
 PayPal exchange an app-supplied `client_id`/`client_secret` for a token with

@@ -83,6 +83,17 @@ class Settings(BaseSettings):
     zoho_redirect_uri: str = ""
     zoho_accounts_domain: str = "accounts.zoho.com"
 
+    # Revolut Business sign-in (integrations/revolut/oauth.py). ThreadWise holds one RSA private
+    # key; each business uploads the matching certificate in its own Revolut account, which gives
+    # it a client ID. The key signs the JWT that proves ThreadWise is asking for a token, so it
+    # never leaves this server. PEM text; literal "\n" sequences are accepted, for env files.
+    revolut_private_key: str = ""
+    # Where Revolut sends the browser after consent: the app's callback route. Unset, it is
+    # FRONTEND_URL + /api/integrations/revolut/callback.
+    revolut_redirect_uri: str = ""
+    # Revolut's consent page. Sandbox: https://sandbox-business.revolut.com
+    revolut_consent_url: str = "https://business.revolut.com"
+
     # Where the browser is redirected after an OAuth callback finishes —
     # this backend has no other reason to know the frontend's own origin
     # (CORS is wide open, not origin-specific), but a server-issued redirect

@@ -157,4 +157,9 @@ the record back afterwards.
   (see `docs/secure-api-key-workflow.md` at the repo root).
 - `ZOHO_CLIENT_ID`/`ZOHO_CLIENT_SECRET` are app-wide (ThreadWise is the registered OAuth client);
   each business's Zoho refresh token still goes into Vault per row.
+- `REVOLUT_PRIVATE_KEY` is app-wide: it signs the JWT client assertion on every Revolut token
+  request and is never sent anywhere (Revolut holds only the public certificate each business
+  uploads). Each business's Revolut refresh token goes into Vault per row; access tokens live in
+  memory only. The sign-in asks for the `READ` scope, so it can never move money. See
+  [data-pipeline.md](data-pipeline.md#revolut-business-sign-in-oauth).
 - `apps/chat-ui/.env.local` is tracked in git with live keys. Do not add to it.
