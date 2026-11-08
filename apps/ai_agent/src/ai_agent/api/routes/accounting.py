@@ -551,6 +551,10 @@ class JournalRunSummaryRequest(BaseModel):
         ...,
         description="The run's started_at, from the journals realtime status message",
     )
+    include_narrative: bool = Field(
+        True,
+        description="False re-reads the figures only, without calling the model",
+    )
 
 
 @router.post("/journals/run-summary")
@@ -561,7 +565,11 @@ async def journal_run_summary(request: JournalRunSummaryRequest):
     Read-only.
     """
     try:
-        return await summarize_journal_run(UUID(request.entity_id), request.since)
+        return await summarize_journal_run(
+            UUID(request.entity_id),
+            request.since,
+            include_narrative=request.include_narrative,
+        )
     except Exception as e:
         logger.error(f"Error summarising journal run: {e}")
         raise HTTPException(status_code=500, detail=str(e))

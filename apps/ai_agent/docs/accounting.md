@@ -127,7 +127,8 @@ every status message, and the run is every journal the business created since th
 (counts by type and status, total value, the accounts that moved most, the largest journals) are
 computed in `build_run_stats`. A model writes only a short narrative from those figures, and if it
 fails, `narrative` is `null` and the figures still come back. An empty run never calls the model.
-Read-only.
+Read-only. With `include_narrative: false` it re-reads the figures without calling the model, which
+the tab does after a draft is posted from Review.
 
 ## Invoices
 

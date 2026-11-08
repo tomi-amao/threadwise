@@ -61,7 +61,7 @@ import {
   type DraftAccountSuggestion,
   type JournalRunSummary,
 } from '~/lib/api/accounting';
-import { JournalRunSummaryTab } from './JournalRunSummaryTab';
+import { JournalRunSummaryTab, type HeldRunSummary } from './JournalRunSummaryTab';
 
 // =============================================================================
 // REALTIME PAYLOAD TYPES (mirror channels.py's JournalStepProgressData /
@@ -457,7 +457,7 @@ function DraftJournalRow({
 // REVIEW TAB
 // =============================================================================
 
-function ReviewTab({ entityId }: { entityId: string }) {
+function ReviewTab({ entityId, onDraftPosted }: { entityId: string; onDraftPosted: () => void }) {
   const [loading, setLoading] = useState(false);
   const [review, setReview] = useState<ReviewSummary | null>(null);
   const [accounts, setAccounts] = useState<ChartOfAccountEntry[]>([]);
@@ -505,32 +505,36 @@ function ReviewTab({ entityId }: { entityId: string }) {
     load();
   }, [load]);
 
-  const handlePosted = useCallback((journalId: string) => {
-    setReview(prev => {
-      if (!prev) return prev;
-      const postedJournal = prev.draft_journals.find(j => j.id === journalId);
-      const draft_journals = prev.draft_journals.filter(j => j.id !== journalId);
-      const draft_journals_by_type = { ...prev.draft_journals_by_type };
-      if (postedJournal) {
-        const t = postedJournal.journal_type;
-        if (draft_journals_by_type[t] > 1) {
-          draft_journals_by_type[t] -= 1;
-        } else {
-          delete draft_journals_by_type[t];
+  const handlePosted = useCallback(
+    (journalId: string) => {
+      onDraftPosted();
+      setReview(prev => {
+        if (!prev) return prev;
+        const postedJournal = prev.draft_journals.find(j => j.id === journalId);
+        const draft_journals = prev.draft_journals.filter(j => j.id !== journalId);
+        const draft_journals_by_type = { ...prev.draft_journals_by_type };
+        if (postedJournal) {
+          const t = postedJournal.journal_type;
+          if (draft_journals_by_type[t] > 1) {
+            draft_journals_by_type[t] -= 1;
+          } else {
+            delete draft_journals_by_type[t];
+          }
         }
-      }
-      return {
-        ...prev,
-        draft_journals,
-        draft_journals_by_type,
-        summary: {
-          ...prev.summary,
-          draft_journals_total: prev.summary.draft_journals_total - 1,
-          needs_review: draft_journals.length > 0,
-        },
-      };
-    });
-  }, []);
+        return {
+          ...prev,
+          draft_journals,
+          draft_journals_by_type,
+          summary: {
+            ...prev.summary,
+            draft_journals_total: prev.summary.draft_journals_total - 1,
+            needs_review: draft_journals.length > 0,
+          },
+        };
+      });
+    },
+    [onDraftPosted]
+  );
 
   if (loading && !review) {
     return (
@@ -664,8 +668,10 @@ export function JournalGenerationModal({ isOpen, onClose, entityId }: JournalGen
   const [activeTab, setActiveTab] = useState<ActiveTab>('pipeline');
   const [scope, setScope] = useState<JournalScope>('all');
   // The finished run's summary, held here so switching tabs never asks the model
-  // twice; cleared when a new run starts.
-  const [runSummary, setRunSummary] = useState<JournalRunSummary | null>(null);
+  // twice; cleared when a new run starts. `Stale` means a draft has been posted
+  // since it was read.
+  const [runSummary, setRunSummary] = useState<HeldRunSummary | null>(null);
+  const [runSummaryStale, setRunSummaryStale] = useState(false);
   const hasToastedCompletion = useRef(false);
 
   // Fetch subscription token — same pattern as SyncProgressToast, scoped to
@@ -753,6 +759,28 @@ export function JournalGenerationModal({ isOpen, onClose, entityId }: JournalGen
   const isDone = pipelineState === 'completed' || pipelineState === 'error';
   // The Summary tab exists once a run has finished and said when it started.
   const runStartedAt = isDone ? overallStatus?.started_at : undefined;
+  // Keyed by run, so a slow reply for an earlier run can never show on this one.
+  const heldRunSummary = runSummary?.forRun === runStartedAt ? runSummary : null;
+
+  const handleDraftPosted = useCallback(() => setRunSummaryStale(true), []);
+
+  const handleRunSummaryLoaded = useCallback((fresh: JournalRunSummary, forRun: string) => {
+    setRunSummaryStale(false);
+    setRunSummary(prev => {
+      const held = prev?.forRun === forRun ? prev : null;
+      return {
+        ...fresh,
+        forRun,
+        // A re-read carries figures only, so the text already held is kept. It is
+        // out of date only if this run's drafts changed: Review also lists drafts
+        // from earlier runs, and posting one of those changes nothing here.
+        narrative: held ? held.narrative : fresh.narrative,
+        narrativeOutdated: held
+          ? held.narrativeOutdated || held.stats.draft !== fresh.stats.draft
+          : false,
+      };
+    });
+  }, []);
 
   // Toast once, when the run finishes
   useEffect(() => {
@@ -793,6 +821,7 @@ export function JournalGenerationModal({ isOpen, onClose, entityId }: JournalGen
     setOverallStatus(null);
     setStepProgress(new Map());
     setRunSummary(null);
+    setRunSummaryStale(false);
     hasToastedCompletion.current = false;
 
     try {
@@ -815,6 +844,7 @@ export function JournalGenerationModal({ isOpen, onClose, entityId }: JournalGen
     setActiveTab('pipeline');
     setScope('all');
     setRunSummary(null);
+    setRunSummaryStale(false);
     hasToastedCompletion.current = false;
   }, []);
 
@@ -866,8 +896,14 @@ export function JournalGenerationModal({ isOpen, onClose, entityId }: JournalGen
         </div>
 
         {/* Tabs — always visible */}
-        <div className="flex border-b border-border px-6">
+        <div
+          role="tablist"
+          aria-label="Journal generation"
+          className="flex border-b border-border px-6"
+        >
           <button
+            role="tab"
+            aria-selected={activeTab === 'pipeline'}
             onClick={() => setActiveTab('pipeline')}
             className={cn(
               'flex items-center gap-1.5 px-1 py-3 text-sm font-medium border-b-2 -mb-px transition-colors',
@@ -880,6 +916,8 @@ export function JournalGenerationModal({ isOpen, onClose, entityId }: JournalGen
             Pipeline
           </button>
           <button
+            role="tab"
+            aria-selected={activeTab === 'review'}
             onClick={() => setActiveTab('review')}
             className={cn(
               'flex items-center gap-1.5 px-1 py-3 ml-4 text-sm font-medium border-b-2 -mb-px transition-colors',
@@ -893,6 +931,8 @@ export function JournalGenerationModal({ isOpen, onClose, entityId }: JournalGen
           </button>
           {runStartedAt && (
             <button
+              role="tab"
+              aria-selected={activeTab === 'summary'}
               onClick={() => setActiveTab('summary')}
               className={cn(
                 'flex items-center gap-1.5 px-1 py-3 ml-4 text-sm font-medium border-b-2 -mb-px transition-colors',
@@ -913,12 +953,13 @@ export function JournalGenerationModal({ isOpen, onClose, entityId }: JournalGen
             <JournalRunSummaryTab
               entityId={entityId}
               since={runStartedAt}
-              summary={runSummary}
-              onLoaded={setRunSummary}
+              summary={heldRunSummary}
+              stale={runSummaryStale}
+              onLoaded={handleRunSummaryLoaded}
               onReview={() => setActiveTab('review')}
             />
           ) : activeTab === 'review' ? (
-            <ReviewTab entityId={entityId} />
+            <ReviewTab entityId={entityId} onDraftPosted={handleDraftPosted} />
           ) : (
             <>
               {/* Info banner (idle state) */}

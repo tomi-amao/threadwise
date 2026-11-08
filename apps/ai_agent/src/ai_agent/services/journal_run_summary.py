@@ -206,8 +206,14 @@ async def summarize_journal_run(
     entity_id: UUID,
     since: datetime,
     service: JournalService = journal_service,
+    include_narrative: bool = True,
 ) -> Dict[str, Any]:
-    """Stats for the journals created since ``since``, plus a model's narrative."""
+    """Stats for the journals created since ``since``, plus a model's narrative.
+
+    ``include_narrative=False`` re-reads the figures without calling the model: the
+    tab does that after a draft is posted from Review, so the numbers stay true
+    without paying for (or changing) the text.
+    """
     journals, accounts = await asyncio.gather(
         _fetch_run_journals(service, entity_id, since),
         service.get_chart_of_accounts(),
@@ -216,7 +222,9 @@ async def summarize_journal_run(
         journals, accounts, truncated=len(journals) >= MAX_RUN_JOURNALS
     )
     # Nothing was recorded: there is nothing for a model to say.
-    narrative = await _write_narrative(stats) if journals else None
+    narrative = (
+        await _write_narrative(stats) if journals and include_narrative else None
+    )
     return {
         "entity_id": str(entity_id),
         "since": since.isoformat(),

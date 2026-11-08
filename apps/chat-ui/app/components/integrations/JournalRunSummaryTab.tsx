@@ -6,22 +6,32 @@
  *
  * The result is held by the modal (`summary` / `onLoaded`), so switching tabs
  * does not ask the model again; it is fetched once per run, the first time the
- * tab is opened.
+ * tab is opened. After a draft is posted from Review the modal marks it `stale`
+ * and the figures are read again, without the model: posting a draft changes the
+ * counts and the accounts, but the narrative was written before it.
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router';
 import { ArrowRight, CheckCircle, ClipboardText, Sparkle, WarningCircle } from 'phosphor-react';
 import { cn } from '~/lib/utils';
 import { fetchJournalRunSummary, type JournalRunSummary } from '~/lib/api/accounting';
 import { int, money, shortDate, typeLabel } from '~/components/journals/model';
 
+/** A summary as the modal holds it: which run it is for, and whether its text still fits. */
+export interface HeldRunSummary extends JournalRunSummary {
+  forRun: string;
+  narrativeOutdated: boolean;
+}
+
 interface JournalRunSummaryTabProps {
   entityId: string;
   /** The run's `started_at`, from the realtime status message. */
   since: string;
-  summary: JournalRunSummary | null;
-  onLoaded: (summary: JournalRunSummary) => void;
+  summary: HeldRunSummary | null;
+  /** A draft was posted since `summary` was read, so its figures need reading again. */
+  stale: boolean;
+  onLoaded: (summary: JournalRunSummary, forRun: string) => void;
   onReview: () => void;
 }
 
@@ -40,25 +50,36 @@ export function JournalRunSummaryTab({
   entityId,
   since,
   summary,
+  stale,
   onLoaded,
   onReview,
 }: JournalRunSummaryTabProps) {
   const [error, setError] = useState<string | null>(null);
+  const hasSummary = summary !== null;
+  // React's development double-mount must not ask the model twice.
+  const loading = useRef(false);
 
   const load = useCallback(async () => {
+    if (loading.current) return;
+    loading.current = true;
     setError(null);
     try {
-      onLoaded(await fetchJournalRunSummary(entityId, since));
+      const fresh = await fetchJournalRunSummary(entityId, since, {
+        includeNarrative: !hasSummary,
+      });
+      onLoaded(fresh, since);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Unknown error');
+    } finally {
+      loading.current = false;
     }
-  }, [entityId, since, onLoaded]);
+  }, [entityId, since, hasSummary, onLoaded]);
 
-  // Only when this run has no summary yet: once loaded, the modal holds it. An
-  // error leaves `summary` null without changing the deps, so it waits for Retry.
+  // Only when there is nothing to show yet, or a draft was posted since. An error
+  // changes none of the deps, so it waits for Retry.
   useEffect(() => {
-    if (!summary) load();
-  }, [summary, load]);
+    if (!hasSummary || stale) load();
+  }, [hasSummary, stale, load]);
 
   if (error) {
     return (
@@ -117,7 +138,7 @@ export function JournalRunSummaryTab({
             <div className="min-w-0 space-y-2">
               <p className="text-sm font-medium text-foreground">{narrative.headline}</p>
               {narrative.highlights.length > 0 && (
-                <ul className="list-disc pl-4 space-y-1 text-sm text-muted-foreground">
+                <ul className="list-disc pl-4 space-y-1 text-sm text-foreground">
                   {narrative.highlights.map((h, i) => (
                     <li key={i}>{h}</li>
                   ))}
@@ -133,8 +154,10 @@ export function JournalRunSummaryTab({
                   ))}
                 </div>
               )}
-              <p className="text-xs text-muted-foreground/80">
-                Written by AI from the figures below. Check them before relying on it.
+              <p className="text-xs text-foreground">
+                {summary.narrativeOutdated
+                  ? 'Written before you posted drafts from Review, so it may mention drafts that are now posted. The figures below are up to date.'
+                  : 'Written by AI from the figures below. Check them before relying on it.'}
               </p>
             </div>
           </div>

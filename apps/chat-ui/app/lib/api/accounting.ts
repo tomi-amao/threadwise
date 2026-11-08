@@ -205,17 +205,22 @@ export interface JournalRunSummary {
 /**
  * Summarise the journals one generation run created (every journal created at or
  * after `since`, the run's `started_at` from the realtime status message).
- * Read-only.
+ * Read-only. `includeNarrative: false` re-reads the figures without calling the model.
  */
 export async function fetchJournalRunSummary(
   entityId: string,
-  since: string
+  since: string,
+  { includeNarrative = true }: { includeNarrative?: boolean } = {}
 ): Promise<JournalRunSummary> {
   const baseUrl = getApiBaseUrl();
   const response = await agentFetch(`${baseUrl}/accounting/journals/run-summary`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ entity_id: entityId, since }),
+    body: JSON.stringify({
+      entity_id: entityId,
+      since,
+      ...(!includeNarrative && { include_narrative: false }),
+    }),
   });
 
   if (!response.ok) {
