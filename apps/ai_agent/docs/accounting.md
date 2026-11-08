@@ -121,6 +121,14 @@ background with step-level retries and realtime progress:
 (`scope` = `payments`, `transactions` or all), for tests, scripts and when Inngest is not running.
 `GET /accounting/journals/review-summary` lists what needs a person afterwards.
 
+`POST /accounting/journals/run-summary` (`services/journal_run_summary.py`) feeds the modal's
+Summary tab. The job stamps `started_at` once (a memoised step, so replays send the same value) on
+every status message, and the run is every journal the business created since then. The figures
+(counts by type and status, total value, the accounts that moved most, the largest journals) are
+computed in `build_run_stats`. A model writes only a short narrative from those figures, and if it
+fails, `narrative` is `null` and the figures still come back. An empty run never calls the model.
+Read-only.
+
 ## Invoices
 
 Invoices are documents, not ledger entries. The money an invoice describes reaches the books

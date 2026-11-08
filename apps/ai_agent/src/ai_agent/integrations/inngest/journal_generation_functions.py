@@ -74,6 +74,10 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+async def _started_at() -> str:
+    return _now_iso()
+
+
 def _processed_count(result: Dict[str, Any]) -> int | None:
     for key in _PROCESSED_COUNT_KEYS:
         if key in result:
@@ -112,6 +116,10 @@ async def generate_all_journals_job(ctx: inngest.Context) -> Dict[str, Any]:
     total_created = 0
     total_skipped = 0
 
+    # Memoised, so replays of this function send the same start time; the
+    # modal's Summary tab asks for the journals created since then.
+    started_at: str = await ctx.step.run("started-at", _started_at)
+
     await realtime.publish(
         client=inngest_client,
         channel=channel,
@@ -126,6 +134,7 @@ async def generate_all_journals_job(ctx: inngest.Context) -> Dict[str, Any]:
             total_errors=0,
             error=None,
             timestamp=_now_iso(),
+            started_at=started_at,
         ),
     )
 
@@ -242,6 +251,7 @@ async def generate_all_journals_job(ctx: inngest.Context) -> Dict[str, Any]:
                 total_errors=len(overall_errors),
                 error=None,
                 timestamp=_now_iso(),
+                started_at=started_at,
             ),
         )
 
@@ -262,6 +272,7 @@ async def generate_all_journals_job(ctx: inngest.Context) -> Dict[str, Any]:
             total_errors=len(overall_errors),
             error=None,
             timestamp=_now_iso(),
+            started_at=started_at,
         ),
     )
 
