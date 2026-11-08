@@ -1,0 +1,321 @@
+{
+  "_about": "Shared by e2e/journal-summary.spec.ts and the backend's tests/test_journal_run_contract.py, which checks every stats block equals build_run_stats on these journals. Regenerate the stats rather than editing them by hand.",
+  "since": "2026-11-08T09:30:00+00:00",
+  "secondRunSince": "2026-11-08T10:45:00+00:00",
+  "status": {
+    "status": "completed",
+    "scope": "all",
+    "steps_completed": 4,
+    "steps_total": 4,
+    "total_created": 4,
+    "total_skipped": 0,
+    "total_errors": 0,
+    "error": null,
+    "timestamp": "2026-11-08T09:31:00+00:00",
+    "started_at": "2026-11-08T09:30:00+00:00"
+  },
+  "accounts": [
+    {
+      "id": "a-cash",
+      "account_number": "1000",
+      "name": "Cash",
+      "account_type": "asset",
+      "is_header": false
+    },
+    {
+      "id": "a-sales",
+      "account_number": "4000",
+      "name": "Sales",
+      "account_type": "revenue",
+      "is_header": false
+    },
+    {
+      "id": "a-software",
+      "account_number": "6100",
+      "name": "Software",
+      "account_type": "expense",
+      "is_header": false
+    },
+    {
+      "id": "a-uncat",
+      "account_number": "8090",
+      "name": "Miscellaneous Expense",
+      "account_type": "expense",
+      "is_header": false
+    }
+  ],
+  "journals": [
+    {
+      "id": "j1",
+      "journal_type": "accrual",
+      "status": "posted",
+      "journal_date": "2026-10-01T00:00:00+00:00",
+      "description": "Contract accrual j1",
+      "line_items": [
+        {
+          "account_id": "a-cash",
+          "debit": 120.0,
+          "credit": 0,
+          "description": "debit line"
+        },
+        {
+          "account_id": "a-sales",
+          "debit": 0,
+          "credit": 120.0,
+          "description": "credit line"
+        }
+      ]
+    },
+    {
+      "id": "j2",
+      "journal_type": "accrual",
+      "status": "posted",
+      "journal_date": "2026-10-03T00:00:00+00:00",
+      "description": "Contract accrual j2",
+      "line_items": [
+        {
+          "account_id": "a-cash",
+          "debit": 80.5,
+          "credit": 0,
+          "description": "debit line"
+        },
+        {
+          "account_id": "a-sales",
+          "debit": 0,
+          "credit": 80.5,
+          "description": "credit line"
+        }
+      ]
+    },
+    {
+      "id": "j3",
+      "journal_type": "expense",
+      "status": "posted",
+      "journal_date": "2026-10-02T00:00:00+00:00",
+      "description": "Contract expense j3",
+      "line_items": [
+        {
+          "account_id": "a-software",
+          "debit": 30.0,
+          "credit": 0,
+          "description": "debit line"
+        },
+        {
+          "account_id": "a-cash",
+          "debit": 0,
+          "credit": 30.0,
+          "description": "credit line"
+        }
+      ]
+    },
+    {
+      "id": "j4",
+      "journal_type": "expense",
+      "status": "draft",
+      "journal_date": "2026-09-28T00:00:00+00:00",
+      "description": "Contract expense j4",
+      "line_items": [
+        {
+          "account_id": "a-uncat",
+          "debit": 999.99,
+          "credit": 0,
+          "description": "debit line"
+        },
+        {
+          "account_id": "a-cash",
+          "debit": 0,
+          "credit": 999.99,
+          "description": "credit line"
+        }
+      ]
+    }
+  ],
+  "postedDraft": {
+    "journalId": "j4",
+    "accountId": "a-software"
+  },
+  "narrative": {
+    "headline": "This run recorded four journals worth £1,230.49.",
+    "highlights": ["Two sales were accrued for £200.50.", "Two expenses came to £1,029.99."],
+    "attention": ["One £999.99 journal is a draft waiting for an account."]
+  },
+  "secondNarrative": {
+    "headline": "The second run recorded four journals.",
+    "highlights": ["Nothing unusual."],
+    "attention": []
+  },
+  "stats": {
+    "journals_total": 4,
+    "posted": 3,
+    "draft": 1,
+    "reversed": 0,
+    "total_amount": 1230.49,
+    "currency": "GBP",
+    "first_date": "2026-09-28T00:00:00+00:00",
+    "last_date": "2026-10-03T00:00:00+00:00",
+    "by_type": [
+      {
+        "journal_type": "expense",
+        "count": 2,
+        "amount": 1029.99
+      },
+      {
+        "journal_type": "accrual",
+        "count": 2,
+        "amount": 200.5
+      }
+    ],
+    "top_accounts": [
+      {
+        "account_number": "1000",
+        "name": "Cash",
+        "debit": 200.5,
+        "credit": 1029.99
+      },
+      {
+        "account_number": "8090",
+        "name": "Miscellaneous Expense",
+        "debit": 999.99,
+        "credit": 0.0
+      },
+      {
+        "account_number": "4000",
+        "name": "Sales",
+        "debit": 0.0,
+        "credit": 200.5
+      },
+      {
+        "account_number": "6100",
+        "name": "Software",
+        "debit": 30.0,
+        "credit": 0.0
+      }
+    ],
+    "largest_journals": [
+      {
+        "id": "j4",
+        "description": "Contract expense j4",
+        "journal_type": "expense",
+        "journal_date": "2026-09-28T00:00:00+00:00",
+        "status": "draft",
+        "amount": 999.99
+      },
+      {
+        "id": "j1",
+        "description": "Contract accrual j1",
+        "journal_type": "accrual",
+        "journal_date": "2026-10-01T00:00:00+00:00",
+        "status": "posted",
+        "amount": 120.0
+      },
+      {
+        "id": "j2",
+        "description": "Contract accrual j2",
+        "journal_type": "accrual",
+        "journal_date": "2026-10-03T00:00:00+00:00",
+        "status": "posted",
+        "amount": 80.5
+      },
+      {
+        "id": "j3",
+        "description": "Contract expense j3",
+        "journal_type": "expense",
+        "journal_date": "2026-10-02T00:00:00+00:00",
+        "status": "posted",
+        "amount": 30.0
+      }
+    ],
+    "truncated": false
+  },
+  "statsAfterPostingDraft": {
+    "journals_total": 4,
+    "posted": 4,
+    "draft": 0,
+    "reversed": 0,
+    "total_amount": 1230.49,
+    "currency": "GBP",
+    "first_date": "2026-09-28T00:00:00+00:00",
+    "last_date": "2026-10-03T00:00:00+00:00",
+    "by_type": [
+      {
+        "journal_type": "expense",
+        "count": 2,
+        "amount": 1029.99
+      },
+      {
+        "journal_type": "accrual",
+        "count": 2,
+        "amount": 200.5
+      }
+    ],
+    "top_accounts": [
+      {
+        "account_number": "1000",
+        "name": "Cash",
+        "debit": 200.5,
+        "credit": 1029.99
+      },
+      {
+        "account_number": "6100",
+        "name": "Software",
+        "debit": 1029.99,
+        "credit": 0.0
+      },
+      {
+        "account_number": "4000",
+        "name": "Sales",
+        "debit": 0.0,
+        "credit": 200.5
+      }
+    ],
+    "largest_journals": [
+      {
+        "id": "j4",
+        "description": "Contract expense j4",
+        "journal_type": "expense",
+        "journal_date": "2026-09-28T00:00:00+00:00",
+        "status": "posted",
+        "amount": 999.99
+      },
+      {
+        "id": "j1",
+        "description": "Contract accrual j1",
+        "journal_type": "accrual",
+        "journal_date": "2026-10-01T00:00:00+00:00",
+        "status": "posted",
+        "amount": 120.0
+      },
+      {
+        "id": "j2",
+        "description": "Contract accrual j2",
+        "journal_type": "accrual",
+        "journal_date": "2026-10-03T00:00:00+00:00",
+        "status": "posted",
+        "amount": 80.5
+      },
+      {
+        "id": "j3",
+        "description": "Contract expense j3",
+        "journal_type": "expense",
+        "journal_date": "2026-10-02T00:00:00+00:00",
+        "status": "posted",
+        "amount": 30.0
+      }
+    ],
+    "truncated": false
+  },
+  "statsOfEmptyRun": {
+    "journals_total": 0,
+    "posted": 0,
+    "draft": 0,
+    "reversed": 0,
+    "total_amount": 0.0,
+    "currency": "GBP",
+    "first_date": null,
+    "last_date": null,
+    "by_type": [],
+    "top_accounts": [],
+    "largest_journals": [],
+    "truncated": false
+  }
+}

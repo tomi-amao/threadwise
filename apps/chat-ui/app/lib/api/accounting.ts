@@ -160,6 +160,77 @@ export async function suggestDraftAccounts(
   return data.suggestions ?? {};
 }
 
+/** Figures computed by the agent from the run's journals — never by a model. */
+export interface JournalRunStats {
+  journals_total: number;
+  posted: number;
+  draft: number;
+  reversed: number;
+  total_amount: number;
+  currency: string;
+  first_date: string | null;
+  last_date: string | null;
+  by_type: Array<{ journal_type: string; count: number; amount: number }>;
+  top_accounts: Array<{
+    account_number: string | null;
+    name: string;
+    debit: number;
+    credit: number;
+  }>;
+  largest_journals: Array<{
+    id: string;
+    description: string | null;
+    journal_type: string;
+    journal_date: string | null;
+    status: string;
+    amount: number;
+  }>;
+  truncated: boolean;
+}
+
+/** Written by a model from the stats above; null when the model call failed. */
+export interface JournalRunNarrative {
+  headline: string;
+  highlights: string[];
+  attention: string[];
+}
+
+export interface JournalRunSummary {
+  entity_id: string;
+  since: string;
+  stats: JournalRunStats;
+  narrative: JournalRunNarrative | null;
+}
+
+/**
+ * Summarise the journals one generation run created (every journal created at or
+ * after `since`, the run's `started_at` from the realtime status message).
+ * Read-only. `includeNarrative: false` re-reads the figures without calling the model.
+ */
+export async function fetchJournalRunSummary(
+  entityId: string,
+  since: string,
+  { includeNarrative = true }: { includeNarrative?: boolean } = {}
+): Promise<JournalRunSummary> {
+  const baseUrl = getApiBaseUrl();
+  const response = await agentFetch(`${baseUrl}/accounting/journals/run-summary`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      entity_id: entityId,
+      since,
+      ...(!includeNarrative && { include_narrative: false }),
+    }),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Failed to summarise the journal run: ${errorText}`);
+  }
+
+  return response.json();
+}
+
 export type JournalScope = 'payments' | 'transactions' | 'all';
 
 export interface TriggerGenerateAllResponse {

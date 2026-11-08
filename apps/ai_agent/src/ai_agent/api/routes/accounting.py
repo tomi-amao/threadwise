@@ -12,6 +12,7 @@ Provides endpoints for:
 
 import asyncio
 import logging
+from datetime import datetime
 from typing import Any, Dict, List, Literal, Optional, cast
 from uuid import UUID
 
@@ -22,6 +23,7 @@ from ...normalization.utils import extract_rows
 from ...services import invoice_matching, invoice_split
 from ...services.invoice_rules import VALID_STATUSES, InvoiceRuleError
 from ...services.invoice_service import DuplicateInvoiceError, invoice_service
+from ...services.journal_run_summary import summarize_journal_run
 from ...services.journal_service import JournalError, journal_service
 from ...services.paypal_cleaning_service import paypal_cleaning_service
 from ...services.reconciliation_service import reconciliation_service
@@ -540,6 +542,36 @@ async def suggest_draft_accounts(request: SuggestDraftAccountsRequest):
         return {"suggestions": suggestions}
     except Exception as e:
         logger.error(f"Error suggesting draft accounts: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class JournalRunSummaryRequest(BaseModel):
+    entity_id: str
+    since: datetime = Field(
+        ...,
+        description="The run's started_at, from the journals realtime status message",
+    )
+    include_narrative: bool = Field(
+        True,
+        description="False re-reads the figures only, without calling the model",
+    )
+
+
+@router.post("/journals/run-summary")
+async def journal_run_summary(request: JournalRunSummaryRequest):
+    """Summarise the journals one generation run created, for the modal's
+    Summary tab: figures computed from the journals, plus a short narrative a
+    model writes from those figures only (``narrative`` is null if it fails).
+    Read-only.
+    """
+    try:
+        return await summarize_journal_run(
+            UUID(request.entity_id),
+            request.since,
+            include_narrative=request.include_narrative,
+        )
+    except Exception as e:
+        logger.error(f"Error summarising journal run: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

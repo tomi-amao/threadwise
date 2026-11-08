@@ -109,6 +109,7 @@ jobs:
           poetry run pytest -v --tb=short
           tests/test_scoped_sql.py tests/test_chat_agent.py
           tests/test_actions.py tests/test_evals.py tests/test_ui_contract.py
+          tests/test_journal_run_contract.py
 
       - name: Golden-set evals (oracle)
         working-directory: apps/ai_agent
