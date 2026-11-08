@@ -59,7 +59,9 @@ import {
   type JournalScope,
   type ChartOfAccountEntry,
   type DraftAccountSuggestion,
+  type JournalRunSummary,
 } from '~/lib/api/accounting';
+import { JournalRunSummaryTab } from './JournalRunSummaryTab';
 
 // =============================================================================
 // REALTIME PAYLOAD TYPES (mirror channels.py's JournalStepProgressData /
@@ -104,6 +106,8 @@ interface JournalPipelineStatusData {
   total_errors: number;
   error: string | null;
   timestamp: string;
+  /** When the run began; the same on every message of one run. */
+  started_at: string;
 }
 
 // Status priority for preventing regressions from Inngest step replays
@@ -127,7 +131,7 @@ interface JournalGenerationModalProps {
 }
 
 type PipelineState = 'idle' | 'running' | 'completed' | 'error';
-type ActiveTab = 'pipeline' | 'review';
+type ActiveTab = 'pipeline' | 'review' | 'summary';
 
 // =============================================================================
 // STEP CONFIGURATION
@@ -659,6 +663,9 @@ export function JournalGenerationModal({ isOpen, onClose, entityId }: JournalGen
   const [expandedErrors, setExpandedErrors] = useState<Set<string>>(new Set());
   const [activeTab, setActiveTab] = useState<ActiveTab>('pipeline');
   const [scope, setScope] = useState<JournalScope>('all');
+  // The finished run's summary, held here so switching tabs never asks the model
+  // twice; cleared when a new run starts.
+  const [runSummary, setRunSummary] = useState<JournalRunSummary | null>(null);
   const hasToastedCompletion = useRef(false);
 
   // Fetch subscription token — same pattern as SyncProgressToast, scoped to
@@ -744,6 +751,8 @@ export function JournalGenerationModal({ isOpen, onClose, entityId }: JournalGen
 
   const isRunning = pipelineState === 'running';
   const isDone = pipelineState === 'completed' || pipelineState === 'error';
+  // The Summary tab exists once a run has finished and said when it started.
+  const runStartedAt = isDone ? overallStatus?.started_at : undefined;
 
   // Toast once, when the run finishes
   useEffect(() => {
@@ -783,6 +792,7 @@ export function JournalGenerationModal({ isOpen, onClose, entityId }: JournalGen
     setTriggerError(null);
     setOverallStatus(null);
     setStepProgress(new Map());
+    setRunSummary(null);
     hasToastedCompletion.current = false;
 
     try {
@@ -804,6 +814,7 @@ export function JournalGenerationModal({ isOpen, onClose, entityId }: JournalGen
     setExpandedErrors(new Set());
     setActiveTab('pipeline');
     setScope('all');
+    setRunSummary(null);
     hasToastedCompletion.current = false;
   }, []);
 
@@ -880,11 +891,33 @@ export function JournalGenerationModal({ isOpen, onClose, entityId }: JournalGen
             <Eye size={15} weight={activeTab === 'review' ? 'fill' : 'regular'} />
             Review
           </button>
+          {runStartedAt && (
+            <button
+              onClick={() => setActiveTab('summary')}
+              className={cn(
+                'flex items-center gap-1.5 px-1 py-3 ml-4 text-sm font-medium border-b-2 -mb-px transition-colors',
+                activeTab === 'summary'
+                  ? 'border-ring/40 text-accent-text'
+                  : 'border-transparent text-muted-foreground hover:text-muted-foreground'
+              )}
+            >
+              <Sparkle size={15} weight={activeTab === 'summary' ? 'fill' : 'regular'} />
+              Summary
+            </button>
+          )}
         </div>
 
         {/* Body */}
         <div className="p-6 space-y-3">
-          {activeTab === 'review' ? (
+          {activeTab === 'summary' && runStartedAt ? (
+            <JournalRunSummaryTab
+              entityId={entityId}
+              since={runStartedAt}
+              summary={runSummary}
+              onLoaded={setRunSummary}
+              onReview={() => setActiveTab('review')}
+            />
+          ) : activeTab === 'review' ? (
             <ReviewTab entityId={entityId} />
           ) : (
             <>
@@ -986,15 +1019,26 @@ export function JournalGenerationModal({ isOpen, onClose, entityId }: JournalGen
                         )}
                       </div>
                     </div>
-                    {/* Review prompt */}
-                    <button
-                      onClick={() => setActiveTab('review')}
-                      className="flex items-center gap-1 text-xs text-accent-text hover:text-accent-text transition-colors"
-                    >
-                      <Eye size={13} />
-                      Review items
-                      <ArrowRight size={12} />
-                    </button>
+                    <div className="flex items-center gap-3 shrink-0">
+                      {runStartedAt && (
+                        <button
+                          onClick={() => setActiveTab('summary')}
+                          className="flex items-center gap-1 text-xs text-accent-text hover:underline transition-colors"
+                        >
+                          <Sparkle size={13} />
+                          Summary
+                        </button>
+                      )}
+                      {/* Review prompt */}
+                      <button
+                        onClick={() => setActiveTab('review')}
+                        className="flex items-center gap-1 text-xs text-accent-text hover:text-accent-text transition-colors"
+                      >
+                        <Eye size={13} />
+                        Review items
+                        <ArrowRight size={12} />
+                      </button>
+                    </div>
                   </div>
                 </div>
               )}
