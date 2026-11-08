@@ -70,7 +70,7 @@ test.describe('journal run summary', () => {
 
     await expect(page.getByText(contract.narrative.headline)).toBeVisible();
     expect(agent.summaryRequests).toHaveLength(1);
-    expect(agent.summaryRequests[0].since).toBe(contract.since);
+    expect(agent.summaryRequests[0].run_id).toBe(contract.runId);
     expect(agent.summaryRequests[0].include_narrative).toBeUndefined();
 
     for (const line of [...contract.narrative.highlights, ...contract.narrative.attention])
@@ -115,14 +115,14 @@ test.describe('journal run summary', () => {
     await expect(tab(page, 'Summary')).toBeHidden();
     agent.answerSummaryWith(replies.secondRun);
     await startRun(page);
-    await agent.completed(contract.secondRunSince);
+    await agent.completed(contract.secondRunId);
     await tab(page, 'Summary').click();
 
     await expect(page.getByText(contract.secondNarrative.headline)).toBeVisible();
     await expect(page.getByText(contract.narrative.headline)).toBeHidden();
-    expect(agent.summaryRequests.map(r => r.since)).toEqual([
-      contract.since,
-      contract.secondRunSince,
+    expect(agent.summaryRequests.map(r => r.run_id)).toEqual([
+      contract.runId,
+      contract.secondRunId,
     ]);
   });
 

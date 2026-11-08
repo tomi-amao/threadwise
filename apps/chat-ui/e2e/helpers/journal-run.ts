@@ -26,14 +26,14 @@ const DEAD_REALTIME = 'http://127.0.0.1:8097';
 
 export interface SummaryRequest {
   entity_id: string;
-  since: string;
+  run_id: string;
   include_narrative?: boolean;
 }
 
 type SummaryReply = { status?: number; body: unknown };
 
 const reply = (stats: unknown, narrative: unknown): SummaryReply => ({
-  body: { entity_id: 'entity', since: contract.since, stats, narrative },
+  body: { entity_id: 'entity', run_id: contract.runId, stats, narrative },
 });
 
 export const replies = {
@@ -87,7 +87,13 @@ export async function fakeJournalAgent(page: Page) {
         });
       }
       if (path === '/accounting/journals/generate-all')
-        return json({ entity_id: 'entity', scope: 'all', status: 'triggered', message: 'ok' });
+        return json({
+          entity_id: 'entity',
+          run_id: contract.runId,
+          scope: 'all',
+          status: 'triggered',
+          message: 'ok',
+        });
       if (path === '/accounting/journals/run-summary') {
         summaryRequests.push(request.postDataJSON());
         return json(summaryReply.body, summaryReply.status ?? 200);
@@ -135,12 +141,11 @@ export async function fakeJournalAgent(page: Page) {
     },
     /** The modal's realtime connection is up, so what is published next reaches it. */
     connected: () => expect.poll(() => socket !== undefined && channel !== '').toBe(true),
-    running: (startedAt: string = contract.since) =>
-      status({ status: 'running', steps_completed: 1, started_at: startedAt }),
-    completed: (startedAt: string = contract.since) =>
-      status({ status: 'completed', started_at: startedAt }),
+    running: (runId: string = contract.runId) =>
+      status({ status: 'running', steps_completed: 1, run_id: runId }),
+    completed: (runId: string = contract.runId) => status({ status: 'completed', run_id: runId }),
     /** Inngest replays a function from the top, re-publishing what it already sent. */
-    replayedRunning: (startedAt: string = contract.since) =>
-      status({ status: 'running', steps_completed: 0, started_at: startedAt }),
+    replayedRunning: (runId: string = contract.runId) =>
+      status({ status: 'running', steps_completed: 0, run_id: runId }),
   };
 }

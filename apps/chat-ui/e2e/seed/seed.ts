@@ -2103,7 +2103,17 @@ async function main() {
   };
 
   // 7. Manifest: what the tests may assert on.
+  // One finished run each, so the row-level security test has something to tell apart.
+  await must(
+    'journal generation runs',
+    supabase
+      .from('journal_generation_runs')
+      .insert([entityId, rid].map(entity_id => ({ entity_id, status: 'completed' })))
+      .select()
+  );
+
   const manifest = {
+    generationRunCount: 1,
     entityName: ENTITY_NAME,
     email,
     orderCount: ORDER_COUNT,
