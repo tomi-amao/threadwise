@@ -145,9 +145,8 @@ class JournalPipelineStatusData(TypedDict):
     total_errors: int
     error: str | None
     timestamp: str
-    # When the run began, stamped once (a memoised step) so every replay sends the
-    # same value. The Summary tab asks for the journals created since then.
-    started_at: str
+    # The run's row in journal_generation_runs; the Summary tab asks about this run.
+    run_id: str
 
 
 def get_journal_channel(entity_id: str) -> str:

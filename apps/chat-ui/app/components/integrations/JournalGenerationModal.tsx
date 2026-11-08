@@ -106,8 +106,8 @@ interface JournalPipelineStatusData {
   total_errors: number;
   error: string | null;
   timestamp: string;
-  /** When the run began; the same on every message of one run. */
-  started_at: string;
+  /** The run this message is about. */
+  run_id: string;
 }
 
 // Status priority for preventing regressions from Inngest step replays
@@ -757,10 +757,10 @@ export function JournalGenerationModal({ isOpen, onClose, entityId }: JournalGen
 
   const isRunning = pipelineState === 'running';
   const isDone = pipelineState === 'completed' || pipelineState === 'error';
-  // The Summary tab exists once a run has finished and said when it started.
-  const runStartedAt = isDone ? overallStatus?.started_at : undefined;
+  // The Summary tab exists once a run has finished and said which run it was.
+  const runId = isDone ? overallStatus?.run_id : undefined;
   // Keyed by run, so a slow reply for an earlier run can never show on this one.
-  const heldRunSummary = runSummary?.forRun === runStartedAt ? runSummary : null;
+  const heldRunSummary = runSummary?.forRun === runId ? runSummary : null;
 
   const handleDraftPosted = useCallback(() => setRunSummaryStale(true), []);
 
@@ -825,9 +825,13 @@ export function JournalGenerationModal({ isOpen, onClose, entityId }: JournalGen
     hasToastedCompletion.current = false;
 
     try {
-      await generateAllJournals(entityId, scope);
+      const started = await generateAllJournals(entityId, scope);
       setHasTriggered(true);
-      toast.info('Journal generation started…');
+      toast.info(
+        started.status === 'already_running'
+          ? 'A run is already going, so this shows its progress'
+          : 'Journal generation started…'
+      );
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unknown error';
       setTriggerError(message);
@@ -929,7 +933,7 @@ export function JournalGenerationModal({ isOpen, onClose, entityId }: JournalGen
             <Eye size={15} weight={activeTab === 'review' ? 'fill' : 'regular'} />
             Review
           </button>
-          {runStartedAt && (
+          {runId && (
             <button
               role="tab"
               aria-selected={activeTab === 'summary'}
@@ -949,10 +953,10 @@ export function JournalGenerationModal({ isOpen, onClose, entityId }: JournalGen
 
         {/* Body */}
         <div className="p-6 space-y-3">
-          {activeTab === 'summary' && runStartedAt ? (
+          {activeTab === 'summary' && runId ? (
             <JournalRunSummaryTab
               entityId={entityId}
-              since={runStartedAt}
+              runId={runId}
               summary={heldRunSummary}
               stale={runSummaryStale}
               onLoaded={handleRunSummaryLoaded}
@@ -1061,7 +1065,7 @@ export function JournalGenerationModal({ isOpen, onClose, entityId }: JournalGen
                       </div>
                     </div>
                     <div className="flex items-center gap-3 shrink-0">
-                      {runStartedAt && (
+                      {runId && (
                         <button
                           onClick={() => setActiveTab('summary')}
                           className="flex items-center gap-1 text-xs text-accent-text hover:underline transition-colors"

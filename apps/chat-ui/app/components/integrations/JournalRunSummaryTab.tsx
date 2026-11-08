@@ -26,8 +26,8 @@ export interface HeldRunSummary extends JournalRunSummary {
 
 interface JournalRunSummaryTabProps {
   entityId: string;
-  /** The run's `started_at`, from the realtime status message. */
-  since: string;
+  /** The run, from the realtime status message. */
+  runId: string;
   summary: HeldRunSummary | null;
   /** A draft was posted since `summary` was read, so its figures need reading again. */
   stale: boolean;
@@ -48,7 +48,7 @@ function Stat({ label, value, tone }: { label: string; value: string; tone?: str
 
 export function JournalRunSummaryTab({
   entityId,
-  since,
+  runId,
   summary,
   stale,
   onLoaded,
@@ -64,16 +64,16 @@ export function JournalRunSummaryTab({
     loading.current = true;
     setError(null);
     try {
-      const fresh = await fetchJournalRunSummary(entityId, since, {
+      const fresh = await fetchJournalRunSummary(entityId, runId, {
         includeNarrative: !hasSummary,
       });
-      onLoaded(fresh, since);
+      onLoaded(fresh, runId);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Unknown error');
     } finally {
       loading.current = false;
     }
-  }, [entityId, since, hasSummary, onLoaded]);
+  }, [entityId, runId, hasSummary, onLoaded]);
 
   // Only when there is nothing to show yet, or a draft was posted since. An error
   // changes none of the deps, so it waits for Retry.

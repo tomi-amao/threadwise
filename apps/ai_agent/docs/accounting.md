@@ -121,14 +121,24 @@ background with step-level retries and realtime progress:
 (`scope` = `payments`, `transactions` or all), for tests, scripts and when Inngest is not running.
 `GET /accounting/journals/review-summary` lists what needs a person afterwards.
 
+Each background run has a row in `journal_generation_runs` (`services/journal_runs.py`), created
+before the job is queued, so `generate-all` returns its `run_id` and a job that never starts still
+leaves a trace. There is one active run per business (a unique index): a second click returns the
+active run with `status: "already_running"`, and a run still active after two hours is closed so a
+lost job cannot block the next one. The job saves each step's result as it finishes, and an Inngest
+failure handler closes a run whose job dies outright. What happened is kept as it was; what is true
+now is read from the journals. Every journal a run creates has its `generation_run_id`, set around
+each pipeline step (`recording_generation_run`) rather than passed through the twelve callers of
+`_create_journal`; a journal keeps the run that first created it. Manual journals have none.
+
 `POST /accounting/journals/run-summary` (`services/journal_run_summary.py`) feeds the modal's
-Summary tab. The job stamps `started_at` once (a memoised step, so replays send the same value) on
-every status message, and the run is every journal the business created since then. The figures
-(counts by type and status, total value, the accounts that moved most, the largest journals) are
-computed in `build_run_stats`. A model writes only a short narrative from those figures, and if it
-fails, `narrative` is `null` and the figures still come back. An empty run never calls the model.
-Read-only. With `include_narrative: false` it re-reads the figures without calling the model, which
-the tab does after a draft is posted from Review.
+Summary tab for one `run_id`, and answers 404 for another business's run. The figures (counts by
+type and status, total value, the accounts that moved most, the largest journals) are computed in
+`build_run_stats`. A model writes only a short narrative from those figures, the first time the run
+is opened, and it is then kept. If the model fails, `narrative` is `null`, nothing is stored and the
+figures still come back. An empty run never calls the model. With `include_narrative: false` it
+re-reads the figures without calling the model, which the tab does after a draft is posted from
+Review.
 
 ## Invoices
 

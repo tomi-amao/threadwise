@@ -197,19 +197,18 @@ export interface JournalRunNarrative {
 
 export interface JournalRunSummary {
   entity_id: string;
-  since: string;
+  run_id: string;
   stats: JournalRunStats;
   narrative: JournalRunNarrative | null;
 }
 
 /**
- * Summarise the journals one generation run created (every journal created at or
- * after `since`, the run's `started_at` from the realtime status message).
+ * Summarise the journals one generation run created.
  * Read-only. `includeNarrative: false` re-reads the figures without calling the model.
  */
 export async function fetchJournalRunSummary(
   entityId: string,
-  since: string,
+  runId: string,
   { includeNarrative = true }: { includeNarrative?: boolean } = {}
 ): Promise<JournalRunSummary> {
   const baseUrl = getApiBaseUrl();
@@ -218,7 +217,7 @@ export async function fetchJournalRunSummary(
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       entity_id: entityId,
-      since,
+      run_id: runId,
       ...(!includeNarrative && { include_narrative: false }),
     }),
   });
@@ -236,7 +235,8 @@ export type JournalScope = 'payments' | 'transactions' | 'all';
 export interface TriggerGenerateAllResponse {
   entity_id: string;
   scope: string;
-  status: 'triggered';
+  run_id: string;
+  status: 'triggered' | 'already_running';
   message: string;
 }
 
