@@ -49,6 +49,43 @@ async function postDraft(page: Page) {
 }
 
 test.describe('journal run summary', () => {
+  test('reopened during a run, it shows that run instead of offering a new one', async ({
+    page,
+  }) => {
+    const agent = await fakeJournalAgent(page);
+    agent.runAlreadyGoing({
+      id: contract.runId,
+      scope: 'all',
+      status: 'running',
+      steps: [
+        {
+          step: 'journal_payments',
+          title: 'Accrue Payments',
+          status: 'completed',
+          created: 3,
+          skipped: 0,
+          errors: [],
+          errors_total: 0,
+        },
+      ],
+      total_created: 3,
+      total_skipped: 0,
+      total_errors: 0,
+    });
+    await page.goto('/integrations?journals=1');
+    await expect(page.getByRole('button', { name: 'Generating...' })).toBeVisible();
+    await expect(page.getByText('3 journals created')).toBeVisible();
+    await expect(page.getByText('Step 1/4')).toBeVisible();
+
+    await agent.connected();
+    await agent.completed();
+    await expect(tab(page, 'Summary')).toBeVisible();
+    await expect(page.getByRole('link', { name: 'View in run history' })).toHaveAttribute(
+      'href',
+      `/journals?tab=runs&run=${contract.runId}`
+    );
+  });
+
   test('the tab exists only once the run has finished', async ({ page }) => {
     const agent = await openModal(page);
     await expect(tab(page, 'Review')).toBeVisible();

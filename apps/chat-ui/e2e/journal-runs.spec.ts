@@ -138,6 +138,26 @@ test.describe('journal runs', () => {
     );
   });
 
+  test('journals can be generated from here, and a finished run links to its history', async ({
+    page,
+  }) => {
+    const agent = await fakeJournalAgent(page);
+    await page.goto('/journals?tab=runs');
+    await page.getByRole('button', { name: 'Generate journals', exact: true }).click();
+    await expect(page).toHaveURL(/generate=1/);
+    await expect(page.getByRole('heading', { name: 'Generate Journals' })).toBeVisible();
+
+    await agent.connected();
+    await page.getByRole('button', { name: 'Generate Journals', exact: true }).click();
+    await agent.completed(R.problem.id);
+    await page.getByRole('link', { name: 'View in run history' }).click();
+
+    await expect(page).not.toHaveURL(/generate=1/);
+    await expect(
+      drawer(page).getByRole('heading', { name: `${R.problem.created} journals created` })
+    ).toBeVisible();
+  });
+
   test('a run that is not yours, or not a run, is not found', async ({ page }) => {
     for (const id of [R.rivalId, 'not-a-run']) {
       await page.goto(`/journals?tab=runs&run=${id}`);

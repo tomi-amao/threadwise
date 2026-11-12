@@ -60,6 +60,7 @@ export async function fakeJournalAgent(page: Page) {
   const summaryRequests: SummaryRequest[] = [];
   const posted: string[] = [];
   let summaryReply = replies.full;
+  let activeRun: unknown = null;
   const draft = contract.journals.find(j => j.status === 'draft')!;
 
   await page.routeWebSocket(/\/v1\/realtime\/connect/, ws => {
@@ -100,6 +101,7 @@ export async function fakeJournalAgent(page: Page) {
           status: 'triggered',
           message: 'ok',
         });
+      if (path === '/accounting/journals/runs/active') return json({ run: activeRun });
       if (path === '/accounting/journals/run-summary') {
         summaryRequests.push(request.postDataJSON());
         return json(summaryReply.body, summaryReply.status ?? 200);
@@ -144,6 +146,10 @@ export async function fakeJournalAgent(page: Page) {
     posted,
     answerSummaryWith: (next: SummaryReply) => {
       summaryReply = next;
+    },
+    /** What the agent says is going when the modal opens (null: nothing). */
+    runAlreadyGoing: (run: unknown) => {
+      activeRun = run;
     },
     /** The modal's realtime connection is up, so what is published next reaches it. */
     connected: () => expect.poll(() => socket !== undefined && channel !== '').toBe(true),

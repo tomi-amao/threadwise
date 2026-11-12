@@ -37,8 +37,10 @@ from ai_agent.services.journal_run_summary import (
 from ai_agent.services.journal_runs import (
     ABANDONED_REASON,
     MAX_STORED_ERRORS,
+    RUN_NOTICE,
     JournalRunStore,
     compact_step,
+    tell_the_user,
 )
 from ai_agent.services.journal_service import (
     JournalService,
@@ -237,6 +239,11 @@ def pipeline(monkeypatch):
 
     monkeypatch.setattr(job.realtime, "publish", publish)
     monkeypatch.setattr(job, "journal_runs", runs)
+
+    async def tell(*args):
+        return None
+
+    monkeypatch.setattr(job, "tell_the_user", tell)
     for _, _, method, _ in job.PIPELINE_STEPS:
         monkeypatch.setattr(job.journal_service, method, step_result)
     return SimpleNamespace(published=published, runs=runs)
@@ -631,3 +638,105 @@ class TestOneActiveRunPerBusiness:
         asyncio.run(store.fail_run(run["id"], "too late"))
         after = asyncio.run(store.get_run(entity, uuid.UUID(run["id"])))
         assert (after["status"], after["failure_reason"]) == ("completed", None)
+
+
+class Notifications:
+    def __init__(self):
+        self.calls: List[Any] = []
+
+    async def resolve(self, entity_id, key):
+        self.calls.append(("resolve", key))
+        return True
+
+    async def notify(self, entity_id, kind, key, title, body=None, link=None):
+        self.calls.append(("notify", key, title, body, link))
+
+
+class TestTellingTheUser:
+    def told(self, status, totals):
+        notes = Notifications()
+        asyncio.run(tell_the_user(ENTITY_ID, RUN_ID, status, totals, notes))
+        return notes.calls
+
+    def test_a_clean_run_clears_the_bell_and_says_nothing(self):
+        assert self.told("completed", {"total_created": 4, "total_errors": 0}) == [
+            ("resolve", RUN_NOTICE)
+        ]
+
+    def test_a_run_with_problems_opens_a_fresh_notice_linking_to_it(self):
+        calls = self.told(
+            "completed_with_errors", {"total_created": 40, "total_errors": 2}
+        )
+        assert calls[0] == ("resolve", RUN_NOTICE)
+        _, key, title, body, link = calls[1]
+        assert key == RUN_NOTICE
+        assert title == "Generating journals hit 2 problems"
+        assert body.startswith("It created 40 journals.")
+        assert link == f"/journals?tab=runs&run={RUN_ID}"
+
+    def test_item_errors_count_even_when_every_step_finished(self):
+        _, (_, _, title, _, _) = self.told(
+            "completed", {"total_created": 1, "total_errors": 1}
+        )
+        assert title == "Generating journals hit 1 problem"
+
+    def test_a_failed_run_says_it_did_not_finish(self):
+        _, (_, _, title, _, _) = self.told("failed", {})
+        assert title == "Generating journals did not finish"
+
+
+def test_the_job_tells_the_user_how_the_run_ended(pipeline, monkeypatch):
+    told: List[Any] = []
+
+    async def tell(entity_id, run_id, status, totals):
+        told.append((entity_id, run_id, status, dict(totals)))
+
+    monkeypatch.setattr(job, "tell_the_user", tell)
+    run_job({}, times=2)
+    assert told == [
+        (
+            ENTITY_ID,
+            RUN_ID,
+            "completed",
+            {"total_created": 4, "total_skipped": 0, "total_errors": 0},
+        )
+    ]
+
+
+def test_the_failure_handler_tells_the_user_too(pipeline, monkeypatch):
+    told: List[Any] = []
+
+    async def tell(entity_id, run_id, status, totals):
+        told.append((run_id, status))
+
+    monkeypatch.setattr(job, "tell_the_user", tell)
+    ctx = context({"event": {"data": {"entity_id": ENTITY_ID, "run_id": RUN_ID}}}, {})
+    asyncio.run(job.generate_all_journals_job._opts.on_failure(ctx))
+    assert told == [(RUN_ID, "failed")]
+
+
+class TestTheActiveRun:
+    def store(self, created_at):
+        class Store(JournalRunStore):
+            async def _active_run(self, entity_id):
+                return {"id": RUN_ID, "created_at": created_at.isoformat()}
+
+        return Store()
+
+    def test_a_run_going_now_is_returned(self):
+        run = asyncio.run(
+            self.store(datetime.now(timezone.utc)).get_active_run(uuid.uuid4())
+        )
+        assert run["id"] == RUN_ID
+
+    def test_a_lost_run_is_not(self):
+        old = datetime.now(timezone.utc) - timedelta(hours=3)
+        assert asyncio.run(self.store(old).get_active_run(uuid.uuid4())) is None
+
+    def test_the_route_returns_it(self, monkeypatch):
+        async def active(entity_id):
+            return {"id": RUN_ID}
+
+        monkeypatch.setattr(accounting.journal_runs, "get_active_run", active)
+        result = asyncio.run(accounting.active_journal_run(ENTITY_ID))
+        assert result == {"run": {"id": RUN_ID}}
