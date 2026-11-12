@@ -39,7 +39,7 @@ const TABLES: [table: string, owned: () => number][] = [
   ['collection_plan_lines', () => seed.collections.plan.lineCount],
   ['collection_plan_costs', () => seed.collections.plan.costCount],
   ['notifications', () => seed.notifications.total],
-  ['journal_generation_runs', () => seed.generationRunCount],
+  ['journal_generation_runs', () => seed.generationRuns.count],
 ];
 
 test.describe('without signing in', () => {

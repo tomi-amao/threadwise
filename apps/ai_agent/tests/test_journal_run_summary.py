@@ -87,6 +87,39 @@ class TestBuildRunStats:
         assert [j["id"] for j in largest] == ["j4", "j1", "j2", "j3"]
         assert largest[0]["status"] == "draft"
 
+    def test_foreign_lines_count_at_their_gbp_value(self):
+        lines = [
+            {
+                "account_id": "a-cash",
+                "debit": 100,
+                "credit": 0,
+                "currency": "USD",
+                "gbp_equivalent": 80,
+            },
+            {
+                "account_id": "a-sales",
+                "debit": 0,
+                "credit": 100,
+                "currency": "USD",
+                "gbp_equivalent": 80,
+            },
+        ]
+        stats = build_run_stats(
+            [{"id": "j", "status": "posted", "line_items": lines}], ACCOUNTS
+        )
+        assert stats["total_amount"] == 80
+        assert {
+            a["name"]: (a["debit"], a["credit"]) for a in stats["top_accounts"]
+        } == {
+            "Cash": (80, 0),
+            "Sales": (0, 80),
+        }
+
+    def test_foreign_lines_without_a_gbp_value_use_their_amount(self):
+        line = {"account_id": "a-cash", "debit": 100, "currency": "USD"}
+        stats = build_run_stats([{"id": "j", "line_items": [line]}], ACCOUNTS)
+        assert stats["total_amount"] == 100
+
     def test_empty_run(self):
         stats = build_run_stats([], ACCOUNTS)
         assert stats["journals_total"] == 0
@@ -156,14 +189,31 @@ class TestSummarizeJournalRun:
     def test_the_first_narrative_is_kept(self, monkeypatch):
         text = {"headline": "4 journals.", "highlights": ["a"], "attention": []}
         run_summary(monkeypatch, RUN, text)
-        assert FakeRuns.saved == [text]
+        assert FakeRuns.saved == [{**text, "drafts_when_written": 1}]
 
     def test_a_kept_narrative_never_asks_the_model(self, monkeypatch):
         kept = {"headline": "Kept.", "highlights": [], "attention": []}
-        result, seen = run_summary(monkeypatch, RUN, {"headline": "new"}, stored=kept)
+        result, seen = run_summary(
+            monkeypatch,
+            RUN,
+            {"headline": "new"},
+            stored={**kept, "drafts_when_written": 1},
+        )
         assert "narrated" not in seen
         assert result["narrative"] == kept
+        assert result["narrative_outdated"] is False
         assert FakeRuns.saved == []
+
+    def test_kept_text_is_marked_when_the_runs_drafts_have_changed(self, monkeypatch):
+        kept = {"headline": "Kept.", "highlights": [], "attention": []}
+        result, _ = run_summary(
+            monkeypatch,
+            RUN,
+            {"headline": "new"},
+            stored={**kept, "drafts_when_written": 3},
+        )
+        assert result["narrative"] == kept
+        assert result["narrative_outdated"] is True
 
     def test_a_failed_narrative_is_not_kept(self, monkeypatch):
         run_summary(monkeypatch, RUN, RuntimeError("model down"))

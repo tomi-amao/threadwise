@@ -21,8 +21,24 @@ export interface SeedManifest {
   };
   bankAccountCount: number;
   transactionCount: number;
-  /** Finished journal generation runs the seeded business has (the rival has its own). */
-  generationRunCount: number;
+  /** The seeded business's journal generation runs; the rival has one of its own. */
+  generationRuns: {
+    count: number;
+    rivalId: string;
+    problem: {
+      id: string;
+      created: number;
+      value: number;
+      stillOpen: number;
+      inLedger: number;
+      descriptions: string[];
+      problemText: string;
+      stepFailure: string;
+      transactionId: string;
+    };
+    nothingNewId: string;
+    failed: { id: string; reason: string };
+  };
   /** Stored balances plus every seeded transaction, as the dashboard derives it. */
   expectedBankBalance: number;
   /** What the seed put into inventory, computed by the same rules the page uses. */

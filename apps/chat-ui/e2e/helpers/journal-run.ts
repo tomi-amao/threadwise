@@ -32,8 +32,14 @@ export interface SummaryRequest {
 
 type SummaryReply = { status?: number; body: unknown };
 
-const reply = (stats: unknown, narrative: unknown): SummaryReply => ({
-  body: { entity_id: 'entity', run_id: contract.runId, stats, narrative },
+const reply = (stats: unknown, narrative: unknown, outdated = false): SummaryReply => ({
+  body: {
+    entity_id: 'entity',
+    run_id: contract.runId,
+    stats,
+    narrative,
+    narrative_outdated: outdated,
+  },
 });
 
 export const replies = {
@@ -42,9 +48,9 @@ export const replies = {
   emptyRun: reply(contract.statsOfEmptyRun, null),
   secondRun: reply(contract.stats, contract.secondNarrative),
   /** What a figures-only re-read returns once the run's draft has been posted. */
-  afterPosting: reply(contract.statsAfterPostingDraft, null),
+  afterPosting: reply(contract.statsAfterPostingDraft, contract.narrative, true),
   /** A re-read in which this run's figures have not moved (an older draft was posted). */
-  unchanged: reply(contract.stats, null),
+  unchanged: reply(contract.stats, contract.narrative),
   failure: { status: 500, body: { detail: 'The summary fell over' } } as SummaryReply,
 };
 

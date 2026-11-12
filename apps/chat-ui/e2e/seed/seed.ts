@@ -1742,7 +1742,92 @@ async function main() {
     }
     return { journal, date: iso(ms) };
   });
-  const journalRows = dated.map(({ journal, date }) => ({
+  // The Runs tab's history: one run that created journals and hit problems, one that found
+  // nothing, one that died. Only journals in an open period, and one draft.
+  const runJournalIndexes = [
+    ...dated
+      .flatMap(({ journal }, i) =>
+        journal.status === 'posted' && journal.period === 'current' ? [i] : []
+      )
+      .slice(0, 2),
+    dated.findIndex(({ journal }) => journal.status === 'draft'),
+  ];
+  const runJournalValue =
+    Math.round(
+      runJournalIndexes.reduce(
+        (sum, i) => sum + dated[i].journal.lines.reduce((s, l) => s + (l.debit ?? 0), 0),
+        0
+      ) * 100
+    ) / 100;
+  const runProblemText = 'No account could be found for this bank line';
+  const runStepFailure = 'The inbound step could not reach the database';
+  const runSteps = [
+    {
+      step: 'journal_payments',
+      title: 'Accrue',
+      status: 'completed',
+      created: 3,
+      skipped: 1,
+      errors: [],
+      errors_total: 0,
+    },
+    { step: 'journal_settlements', title: 'Settle', status: 'error', error: runStepFailure },
+    {
+      step: 'journal_expenses',
+      title: 'Expenses',
+      status: 'completed',
+      created: 0,
+      skipped: 0,
+      errors: [{ transaction_id: txnInserted[0].id, error: runProblemText }],
+      errors_total: 1,
+    },
+  ];
+  const generationRuns = (await must(
+    'journal generation runs',
+    supabase
+      .from('journal_generation_runs')
+      .insert(
+        [
+          {
+            scope: 'all',
+            status: 'completed_with_errors',
+            created_at: daysAgo(1),
+            started_at: daysAgo(1),
+            finished_at: daysAgo(1),
+            steps: runSteps,
+            total_created: 3,
+            total_skipped: 1,
+            total_errors: 2,
+          },
+          {
+            scope: 'payments',
+            status: 'completed',
+            created_at: daysAgo(3),
+            started_at: daysAgo(3),
+            finished_at: daysAgo(3),
+          },
+          {
+            scope: 'transactions',
+            status: 'failed',
+            created_at: daysAgo(5),
+            failure_reason: 'The run stopped unexpectedly.',
+          },
+        ].map(run => ({
+          // A bulk insert sends null, not the default, for a column any row leaves out.
+          entity_id: entityId,
+          steps: [],
+          total_created: 0,
+          total_skipped: 0,
+          total_errors: 0,
+          ...run,
+        }))
+      )
+      .select('id, status')
+  )) as { id: string; status: string }[];
+  const problemRunId = generationRuns.find(r => r.status === 'completed_with_errors')!.id;
+
+  const journalRows = dated.map(({ journal, date }, i) => ({
+    generation_run_id: runJournalIndexes.includes(i) ? problemRunId : null,
     entity_id: entityId,
     journal_date: `${date}T12:00:00Z`,
     journal_type: journal.type,
@@ -2103,17 +2188,37 @@ async function main() {
   };
 
   // 7. Manifest: what the tests may assert on.
-  // One finished run each, so the row-level security test has something to tell apart.
-  await must(
-    'journal generation runs',
+  // One finished run for the rival, so the row-level security test has something to tell apart.
+  const rivalRun = (await must(
+    'rival journal generation run',
     supabase
       .from('journal_generation_runs')
-      .insert([entityId, rid].map(entity_id => ({ entity_id, status: 'completed' })))
-      .select()
-  );
+      .insert({ entity_id: rid, status: 'completed' })
+      .select('id')
+      .single()
+  )) as { id: string };
 
   const manifest = {
-    generationRunCount: 1,
+    generationRuns: {
+      count: generationRuns.length,
+      rivalId: rivalRun.id,
+      problem: {
+        id: problemRunId,
+        created: 3,
+        value: runJournalValue,
+        stillOpen: 1,
+        inLedger: runJournalIndexes.length - 1,
+        descriptions: runJournalIndexes.map(i => dated[i].journal.description),
+        problemText: runProblemText,
+        stepFailure: runStepFailure,
+        transactionId: txnInserted[0].id,
+      },
+      nothingNewId: generationRuns.find(r => r.status === 'completed')!.id,
+      failed: {
+        id: generationRuns.find(r => r.status === 'failed')!.id,
+        reason: 'The run stopped unexpectedly.',
+      },
+    },
     entityName: ENTITY_NAME,
     email,
     orderCount: ORDER_COUNT,

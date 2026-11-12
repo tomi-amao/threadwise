@@ -157,7 +157,7 @@ test.describe('journal run summary', () => {
   test('the drafts shortcut opens Review', async ({ page }) => {
     await finishedRun(page);
     await tab(page, 'Summary').click();
-    await page.getByRole('button', { name: /1 draft need an account/ }).click();
+    await page.getByRole('button', { name: /1 draft needs an account/ }).click();
     await expect(tab(page, 'Review')).toHaveAttribute('aria-selected', 'true');
     await expect(page.getByText('Draft Journals')).toBeVisible();
   });
@@ -167,7 +167,7 @@ test.describe('journal run summary', () => {
   }) => {
     const agent = await finishedRun(page);
     await tab(page, 'Summary').click();
-    await expect(page.getByRole('button', { name: /1 draft need an account/ })).toBeVisible();
+    await expect(page.getByRole('button', { name: /1 draft needs an account/ })).toBeVisible();
 
     agent.answerSummaryWith(replies.afterPosting);
     await postDraft(page);
@@ -175,7 +175,7 @@ test.describe('journal run summary', () => {
 
     await tab(page, 'Summary').click();
     await expect(page.getByText(OUTDATED)).toBeVisible();
-    await expect(page.getByRole('button', { name: /draft.* need an account/ })).toBeHidden();
+    await expect(page.getByRole('button', { name: /draft.* needs? an account/ })).toBeHidden();
     // The narrative stays, marked as written before the change.
     await expect(page.getByText(contract.narrative.headline)).toBeVisible();
     await expect(
