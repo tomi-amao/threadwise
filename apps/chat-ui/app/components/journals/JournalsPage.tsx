@@ -9,7 +9,8 @@
  */
 
 import { useMemo, useState } from 'react';
-import { MagnifyingGlass, Plus, X } from 'phosphor-react';
+import { BookOpen, MagnifyingGlass, Plus, X } from 'phosphor-react';
+import { JournalGenerationModal } from '~/components/integrations/JournalGenerationModal';
 import { Button } from '~/components/ui/button';
 import { Chip } from '~/components/ui/chip';
 import { DataTable } from '~/components/ui/data-table';
@@ -55,11 +56,14 @@ export function JournalsPage({
   runs,
   run,
   fiscalYearEnd,
+  entityId,
 }: {
   data: JournalsData;
   detail: JournalDetail | null;
   runs: JournalRun[];
   run: JournalRunDetail | null;
+  /** The business, for Generate journals; null if the session has none. */
+  entityId: string | null;
   fiscalYearEnd: { day: number; month: number };
 }) {
   const { sp, set, q, page, searchText, setSearchText } = useListUrlState();
@@ -78,6 +82,7 @@ export function JournalsPage({
   const to = sp.get('to') ?? '';
   const openId = sp.get('journal');
   const creating = sp.get('new') === '1';
+  const generating = sp.get('generate') === '1' && !!entityId;
   const openRunId = sp.get('run');
   const fromRun = sp.get('fromRun');
   const fromRunDetails = fromRun ? runs.find(r => r.id === fromRun) : undefined;
@@ -116,9 +121,16 @@ export function JournalsPage({
         }
         description="The double-entry record behind every report. Open any entry to see its lines."
         actions={
-          <Button onClick={() => set({ new: '1' })}>
-            <Plus size={16} weight="bold" aria-hidden /> New journal
-          </Button>
+          <>
+            {entityId && (
+              <Button variant="outline" onClick={() => set({ generate: '1' })}>
+                <BookOpen size={16} weight="light" aria-hidden /> Generate journals
+              </Button>
+            )}
+            <Button onClick={() => set({ new: '1' })}>
+              <Plus size={16} weight="bold" aria-hidden /> New journal
+            </Button>
+          </>
         }
       />
 
@@ -359,6 +371,14 @@ export function JournalsPage({
         onReview={() => set({ run: null, tab: 'review' })}
         onLedger={id => set({ run: null, tab: 'ledger', fromRun: id })}
       />
+      {/* Closing changes the URL, so the loader runs again and the new run is listed. */}
+      {generating && entityId && (
+        <JournalGenerationModal
+          isOpen={true}
+          entityId={entityId}
+          onClose={() => set({ generate: null })}
+        />
+      )}
       <NewJournalDrawer
         accounts={data.accounts}
         open={creating}

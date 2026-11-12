@@ -145,6 +145,12 @@ The Journals page's Runs tab (`?tab=runs`, `?run=<id>`) lists these runs, readin
 The saved record supplies each step and problem; value, open drafts and reversals come from the
 run's journals. `?fromRun=<id>` narrows the ledger to one run.
 
+Generate Journals also opens from the Journals page (`?generate=1`). Opening the modal asks
+`GET /accounting/journals/runs/active`, so during a run it shows that run, its finished steps
+read from the saved record. When a run ends, `tell_the_user` (`services/journal_runs.py`) puts
+one under the bell if it failed or hit problems (`journal_run_problems`, linking to the run). The
+previous one is closed first, so each new problem run is unread, and a clean run closes it.
+
 ## Invoices
 
 Invoices are documents, not ledger entries. The money an invoice describes reaches the books

@@ -42,7 +42,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
     openId ? getJournalDetail(supabase, openId) : Promise.resolve(null),
     getJournalRuns(supabase),
     runId ? getJournalRunDetail(supabase, runId) : Promise.resolve(null),
-    supabase.from('entities').select('year_end_day, year_end_month').limit(1).maybeSingle(),
+    supabase.from('entities').select('id, year_end_day, year_end_month').limit(1).maybeSingle(),
   ]);
 
   // Used for the "Financial year" presets of the date picker (calendar year when unset).
@@ -51,7 +51,14 @@ export async function loader({ request }: LoaderFunctionArgs) {
     day: (entityRow?.year_end_day as number | undefined) ?? 31,
     month: (entityRow?.year_end_month as number | undefined) ?? 12,
   };
-  return { data, detail, runs, run, fiscalYearEnd };
+  return {
+    data,
+    detail,
+    runs,
+    run,
+    fiscalYearEnd,
+    entityId: (entityRow?.id as string | undefined) ?? null,
+  };
 }
 
 export async function action({ request }: ActionFunctionArgs) {
@@ -96,9 +103,16 @@ export async function action({ request }: ActionFunctionArgs) {
 }
 
 export default function JournalsRoute() {
-  const { data, detail, runs, run, fiscalYearEnd } = useLoaderData<typeof loader>();
+  const { data, detail, runs, run, fiscalYearEnd, entityId } = useLoaderData<typeof loader>();
   return (
-    <JournalsPage data={data} detail={detail} runs={runs} run={run} fiscalYearEnd={fiscalYearEnd} />
+    <JournalsPage
+      data={data}
+      detail={detail}
+      runs={runs}
+      run={run}
+      fiscalYearEnd={fiscalYearEnd}
+      entityId={entityId}
+    />
   );
 }
 

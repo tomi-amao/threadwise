@@ -12,7 +12,6 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Link } from 'react-router';
 import { ArrowRight, CheckCircle, ClipboardText, Sparkle, WarningCircle } from 'phosphor-react';
 import { cn } from '~/lib/utils';
 import { fetchJournalRunSummary, type JournalRunSummary } from '~/lib/api/accounting';
@@ -32,7 +31,7 @@ interface JournalRunSummaryTabProps {
   stale: boolean;
   onLoaded: (summary: JournalRunSummary, forRun: string) => void;
   onReview: () => void;
-  /** On the Journals page, which already links to the journals and lists this run's. */
+  /** In the run's drawer on the Journals page, which lists the run's journals itself. */
   inRunDrawer?: boolean;
 }
 
@@ -291,14 +290,6 @@ export function JournalRunSummaryTab({
           {stats.truncated && 'Showing the first 1,000 journals of this run. '}
           Amounts in {stats.currency}.
         </span>
-        {!inRunDrawer && (
-          <Link
-            to="/journals"
-            className="flex items-center gap-1 text-accent-text hover:underline shrink-0"
-          >
-            Open journals <ArrowRight size={12} />
-          </Link>
-        )}
       </div>
     </div>
   );

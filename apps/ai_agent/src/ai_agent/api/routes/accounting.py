@@ -554,6 +554,20 @@ class JournalRunSummaryRequest(BaseModel):
     )
 
 
+@router.get("/journals/runs/active")
+async def active_journal_run(entity_id: str):
+    """The generation run going now for this business, or null.
+
+    The Generate Journals modal asks on opening, so reopening it during a run shows that
+    run's progress instead of offering to start another.
+    """
+    try:
+        return {"run": await journal_runs.get_active_run(UUID(entity_id))}
+    except Exception as e:
+        logger.error(f"Error reading the active journal run: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.post("/journals/run-summary")
 async def journal_run_summary(request: JournalRunSummaryRequest):
     """Summarise the journals one generation run created, for the modal's

@@ -20,6 +20,7 @@ from postgrest.exceptions import APIError
 
 from ..core.supabase_client import get_supabase_client
 from ..normalization.utils import extract_row
+from .notifications import NotificationService, notification_service
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +31,8 @@ ABANDONED_REASON = "The run did not finish."
 # A step can fail on thousands of items, and this is a jsonb column read by a list page.
 MAX_STORED_ERRORS = 200
 _UNIQUE_VIOLATION = "23505"
+# One open notification per business about how generating journals went: the latest run.
+RUN_NOTICE = "journal_run_problems"
 
 
 def _now() -> str:
@@ -53,6 +56,51 @@ def compact_step(step: Dict[str, Any]) -> Dict[str, Any]:
             for kind, detail in step["by_type"].items()
         }
     return compact
+
+
+def run_link(run_id: str) -> str:
+    return f"/journals?tab=runs&run={run_id}"
+
+
+def outcome_notice(status: str, totals: Dict[str, int]) -> Optional[Tuple[str, str]]:
+    """The bell's title and body for how a run ended, or None when it went cleanly."""
+    if status == "failed":
+        return (
+            "Generating journals did not finish",
+            "Open the run to see how far it got, then generate journals again.",
+        )
+    errors = totals.get("total_errors", 0)
+    if status != "completed_with_errors" and errors == 0:
+        return None
+    problems = max(errors, 1)
+    created = totals.get("total_created", 0)
+    return (
+        f"Generating journals hit {problems} problem{'' if problems == 1 else 's'}",
+        f"It created {created} journal{'' if created == 1 else 's'}. "
+        "Open the run to see what went wrong.",
+    )
+
+
+async def tell_the_user(
+    entity_id: str,
+    run_id: str,
+    status: str,
+    totals: Dict[str, int],
+    notifications: NotificationService = notification_service,
+) -> None:
+    """Put a run that ended badly under the bell, and clear the bell after a clean one.
+
+    The earlier notice is closed first, so a new run with problems opens a new, unread
+    notification instead of quietly rewording one the user has already read.
+    """
+    await notifications.resolve(entity_id, RUN_NOTICE)
+    notice = outcome_notice(status, totals)
+    if notice is None:
+        return
+    title, body = notice
+    await notifications.notify(
+        entity_id, RUN_NOTICE, RUN_NOTICE, title, body, run_link(run_id)
+    )
 
 
 class JournalRunStore:
@@ -129,6 +177,16 @@ class JournalRunStore:
             .execute()
         )
         return extract_row(result)
+
+    async def get_active_run(self, entity_id: UUID) -> Optional[Dict[str, Any]]:
+        """The run going now, so a reopened modal can show it. A lost one does not count."""
+        run = await self._active_run(entity_id)
+        if run is None:
+            return None
+        created = datetime.fromisoformat(str(run["created_at"]))
+        if datetime.now(timezone.utc) - created > ABANDONED_AFTER:
+            return None
+        return run
 
     async def get_run(self, entity_id: UUID, run_id: UUID) -> Optional[Dict[str, Any]]:
         """The run, only if it is this business's."""

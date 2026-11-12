@@ -24,7 +24,7 @@ from uuid import UUID
 import inngest
 from inngest.experimental import realtime
 
-from ...services.journal_runs import journal_runs
+from ...services.journal_runs import journal_runs, tell_the_user
 from ...services.journal_service import journal_service, recording_generation_run
 from .channels import (
     JournalPipelineStatusData,
@@ -101,6 +101,12 @@ async def _fail_run(run_id: str, reason: str) -> None:
     await journal_runs.fail_run(run_id, reason)
 
 
+async def _tell_the_user(
+    entity_id: str, run_id: str, status: str, totals: Dict[str, int]
+) -> None:
+    await tell_the_user(entity_id, run_id, status, totals)
+
+
 def _processed_count(result: Dict[str, Any]) -> int | None:
     for key in _PROCESSED_COUNT_KEYS:
         if key in result:
@@ -124,6 +130,9 @@ async def _generation_failed(ctx: inngest.Context) -> None:
 
     reason = "The run stopped unexpectedly."
     await ctx.step.run("fail-run", _fail_run, run_id, reason)
+    await ctx.step.run(
+        "tell-the-user", _tell_the_user, str(entity_id), str(run_id), "failed", {}
+    )
     await realtime.publish(
         client=inngest_client,
         channel=get_journal_channel(str(entity_id)),
@@ -331,6 +340,9 @@ async def generate_all_journals_job(ctx: inngest.Context) -> Dict[str, Any]:
     final_status = "completed" if not failed_steps else "completed_with_errors"
     await ctx.step.run(
         "finish-run", _finish_run, run_id, final_status, steps_result, _totals()
+    )
+    await ctx.step.run(
+        "tell-the-user", _tell_the_user, entity_id_str, run_id, final_status, _totals()
     )
 
     await realtime.publish(

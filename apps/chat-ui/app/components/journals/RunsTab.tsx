@@ -36,7 +36,7 @@ export function RunsTab({
         description="Each time journals are generated, the run is recorded here: what it created, what it skipped and what went wrong. Runs from before this was added are not listed."
         action={
           <Link
-            to="/integrations?journals=1"
+            to="/journals?tab=runs&generate=1"
             className={buttonVariants({ variant: 'outline', size: 'sm' })}
           >
             Generate journals

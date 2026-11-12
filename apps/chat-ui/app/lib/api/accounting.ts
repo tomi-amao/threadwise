@@ -232,6 +232,42 @@ export async function fetchJournalRunSummary(
   return response.json();
 }
 
+/** A step as the agent saved it on the run (errors capped, per-type detail as counts). */
+export interface SavedRunStep {
+  step: string;
+  title: string;
+  status: 'completed' | 'error';
+  created?: number;
+  skipped?: number;
+  error?: string;
+  errors?: Array<{ payment_id?: string; transaction_id?: string; error: string }>;
+  errors_total?: number;
+  passthrough?: Record<string, number> | null;
+}
+
+export interface ActiveJournalRun {
+  id: string;
+  scope: JournalScope;
+  status: 'queued' | 'running';
+  steps: SavedRunStep[];
+  total_created: number;
+  total_skipped: number;
+  total_errors: number;
+}
+
+/** The generation run going now for this business, if any. */
+export async function fetchActiveJournalRun(entityId: string): Promise<ActiveJournalRun | null> {
+  const baseUrl = getApiBaseUrl();
+  const params = new URLSearchParams({ entity_id: entityId });
+  const response = await agentFetch(`${baseUrl}/accounting/journals/runs/active?${params}`, {
+    method: 'GET',
+    headers: { 'Content-Type': 'application/json' },
+  });
+  if (!response.ok) throw new Error(`Failed to read the active journal run: ${response.status}`);
+  const data = await response.json();
+  return data.run ?? null;
+}
+
 export type JournalScope = 'payments' | 'transactions' | 'all';
 
 export interface TriggerGenerateAllResponse {

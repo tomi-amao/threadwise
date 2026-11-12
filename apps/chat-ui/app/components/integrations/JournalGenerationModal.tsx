@@ -60,7 +60,10 @@ import {
   type ChartOfAccountEntry,
   type DraftAccountSuggestion,
   type JournalRunSummary,
+  fetchActiveJournalRun,
+  type ActiveJournalRun,
 } from '~/lib/api/accounting';
+import { Link } from 'react-router';
 import { JournalRunSummaryTab, type HeldRunSummary } from './JournalRunSummaryTab';
 
 // =============================================================================
@@ -119,6 +122,43 @@ const STATUS_PRIORITY: Record<string, number> = {
   completed_with_errors: 2,
   error: 2,
 };
+
+function stepsTotal(scope: string): number {
+  if (scope === 'payments') return 1;
+  if (scope === 'transactions') return 3;
+  return 4;
+}
+
+function statusFromSavedRun(run: ActiveJournalRun): JournalPipelineStatusData {
+  return {
+    status: 'running',
+    scope: run.scope,
+    steps_completed: run.steps.length,
+    steps_total: stepsTotal(run.scope),
+    total_created: run.total_created,
+    total_skipped: run.total_skipped,
+    total_errors: run.total_errors,
+    error: null,
+    timestamp: new Date().toISOString(),
+    run_id: run.id,
+  };
+}
+
+function stepsFromSavedRun(run: ActiveJournalRun): JournalStepProgressData[] {
+  return run.steps.map(s => ({
+    step: s.step,
+    title: s.title,
+    status: s.status,
+    created: s.created ?? 0,
+    skipped: s.skipped ?? 0,
+    errors: s.errors ?? [],
+    total_items: null,
+    step_error: s.error ?? null,
+    by_type: null,
+    passthrough: (s.passthrough as JournalStepProgressData['passthrough']) ?? null,
+    timestamp: new Date().toISOString(),
+  }));
+}
 
 // =============================================================================
 // TYPES
@@ -673,6 +713,33 @@ export function JournalGenerationModal({ isOpen, onClose, entityId }: JournalGen
   const [runSummary, setRunSummary] = useState<HeldRunSummary | null>(null);
   const [runSummaryStale, setRunSummaryStale] = useState(false);
   const hasToastedCompletion = useRef(false);
+
+  // Opened while a run is going (a second tab, or after closing this mid-run): show that run.
+  // The steps it has finished come from its saved record, since their live messages were
+  // sent before this subscribed; the rest arrive live as usual.
+  useEffect(() => {
+    let cancelled = false;
+    fetchActiveJournalRun(entityId)
+      .then(run => {
+        if (cancelled || !run) return;
+        setHasTriggered(true);
+        setScope(run.scope);
+        setOverallStatus(prev => prev ?? statusFromSavedRun(run));
+        setStepProgress(prev => {
+          const next = new Map(prev);
+          for (const step of stepsFromSavedRun(run)) {
+            if (!next.has(step.step)) next.set(step.step, step);
+          }
+          return next;
+        });
+      })
+      .catch(() => {
+        // Nothing is going, as far as this can tell: the modal starts as it always did.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [entityId]);
 
   // Fetch subscription token — same pattern as SyncProgressToast, scoped to
   // the entity's journals channel instead of a source's sync channel.
@@ -1244,6 +1311,14 @@ export function JournalGenerationModal({ isOpen, onClose, entityId }: JournalGen
               <>
                 Step {overallStatus.steps_completed}/{overallStatus.steps_total}
               </>
+            )}
+            {runId && (
+              <Link
+                to={`/journals?tab=runs&run=${runId}`}
+                className="inline-flex items-center gap-1 text-accent-text underline underline-offset-4 hover:text-foreground"
+              >
+                View in run history <ArrowRight size={12} aria-hidden />
+              </Link>
             )}
           </div>
           <div className="flex items-center gap-3">
