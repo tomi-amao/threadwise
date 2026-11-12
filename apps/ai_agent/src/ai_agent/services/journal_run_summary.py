@@ -9,17 +9,16 @@ Two halves, kept apart on purpose:
   those stats. It is advisory: if the call fails, the stats are still returned
   with ``narrative`` set to ``None``.
 
-"The run" is every journal for the business created at or after the run's
-``started_at`` (stamped once by ``generate_all_journals_job``). Journals are never
+"The run" is every journal whose ``generation_run_id`` points at it. Journals are never
 deleted, only reversed, so the set is stable; a draft posted from the Review tab
-afterwards shows as posted.
+afterwards shows as posted. The narrative is written the first time a run is opened and
+then kept, so a run nobody opens costs nothing and the text does not change between visits.
 """
 
 import asyncio
 import json
 import logging
 from collections import defaultdict
-from datetime import datetime
 from typing import Any, Dict, List, Optional, cast
 from uuid import UUID
 
@@ -28,6 +27,7 @@ from pydantic import BaseModel, Field
 
 from ..core.config import settings
 from ..normalization.utils import extract_rows
+from .journal_runs import JournalRunStore, journal_runs
 from .journal_service import JournalService, journal_service
 
 logger = logging.getLogger(__name__)
@@ -36,6 +36,12 @@ logger = logging.getLogger(__name__)
 MAX_RUN_JOURNALS = 1000
 TOP_ACCOUNTS = 5
 LARGEST_JOURNALS = 5
+# Kept beside the stored text, to tell later whether the run's drafts have changed since.
+DRAFTS_WHEN_WRITTEN = "drafts_when_written"
+
+
+class JournalRunNotFound(Exception):
+    """No such run for this business."""
 
 
 class JournalRunNarrative(BaseModel):
@@ -58,9 +64,22 @@ def _money(value: float) -> float:
     return round(value, 2)
 
 
+def _in_gbp(line: Dict[str, Any], side: str) -> float:
+    """One side of a line in GBP, by the same rule as the Journals page."""
+    amount = float(line.get(side) or 0)
+    converted = line.get("gbp_equivalent")
+    if (
+        amount > 0
+        and (line.get("currency") or "GBP") != "GBP"
+        and converted is not None
+    ):
+        return float(converted)
+    return amount
+
+
 def _journal_amount(journal: Dict[str, Any]) -> float:
     """A journal's size is its debit total (debits equal credits)."""
-    return float(sum(li.get("debit") or 0 for li in journal.get("line_items", [])))
+    return sum(_in_gbp(li, "debit") for li in journal.get("line_items", []))
 
 
 def build_run_stats(
@@ -92,8 +111,8 @@ def build_run_stats(
             dates.append(j["journal_date"])
         for li in j.get("line_items", []):
             moves = account_moves[li.get("account_id") or ""]
-            moves["debit"] += float(li.get("debit") or 0)
-            moves["credit"] += float(li.get("credit") or 0)
+            moves["debit"] += _in_gbp(li, "debit")
+            moves["credit"] += _in_gbp(li, "credit")
 
     top_accounts = []
     for account_id, moves in sorted(
@@ -179,18 +198,34 @@ async def _write_narrative(stats: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     return result.model_dump()
 
 
+async def _first_narrative(
+    run: Dict[str, Any], stats: Dict[str, Any], runs: JournalRunStore
+) -> Optional[Dict[str, Any]]:
+    narrative = await _write_narrative(stats)
+    if narrative is not None:
+        try:
+            await runs.save_narrative(
+                run["id"], {**narrative, DRAFTS_WHEN_WRITTEN: stats["draft"]}
+            )
+        except Exception as e:
+            # The user still gets the text; it is written again next time.
+            logger.warning("Could not store the journal run narrative: %s", e)
+    return narrative
+
+
 async def _fetch_run_journals(
-    service: JournalService, entity_id: UUID, since: datetime
+    service: JournalService, entity_id: UUID, run_id: UUID
 ) -> List[Dict[str, Any]]:
     def _fetch():
         return (
             service.client.table("journals")
             .select(
                 "id, journal_type, journal_date, description, status, created_at, "
-                "journal_line_items(account_id, debit, credit, description)"
+                "journal_line_items(account_id, debit, credit, description, currency, "
+                "gbp_equivalent)"
             )
             .eq("entity_id", str(entity_id))
-            .gte("created_at", since.isoformat())
+            .eq("generation_run_id", str(run_id))
             .order("created_at")
             .limit(MAX_RUN_JOURNALS)
             .execute()
@@ -204,30 +239,41 @@ async def _fetch_run_journals(
 
 async def summarize_journal_run(
     entity_id: UUID,
-    since: datetime,
+    run_id: UUID,
     service: JournalService = journal_service,
     include_narrative: bool = True,
+    runs: JournalRunStore = journal_runs,
 ) -> Dict[str, Any]:
-    """Stats for the journals created since ``since``, plus a model's narrative.
+    """Stats for the journals this run created, plus a model's narrative.
 
-    ``include_narrative=False`` re-reads the figures without calling the model: the
-    tab does that after a draft is posted from Review, so the numbers stay true
-    without paying for (or changing) the text.
+    ``include_narrative=False`` never calls the model: the tab re-reads the figures
+    that way after a draft is posted from Review. Text already stored is returned
+    either way, with ``narrative_outdated`` set if the run's drafts have changed.
     """
+    run = await runs.get_run(entity_id, run_id)
+    if run is None:
+        raise JournalRunNotFound(str(run_id))
+
     journals, accounts = await asyncio.gather(
-        _fetch_run_journals(service, entity_id, since),
+        _fetch_run_journals(service, entity_id, run_id),
         service.get_chart_of_accounts(),
     )
     stats = build_run_stats(
         journals, accounts, truncated=len(journals) >= MAX_RUN_JOURNALS
     )
     # Nothing was recorded: there is nothing for a model to say.
-    narrative = (
-        await _write_narrative(stats) if journals and include_narrative else None
-    )
+    stored = run.get("narrative")
+    narrative = None
+    outdated = False
+    if stored:
+        narrative = {k: v for k, v in stored.items() if k != DRAFTS_WHEN_WRITTEN}
+        outdated = stored.get(DRAFTS_WHEN_WRITTEN) != stats["draft"]
+    elif journals and include_narrative:
+        narrative = await _first_narrative(run, stats, runs)
     return {
         "entity_id": str(entity_id),
-        "since": since.isoformat(),
+        "run_id": str(run_id),
         "stats": stats,
         "narrative": narrative,
+        "narrative_outdated": outdated,
     }

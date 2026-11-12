@@ -1,7 +1,7 @@
 {
   "_about": "Shared by e2e/journal-summary.spec.ts and the backend's tests/test_journal_run_contract.py, which checks every stats block equals build_run_stats on these journals. Regenerate the stats rather than editing them by hand.",
-  "since": "2026-11-08T09:30:00+00:00",
-  "secondRunSince": "2026-11-08T10:45:00+00:00",
+  "runId": "11111111-1111-4111-8111-111111111111",
+  "secondRunId": "22222222-2222-4222-8222-222222222222",
   "status": {
     "status": "completed",
     "scope": "all",
@@ -12,7 +12,7 @@
     "total_errors": 0,
     "error": null,
     "timestamp": "2026-11-08T09:31:00+00:00",
-    "started_at": "2026-11-08T09:30:00+00:00"
+    "run_id": "11111111-1111-4111-8111-111111111111"
   },
   "accounts": [
     {

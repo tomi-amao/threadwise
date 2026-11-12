@@ -69,7 +69,7 @@ def app_link(source: Dict[str, Any]) -> str:
     return f"/integrations?app={source['id']}"
 
 
-JOURNALS_LINK = "/integrations?journals=1"
+JOURNALS_LINK = "/journals?generate=1"
 
 
 def _parse(ts: Optional[str]) -> Optional[datetime]:

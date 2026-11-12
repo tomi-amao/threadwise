@@ -197,19 +197,20 @@ export interface JournalRunNarrative {
 
 export interface JournalRunSummary {
   entity_id: string;
-  since: string;
+  run_id: string;
   stats: JournalRunStats;
   narrative: JournalRunNarrative | null;
+  /** The stored text was written before this run's drafts changed. */
+  narrative_outdated: boolean;
 }
 
 /**
- * Summarise the journals one generation run created (every journal created at or
- * after `since`, the run's `started_at` from the realtime status message).
+ * Summarise the journals one generation run created.
  * Read-only. `includeNarrative: false` re-reads the figures without calling the model.
  */
 export async function fetchJournalRunSummary(
   entityId: string,
-  since: string,
+  runId: string,
   { includeNarrative = true }: { includeNarrative?: boolean } = {}
 ): Promise<JournalRunSummary> {
   const baseUrl = getApiBaseUrl();
@@ -218,7 +219,7 @@ export async function fetchJournalRunSummary(
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       entity_id: entityId,
-      since,
+      run_id: runId,
       ...(!includeNarrative && { include_narrative: false }),
     }),
   });
@@ -231,12 +232,49 @@ export async function fetchJournalRunSummary(
   return response.json();
 }
 
+/** A step as the agent saved it on the run (errors capped, per-type detail as counts). */
+export interface SavedRunStep {
+  step: string;
+  title: string;
+  status: 'completed' | 'error';
+  created?: number;
+  skipped?: number;
+  error?: string;
+  errors?: Array<{ payment_id?: string; transaction_id?: string; error: string }>;
+  errors_total?: number;
+  passthrough?: Record<string, number> | null;
+}
+
+export interface ActiveJournalRun {
+  id: string;
+  scope: JournalScope;
+  status: 'queued' | 'running';
+  steps: SavedRunStep[];
+  total_created: number;
+  total_skipped: number;
+  total_errors: number;
+}
+
+/** The generation run going now for this business, if any. */
+export async function fetchActiveJournalRun(entityId: string): Promise<ActiveJournalRun | null> {
+  const baseUrl = getApiBaseUrl();
+  const params = new URLSearchParams({ entity_id: entityId });
+  const response = await agentFetch(`${baseUrl}/accounting/journals/runs/active?${params}`, {
+    method: 'GET',
+    headers: { 'Content-Type': 'application/json' },
+  });
+  if (!response.ok) throw new Error(`Failed to read the active journal run: ${response.status}`);
+  const data = await response.json();
+  return data.run ?? null;
+}
+
 export type JournalScope = 'payments' | 'transactions' | 'all';
 
 export interface TriggerGenerateAllResponse {
   entity_id: string;
   scope: string;
-  status: 'triggered';
+  run_id: string;
+  status: 'triggered' | 'already_running';
   message: string;
 }
 

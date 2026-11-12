@@ -39,6 +39,7 @@ const TABLES: [table: string, owned: () => number][] = [
   ['collection_plan_lines', () => seed.collections.plan.lineCount],
   ['collection_plan_costs', () => seed.collections.plan.costCount],
   ['notifications', () => seed.notifications.total],
+  ['journal_generation_runs', () => seed.generationRuns.count],
 ];
 
 test.describe('without signing in', () => {
@@ -60,6 +61,7 @@ test.describe('without signing in', () => {
       'invoice_payments',
       'inventory_gl_reconciliation',
       'notifications',
+      'journal_generation_runs',
       'inventory_negative_stock',
     ]) {
       const result = await api('GET', table, 'limit=5');
@@ -159,6 +161,16 @@ test.describe('signed in as the first business', () => {
     expect(invoices.rows).toEqual([]);
     const stock = await api('GET', 'inventory_on_hand', `sku=eq.${rival.inventorySku}`, mine);
     expect(stock.rows).toEqual([]);
+  });
+
+  test('can read journal runs but not write them, even its own', async () => {
+    const [own] = (await api('GET', 'journal_generation_runs', 'select=id', mine)).rows;
+    const patched = await api('PATCH', 'journal_generation_runs', `id=eq.${own.id}`, mine, {
+      status: 'failed',
+    });
+    expect(patched.status).toBe(403);
+    const inserted = await api('POST', 'journal_generation_runs', '', mine, { scope: 'all' });
+    expect(inserted.status).toBe(403);
   });
 
   test("cannot change the other business's inventory item", async () => {

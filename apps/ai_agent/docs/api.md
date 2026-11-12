@@ -37,6 +37,7 @@ Router guard: **entity**, except `/health-checks` (**internal**).
 | GET    | `/journals/review-summary`                         | What needs a person                           |
 | POST   | `/journals/accrue`                                 |                                               |
 | POST   | `/journals/suggest-accounts`                       | LLM suggestions for drafts                    |
+| GET    | `/journals/runs/active`                            | The run going now, for a reopened modal       |
 | POST   | `/journals/run-summary`                            | Figures + AI narrative for one run            |
 | POST   | `/journals/{journal_id}/reverse`                   | owned                                         |
 | POST   | `/journals/{journal_id}/post-draft`                | owned                                         |

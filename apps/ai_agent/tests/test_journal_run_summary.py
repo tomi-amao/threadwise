@@ -1,7 +1,6 @@
 """The journal run summary: figures come from the journals, the model only narrates."""
 
 import asyncio
-from datetime import datetime, timezone
 from typing import Any, Dict, List
 from uuid import uuid4
 
@@ -9,6 +8,7 @@ import pytest
 
 from ai_agent.services import journal_run_summary as summary
 from ai_agent.services.journal_run_summary import build_run_stats
+from ai_agent.services.journal_runs import JournalRunStore
 from ai_agent.services.journal_service import JournalService
 
 ACCOUNTS = [
@@ -87,6 +87,39 @@ class TestBuildRunStats:
         assert [j["id"] for j in largest] == ["j4", "j1", "j2", "j3"]
         assert largest[0]["status"] == "draft"
 
+    def test_foreign_lines_count_at_their_gbp_value(self):
+        lines = [
+            {
+                "account_id": "a-cash",
+                "debit": 100,
+                "credit": 0,
+                "currency": "USD",
+                "gbp_equivalent": 80,
+            },
+            {
+                "account_id": "a-sales",
+                "debit": 0,
+                "credit": 100,
+                "currency": "USD",
+                "gbp_equivalent": 80,
+            },
+        ]
+        stats = build_run_stats(
+            [{"id": "j", "status": "posted", "line_items": lines}], ACCOUNTS
+        )
+        assert stats["total_amount"] == 80
+        assert {
+            a["name"]: (a["debit"], a["credit"]) for a in stats["top_accounts"]
+        } == {
+            "Cash": (80, 0),
+            "Sales": (0, 80),
+        }
+
+    def test_foreign_lines_without_a_gbp_value_use_their_amount(self):
+        line = {"account_id": "a-cash", "debit": 100, "currency": "USD"}
+        stats = build_run_stats([{"id": "j", "line_items": [line]}], ACCOUNTS)
+        assert stats["total_amount"] == 100
+
     def test_empty_run(self):
         stats = build_run_stats([], ACCOUNTS)
         assert stats["journals_total"] == 0
@@ -100,16 +133,31 @@ class TestBuildRunStats:
         assert "Unknown account" in names
 
 
+class FakeRuns(JournalRunStore):
+    saved: List[Dict[str, Any]] = []
+
+    def __init__(self, stored=None):
+        super().__init__()
+        self.stored = stored
+        FakeRuns.saved = []
+
+    async def get_run(self, entity_id, run_id):
+        return {"id": str(run_id), "narrative": self.stored}
+
+    async def save_narrative(self, run_id, narrative):
+        FakeRuns.saved.append(narrative)
+
+
 class FakeService(JournalService):
     async def get_chart_of_accounts(self, entity_id=None) -> List[Dict[str, Any]]:
         return ACCOUNTS
 
 
-def run_summary(monkeypatch, journals, narrative):
+def run_summary(monkeypatch, journals, narrative, stored=None):
     seen: Dict[str, Any] = {}
 
-    async def fake_fetch(service, entity_id, since):
-        seen["since"] = since
+    async def fake_fetch(service, entity_id, run_id):
+        seen["run_id"] = run_id
         return journals
 
     async def fake_narrative(stats):
@@ -120,8 +168,13 @@ def run_summary(monkeypatch, journals, narrative):
 
     monkeypatch.setattr(summary, "_fetch_run_journals", fake_fetch)
     monkeypatch.setattr(summary, "_write_narrative", fake_narrative)
-    since = datetime(2026, 11, 8, 9, 30, tzinfo=timezone.utc)
-    result = asyncio.run(summary.summarize_journal_run(uuid4(), since, FakeService()))
+    run_id = uuid4()
+    seen["asked_for"] = run_id
+    result = asyncio.run(
+        summary.summarize_journal_run(
+            uuid4(), run_id, FakeService(), runs=FakeRuns(stored)
+        )
+    )
     return result, seen
 
 
@@ -129,9 +182,54 @@ class TestSummarizeJournalRun:
     def test_stats_and_narrative(self, monkeypatch):
         text = {"headline": "4 journals.", "highlights": ["a"], "attention": []}
         result, seen = run_summary(monkeypatch, RUN, text)
-        assert seen["since"] == datetime(2026, 11, 8, 9, 30, tzinfo=timezone.utc)
+        assert seen["run_id"] == seen["asked_for"]
         assert result["stats"]["journals_total"] == 4
         assert result["narrative"] == text
+
+    def test_the_first_narrative_is_kept(self, monkeypatch):
+        text = {"headline": "4 journals.", "highlights": ["a"], "attention": []}
+        run_summary(monkeypatch, RUN, text)
+        assert FakeRuns.saved == [{**text, "drafts_when_written": 1}]
+
+    def test_a_kept_narrative_never_asks_the_model(self, monkeypatch):
+        kept = {"headline": "Kept.", "highlights": [], "attention": []}
+        result, seen = run_summary(
+            monkeypatch,
+            RUN,
+            {"headline": "new"},
+            stored={**kept, "drafts_when_written": 1},
+        )
+        assert "narrated" not in seen
+        assert result["narrative"] == kept
+        assert result["narrative_outdated"] is False
+        assert FakeRuns.saved == []
+
+    def test_kept_text_is_marked_when_the_runs_drafts_have_changed(self, monkeypatch):
+        kept = {"headline": "Kept.", "highlights": [], "attention": []}
+        result, _ = run_summary(
+            monkeypatch,
+            RUN,
+            {"headline": "new"},
+            stored={**kept, "drafts_when_written": 3},
+        )
+        assert result["narrative"] == kept
+        assert result["narrative_outdated"] is True
+
+    def test_a_failed_narrative_is_not_kept(self, monkeypatch):
+        run_summary(monkeypatch, RUN, RuntimeError("model down"))
+        assert FakeRuns.saved == []
+
+    def test_a_run_of_another_business_is_not_found(self):
+        class NoRun(JournalRunStore):
+            async def get_run(self, entity_id, run_id):
+                return None
+
+        with pytest.raises(summary.JournalRunNotFound):
+            asyncio.run(
+                summary.summarize_journal_run(
+                    uuid4(), uuid4(), FakeService(), runs=NoRun()
+                )
+            )
 
     def test_empty_run_never_asks_the_model(self, monkeypatch):
         result, seen = run_summary(monkeypatch, [], {"headline": "x"})

@@ -20,9 +20,11 @@ Safety rules:
 import asyncio
 import logging
 import re
+from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import datetime, timezone
 from decimal import Decimal
-from typing import Any, Dict, List, Optional, cast
+from typing import Any, Dict, Iterator, List, Optional, cast
 from uuid import UUID
 
 from langchain.chat_models import init_chat_model
@@ -41,6 +43,21 @@ BALANCE_TOLERANCE = Decimal("0.01")
 # =============================================================================
 # AI STRUCTURED OUTPUT — draft journal account suggestions (Review tab)
 # =============================================================================
+
+
+# The generation run whose journals are being written, if any. Twelve methods reach
+# _create_journal, so this is set around a pipeline step rather than passed through each.
+_generation_run: ContextVar[Optional[str]] = ContextVar("generation_run", default=None)
+
+
+@contextmanager
+def recording_generation_run(run_id: str) -> Iterator[None]:
+    """Journals created inside this block belong to the generation run ``run_id``."""
+    token = _generation_run.set(run_id)
+    try:
+        yield
+    finally:
+        _generation_run.reset(token)
 
 
 class DraftAccountSuggestion(BaseModel):
@@ -2789,6 +2806,7 @@ class JournalService:
                 "this usually means every candidate amount was zero"
             )
 
+        generation_run = _generation_run.get()
         try:
             result = await asyncio.to_thread(
                 lambda: self.client.rpc(
@@ -2803,6 +2821,7 @@ class JournalService:
                         "p_status": status,
                         "p_metadata": metadata or {},
                         "p_line_items": line_items,
+                        "p_generation_run_id": generation_run,
                     },
                 ).execute()
             )

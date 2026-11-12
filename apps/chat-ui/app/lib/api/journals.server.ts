@@ -35,6 +35,8 @@ export interface JournalRow {
   amount: number;
   /** Account numbers it touches, for searching. */
   accounts: string[];
+  /** The generation run that created it; null for manual journals and older ones. */
+  generationRunId: string | null;
 }
 
 export interface JournalsData {
@@ -96,10 +98,13 @@ export async function getJournalsData(supabase: SupabaseClient): Promise<Journal
       status: JournalStatus;
       description: string | null;
       source_type: string | null;
+      generation_run_id: string | null;
     }>('journals', (from, to) =>
       supabase
         .from('journals')
-        .select('id, journal_date, journal_type, status, description, source_type')
+        .select(
+          'id, journal_date, journal_type, status, description, source_type, generation_run_id'
+        )
         .order('id')
         .range(from, to)
     ),
@@ -157,6 +162,7 @@ export async function getJournalsData(supabase: SupabaseClient): Promise<Journal
         lineCount: entry?.count ?? 0,
         amount: Math.round((entry?.amount ?? 0) * 100) / 100,
         accounts: [...(entry?.accounts ?? [])],
+        generationRunId: h.generation_run_id,
       };
     })
     .sort((a, b) => b.date.localeCompare(a.date) || b.id.localeCompare(a.id));

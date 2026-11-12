@@ -218,7 +218,7 @@ class TestJournals:
         outcome = run(checks.check_entity(ENTITY, NOW))
         assert outcome.awaiting_journals == 12
         assert notes.open[JOURNALS]["title"] == "12 payments need journals"
-        assert notes.open[JOURNALS]["link"] == "/integrations?journals=1"
+        assert notes.open[JOURNALS]["link"] == "/journals?generate=1"
 
     def test_none_left_resolves_it(self):
         checks, _, journals, notes = world([source("shop", "shopify")], {}, count=3)

@@ -12,7 +12,6 @@ Provides endpoints for:
 
 import asyncio
 import logging
-from datetime import datetime
 from typing import Any, Dict, List, Literal, Optional, cast
 from uuid import UUID
 
@@ -23,7 +22,8 @@ from ...normalization.utils import extract_rows
 from ...services import invoice_matching, invoice_split
 from ...services.invoice_rules import VALID_STATUSES, InvoiceRuleError
 from ...services.invoice_service import DuplicateInvoiceError, invoice_service
-from ...services.journal_run_summary import summarize_journal_run
+from ...services.journal_run_summary import JournalRunNotFound, summarize_journal_run
+from ...services.journal_runs import journal_runs
 from ...services.journal_service import JournalError, journal_service
 from ...services.paypal_cleaning_service import paypal_cleaning_service
 from ...services.reconciliation_service import reconciliation_service
@@ -547,14 +547,25 @@ async def suggest_draft_accounts(request: SuggestDraftAccountsRequest):
 
 class JournalRunSummaryRequest(BaseModel):
     entity_id: str
-    since: datetime = Field(
-        ...,
-        description="The run's started_at, from the journals realtime status message",
-    )
+    run_id: UUID = Field(..., description="The run, from the generate-all response")
     include_narrative: bool = Field(
         True,
         description="False re-reads the figures only, without calling the model",
     )
+
+
+@router.get("/journals/runs/active")
+async def active_journal_run(entity_id: str):
+    """The generation run going now for this business, or null.
+
+    The Generate Journals modal asks on opening, so reopening it during a run shows that
+    run's progress instead of offering to start another.
+    """
+    try:
+        return {"run": await journal_runs.get_active_run(UUID(entity_id))}
+    except Exception as e:
+        logger.error(f"Error reading the active journal run: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/journals/run-summary")
@@ -567,9 +578,11 @@ async def journal_run_summary(request: JournalRunSummaryRequest):
     try:
         return await summarize_journal_run(
             UUID(request.entity_id),
-            request.since,
+            request.run_id,
             include_narrative=request.include_narrative,
         )
+    except JournalRunNotFound:
+        raise HTTPException(status_code=404, detail="Journal run not found")
     except Exception as e:
         logger.error(f"Error summarising journal run: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -680,7 +693,21 @@ async def generate_all_journals(request: GenerateAllJournalsRequest):
 
     from ...integrations.inngest import get_client
 
+    scope = request.scope or "all"
+    if scope not in ("all", "payments", "transactions"):
+        raise HTTPException(status_code=422, detail=f"Unknown scope: {scope}")
+
+    run: Optional[Dict[str, Any]] = None
     try:
+        run, created = await journal_runs.start_run(UUID(request.entity_id), scope)
+        if not created:
+            return {
+                "entity_id": request.entity_id,
+                "run_id": run["id"],
+                "scope": run["scope"],
+                "status": "already_running",
+                "message": "A journal generation run is already going",
+            }
         inngest_client = get_client()
         await inngest_client.send(
             inngest_sdk.Event(
@@ -688,17 +715,22 @@ async def generate_all_journals(request: GenerateAllJournalsRequest):
                 data={
                     "entity_id": request.entity_id,
                     "scope": request.scope,
+                    "run_id": run["id"],
                 },
             )
         )
         return {
             "entity_id": request.entity_id,
-            "scope": request.scope or "all",
+            "run_id": run["id"],
+            "scope": scope,
             "status": "triggered",
             "message": "Journal generation started in the background",
         }
     except Exception as e:
         logger.error(f"Error triggering journal generation: {e}", exc_info=True)
+        if run is not None:
+            # Never queued, so nothing else will close it, and it would block the next run.
+            await journal_runs.fail_run(run["id"], "The run could not be started.")
         raise HTTPException(status_code=500, detail=str(e))
 
 

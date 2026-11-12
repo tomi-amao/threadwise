@@ -12,27 +12,27 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Link } from 'react-router';
 import { ArrowRight, CheckCircle, ClipboardText, Sparkle, WarningCircle } from 'phosphor-react';
 import { cn } from '~/lib/utils';
 import { fetchJournalRunSummary, type JournalRunSummary } from '~/lib/api/accounting';
 import { int, money, shortDate, typeLabel } from '~/components/journals/model';
 
-/** A summary as the modal holds it: which run it is for, and whether its text still fits. */
+/** A summary as it is held between tabs: which run it is for. */
 export interface HeldRunSummary extends JournalRunSummary {
   forRun: string;
-  narrativeOutdated: boolean;
 }
 
 interface JournalRunSummaryTabProps {
   entityId: string;
-  /** The run's `started_at`, from the realtime status message. */
-  since: string;
+  /** The run, from the realtime status message. */
+  runId: string;
   summary: HeldRunSummary | null;
   /** A draft was posted since `summary` was read, so its figures need reading again. */
   stale: boolean;
   onLoaded: (summary: JournalRunSummary, forRun: string) => void;
   onReview: () => void;
+  /** In the run's drawer on the Journals page, which lists the run's journals itself. */
+  inRunDrawer?: boolean;
 }
 
 function Stat({ label, value, tone }: { label: string; value: string; tone?: string }) {
@@ -48,11 +48,12 @@ function Stat({ label, value, tone }: { label: string; value: string; tone?: str
 
 export function JournalRunSummaryTab({
   entityId,
-  since,
+  runId,
   summary,
   stale,
   onLoaded,
   onReview,
+  inRunDrawer = false,
 }: JournalRunSummaryTabProps) {
   const [error, setError] = useState<string | null>(null);
   const hasSummary = summary !== null;
@@ -64,16 +65,16 @@ export function JournalRunSummaryTab({
     loading.current = true;
     setError(null);
     try {
-      const fresh = await fetchJournalRunSummary(entityId, since, {
+      const fresh = await fetchJournalRunSummary(entityId, runId, {
         includeNarrative: !hasSummary,
       });
-      onLoaded(fresh, since);
+      onLoaded(fresh, runId);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Unknown error');
     } finally {
       loading.current = false;
     }
-  }, [entityId, since, hasSummary, onLoaded]);
+  }, [entityId, runId, hasSummary, onLoaded]);
 
   // Only when there is nothing to show yet, or a draft was posted since. An error
   // changes none of the deps, so it waits for Retry.
@@ -155,7 +156,7 @@ export function JournalRunSummaryTab({
                 </div>
               )}
               <p className="text-xs text-foreground">
-                {summary.narrativeOutdated
+                {summary.narrative_outdated
                   ? 'Written before you posted drafts from Review, so it may mention drafts that are now posted. The figures below are up to date.'
                   : 'Written by AI from the figures below. Check them before relying on it.'}
               </p>
@@ -189,7 +190,9 @@ export function JournalRunSummaryTab({
         >
           <span className="flex items-center gap-2">
             <ClipboardText size={15} />
-            {stats.draft} draft{stats.draft !== 1 ? 's' : ''} need an account before they post
+            {stats.draft === 1
+              ? '1 draft needs an account before it posts'
+              : `${stats.draft} drafts need an account before they post`}
           </span>
           <ArrowRight size={14} />
         </button>
@@ -255,7 +258,7 @@ export function JournalRunSummaryTab({
       )}
 
       {/* Largest journals */}
-      {stats.largest_journals.length > 0 && (
+      {!inRunDrawer && stats.largest_journals.length > 0 && (
         <section aria-labelledby="run-largest">
           <h3 id="run-largest" className="text-xs font-medium text-muted-foreground mb-1.5">
             Largest journals
@@ -287,12 +290,6 @@ export function JournalRunSummaryTab({
           {stats.truncated && 'Showing the first 1,000 journals of this run. '}
           Amounts in {stats.currency}.
         </span>
-        <Link
-          to="/journals"
-          className="flex items-center gap-1 text-accent-text hover:underline shrink-0"
-        >
-          Open journals <ArrowRight size={12} />
-        </Link>
       </div>
     </div>
   );

@@ -18,13 +18,14 @@ the four-step model the UI already presents.
 
 import logging
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Tuple, cast
 from uuid import UUID
 
 import inngest
 from inngest.experimental import realtime
 
-from ...services.journal_service import journal_service
+from ...services.journal_runs import journal_runs, tell_the_user
+from ...services.journal_service import journal_service, recording_generation_run
 from .channels import (
     JournalPipelineStatusData,
     JournalStepProgressData,
@@ -74,8 +75,36 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-async def _started_at() -> str:
-    return _now_iso()
+async def _mark_running(run_id: str) -> None:
+    await journal_runs.mark_running(run_id)
+
+
+async def _run_pipeline_step(method_name: str, entity_id: UUID, run_id: str) -> Any:
+    """One pipeline step, with every journal it creates linked to this run."""
+    with recording_generation_run(run_id):
+        return await getattr(journal_service, method_name)(entity_id)
+
+
+async def _save_progress(
+    run_id: str, steps: List[Dict[str, Any]], totals: Dict[str, int]
+) -> None:
+    await journal_runs.save_progress(run_id, steps, totals)
+
+
+async def _finish_run(
+    run_id: str, status: str, steps: List[Dict[str, Any]], totals: Dict[str, int]
+) -> None:
+    await journal_runs.finish_run(run_id, status, steps, totals)
+
+
+async def _fail_run(run_id: str, reason: str) -> None:
+    await journal_runs.fail_run(run_id, reason)
+
+
+async def _tell_the_user(
+    entity_id: str, run_id: str, status: str, totals: Dict[str, int]
+) -> None:
+    await tell_the_user(entity_id, run_id, status, totals)
 
 
 def _processed_count(result: Dict[str, Any]) -> int | None:
@@ -86,19 +115,58 @@ def _processed_count(result: Dict[str, Any]) -> int | None:
     return None
 
 
+async def _generation_failed(ctx: inngest.Context) -> None:
+    """The job died outright: close its run, and tell a modal that is still watching.
+
+    Errors inside a step do not reach here (the job records them and carries on), so
+    this is for what the job cannot record itself, such as its retries running out.
+    """
+    failed: Dict[str, Any] = dict(ctx.event.data)
+    original = cast(Dict[str, Any], failed.get("event") or {})
+    data = cast(Dict[str, Any], original.get("data") or {})
+    run_id, entity_id = data.get("run_id"), data.get("entity_id")
+    if not run_id or not entity_id:
+        return
+
+    reason = "The run stopped unexpectedly."
+    await ctx.step.run("fail-run", _fail_run, run_id, reason)
+    await ctx.step.run(
+        "tell-the-user", _tell_the_user, str(entity_id), str(run_id), "failed", {}
+    )
+    await realtime.publish(
+        client=inngest_client,
+        channel=get_journal_channel(str(entity_id)),
+        topic="status",
+        data=JournalPipelineStatusData(
+            status="error",
+            scope=str(data.get("scope") or "all"),
+            steps_completed=0,
+            steps_total=0,
+            total_created=0,
+            total_skipped=0,
+            total_errors=0,
+            error=reason,
+            timestamp=_now_iso(),
+            run_id=str(run_id),
+        ),
+    )
+
+
 @inngest_client.create_function(
     fn_id="generate_all_journals",
     trigger=inngest.TriggerEvent(event="accounting/journals.generate.requested"),
     retries=2,
+    on_failure=_generation_failed,
 )
 async def generate_all_journals_job(ctx: inngest.Context) -> Dict[str, Any]:
     """Background journal-generation pipeline with realtime step progress."""
     event_data: Dict[str, Any] = dict(ctx.event.data)
     entity_id_str = event_data.get("entity_id")
     scope = event_data.get("scope")  # None/"all" runs every step
+    run_id = event_data.get("run_id")
 
-    if not entity_id_str:
-        raise ValueError("entity_id is required")
+    if not entity_id_str or not run_id:
+        raise ValueError("entity_id and run_id are required")
 
     entity_id = UUID(entity_id_str)
     run_all = scope is None or scope == "all"
@@ -116,9 +184,14 @@ async def generate_all_journals_job(ctx: inngest.Context) -> Dict[str, Any]:
     total_created = 0
     total_skipped = 0
 
-    # Memoised, so replays of this function send the same start time; the
-    # modal's Summary tab asks for the journals created since then.
-    started_at: str = await ctx.step.run("started-at", _started_at)
+    def _totals() -> Dict[str, int]:
+        return {
+            "total_created": total_created,
+            "total_skipped": total_skipped,
+            "total_errors": len(overall_errors),
+        }
+
+    await ctx.step.run("mark-running", _mark_running, run_id)
 
     await realtime.publish(
         client=inngest_client,
@@ -134,7 +207,7 @@ async def generate_all_journals_job(ctx: inngest.Context) -> Dict[str, Any]:
             total_errors=0,
             error=None,
             timestamp=_now_iso(),
-            started_at=started_at,
+            run_id=run_id,
         ),
     )
 
@@ -159,8 +232,9 @@ async def generate_all_journals_job(ctx: inngest.Context) -> Dict[str, Any]:
         )
 
         try:
-            method = getattr(journal_service, method_name)
-            result = await ctx.step.run(step_key, method, entity_id)
+            result = await ctx.step.run(
+                step_key, _run_pipeline_step, method_name, entity_id, run_id
+            )
         except Exception as e:
             ctx.logger.error(f"Journal step {step_key} failed: {e}")
             steps_result.append(
@@ -172,6 +246,9 @@ async def generate_all_journals_job(ctx: inngest.Context) -> Dict[str, Any]:
                 }
             )
             overall_errors.append({"step": step_key, "error": str(e)})
+            await ctx.step.run(
+                f"save-{step_key}", _save_progress, run_id, steps_result, _totals()
+            )
 
             await realtime.publish(
                 client=inngest_client,
@@ -218,6 +295,10 @@ async def generate_all_journals_job(ctx: inngest.Context) -> Dict[str, Any]:
         for err in item_errors:
             overall_errors.append({"step": step_key, **err})
 
+        await ctx.step.run(
+            f"save-{step_key}", _save_progress, run_id, steps_result, _totals()
+        )
+
         await realtime.publish(
             client=inngest_client,
             channel=channel,
@@ -251,12 +332,18 @@ async def generate_all_journals_job(ctx: inngest.Context) -> Dict[str, Any]:
                 total_errors=len(overall_errors),
                 error=None,
                 timestamp=_now_iso(),
-                started_at=started_at,
+                run_id=run_id,
             ),
         )
 
     failed_steps = [s["step"] for s in steps_result if s["status"] == "error"]
     final_status = "completed" if not failed_steps else "completed_with_errors"
+    await ctx.step.run(
+        "finish-run", _finish_run, run_id, final_status, steps_result, _totals()
+    )
+    await ctx.step.run(
+        "tell-the-user", _tell_the_user, entity_id_str, run_id, final_status, _totals()
+    )
 
     await realtime.publish(
         client=inngest_client,
@@ -272,7 +359,7 @@ async def generate_all_journals_job(ctx: inngest.Context) -> Dict[str, Any]:
             total_errors=len(overall_errors),
             error=None,
             timestamp=_now_iso(),
-            started_at=started_at,
+            run_id=run_id,
         ),
     )
 
@@ -287,6 +374,7 @@ async def generate_all_journals_job(ctx: inngest.Context) -> Dict[str, Any]:
 
     return {
         "entity_id": entity_id_str,
+        "run_id": run_id,
         "scope": scope or "all",
         "status": final_status,
         "steps": steps_result,
