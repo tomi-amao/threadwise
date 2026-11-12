@@ -453,3 +453,37 @@ def test_cash_that_does_not_tie_fails(db):
     _cash_business(db, ledger=500, bank=411.41)
     assert "unexplained -88.59" in _cash_detail(db)
     assert _health(db)["cash_ties_to_bank"]["severity"] == "fail"
+
+
+def test_a_line_in_another_currency_counts_its_value_in_pounds(db):
+    # A refund of €554.25 into the GBP account, worth £479.97: the line stores the euros as its
+    # debit and the pounds as gbp_equivalent, as journal_service writes it. Counting the euros as
+    # pounds is how the check once reported £74.28 that was not there.
+    entity = _cash_business(db, ledger=500, bank=979.97)
+    db.execute("select id from chart_of_accounts where account_number = '1014' limit 1")
+    revolut_gbp = str(db.fetchone()[0])
+    euros = {"currency": "EUR", "gbp_equivalent": 479.97}
+    db.execute(
+        "select upsert_journal_with_lines(%s, '2026-10-01', 'refund', 'test', 'test', %s, "
+        "'posted', '{}', %s)",
+        (
+            entity,
+            str(uuid.uuid4()),
+            json.dumps(
+                [
+                    {"account_id": revolut_gbp, "debit": 554.25, "credit": 0, **euros},
+                    {
+                        "account_id": _new_account(db),
+                        "debit": 0,
+                        "credit": 554.25,
+                        **euros,
+                    },
+                ]
+            ),
+        ),
+    )
+    _check(db)
+    assert (
+        "GBP: bank 979.97, ledger 979.97, not yet posted 0.00, unexplained 0.00"
+        in _cash_detail(db)
+    )

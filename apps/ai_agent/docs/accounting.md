@@ -318,6 +318,12 @@ the stock checks (`accounting_health_checks_inventory`, above) plus the ledger c
 | `cash_ties_to_bank`              | fail     | Revolut GBP, EUR and USD (1014 to 1016) against the bank balance of the business's Revolut accounts in that currency, allowing for counted transactions not yet posted (on the account their journal will use). The detail gives each currency's bank, ledger, not-yet-posted and unexplained figures; more than £1 unexplained fails |
 | `foreign_currency_translated`    | fail     | A posted non-GBP line with no `gbp_equivalent`                                                                                                                                                                                                                                                                                        |
 
+The ledger checks count every line in pounds, by the balance sheet's rule: a GBP line its debit and
+credit, any other line its `gbp_equivalent` (a line in euros stores euros as its debit), and a line
+with no `gbp_equivalent` nothing, which `foreign_currency_translated` reports
+(`20261112000000_ledger_health_checks_in_gbp`). `journals_balanced_exactly` compares each journal
+in its own currency, as the balance trigger does: a journal is in one currency.
+
 The checks cover every business together, like the stock checks. The e2e seed books bank money to
 1010, not 1014, so `cash_ties_to_bank` fails on the local stack; that is the seed, not the check.
 
