@@ -12,6 +12,11 @@
 --
 -- journals_balanced_exactly still compares each journal's own debits and credits: a journal is in
 -- one currency, and that is what the balance trigger checks.
+--
+-- excluded_transactions_unposted no longer counts currency conversions. A conversion moves money
+-- between the business's own accounts, so both of its legs are kept off the transaction list on
+-- purpose while its fx_conversion journal moves the money between the cash accounts; reporting
+-- it hid the exclusions that are real mistakes.
 
 create or replace view public.ledger_health_checks
 with (security_invoker = true) as
@@ -39,6 +44,7 @@ with line_gbp as (
   join financial_transactions f on f.id = j.source_id and j.source_type = 'financial_transaction'
   join line_gbp l on l.journal_id = j.id
   where j.status = 'posted' and (f.excluded_reason is not null or f.status = 'excluded')
+    and j.journal_type <> 'fx_conversion'
 ), misc as (
   select count(distinct j.id) as n, coalesce(sum(l.debit - l.credit), 0) as amount
   from line_gbp l

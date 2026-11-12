@@ -370,7 +370,7 @@ def test_excluding_a_journaled_transaction_is_reported(db):
     db.execute(
         "select f.id from financial_transactions f join journals j on j.source_id = f.id "
         "where j.source_type = 'financial_transaction' and j.status = 'posted' "
-        "and f.excluded_reason is null limit 1"
+        "and j.journal_type <> 'fx_conversion' and f.excluded_reason is null limit 1"
     )
     row = db.fetchone()
     if row is None:
@@ -384,6 +384,42 @@ def test_excluding_a_journaled_transaction_is_reported(db):
     after = _health(db)["excluded_transactions_unposted"]
     assert after["item_count"] == before + 1
     assert after["severity"] == "fail"
+
+
+@pytest.mark.parametrize(
+    "journal_type, reported", [("fx_conversion", False), ("expense", True)]
+)
+def test_an_excluded_currency_conversion_is_expected(db, journal_type, reported):
+    # A conversion's legs are kept off the transaction list on purpose; its journal moving the
+    # money between the cash accounts is right. Any other excluded-but-posted journal is not.
+    entity = _entity(db)
+    db.execute(
+        "insert into financial_transactions (entity_id, source, external_transaction_id, "
+        "transaction_type, direction, occurred_at, amount, currency_code, base_amount, "
+        "status, excluded_reason) values (%s, 'revolut', %s, 'fx_conversion', 'in', now(), "
+        "6771.48, 'GBP', 6771.48, 'excluded', 'test') returning id",
+        (entity, uuid.uuid4().hex),
+    )
+    txn = str(db.fetchone()[0])
+    a, b = _accounts(db)
+    before = _health(db)["excluded_transactions_unposted"]["item_count"]
+    db.execute(
+        "select upsert_journal_with_lines(%s, '2026-10-01', %s, 'test', "
+        "'financial_transaction', %s, 'posted', '{}', %s)",
+        (
+            entity,
+            journal_type,
+            txn,
+            json.dumps(
+                [
+                    {"account_id": a, "debit": 6771.48, "credit": 0, "currency": "GBP"},
+                    {"account_id": b, "debit": 0, "credit": 6771.48, "currency": "GBP"},
+                ]
+            ),
+        ),
+    )
+    after = _health(db)["excluded_transactions_unposted"]["item_count"]
+    assert after == before + (1 if reported else 0)
 
 
 def test_a_penny_out_journal_is_reported(db):
