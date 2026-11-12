@@ -138,7 +138,12 @@ type and status, total value, the accounts that moved most, the largest journals
 is opened, and it is then kept. If the model fails, `narrative` is `null`, nothing is stored and the
 figures still come back. An empty run never calls the model. With `include_narrative: false` it
 re-reads the figures without calling the model, which the tab does after a draft is posted from
-Review.
+Review. Stored text comes back either way, with `narrative_outdated` set if the run's draft count
+has changed since it was written.
+
+The Journals page's Runs tab (`?tab=runs`, `?run=<id>`) lists these runs, reading them as the user.
+The saved record supplies each step and problem; value, open drafts and reversals come from the
+run's journals. `?fromRun=<id>` narrows the ledger to one run.
 
 ## Invoices
 

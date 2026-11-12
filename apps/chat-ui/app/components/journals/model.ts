@@ -68,8 +68,9 @@ export const STATUS: Record<JournalStatus, { label: string; tone: ChipTone }> = 
   reversed: { label: 'Reversed', tone: 'draft' },
 };
 
-export type Tab = 'ledger' | 'review';
-export const isTab = (v: string | null): v is Tab => v === 'ledger' || v === 'review';
+export type Tab = 'ledger' | 'review' | 'runs';
+export const isTab = (v: string | null): v is Tab =>
+  v === 'ledger' || v === 'review' || v === 'runs';
 
 export type StatusFilter = 'all' | 'posted' | 'reversed';
 export type SourceFilter = 'all' | 'manual' | 'auto';
@@ -81,12 +82,15 @@ export interface LedgerFilters {
   type: string;
   from: string;
   to: string;
+  /** Only the journals this generation run created. */
+  run: string | null;
 }
 
 export function applyFilters(rows: JournalRow[], f: LedgerFilters): JournalRow[] {
   const q = f.q.trim().toLowerCase();
   return rows.filter(r => {
     if (r.status === 'draft') return false;
+    if (f.run && r.generationRunId !== f.run) return false;
     if (f.status !== 'all' && r.status !== f.status) return false;
     if (f.source === 'manual' && !r.manual) return false;
     if (f.source === 'auto' && r.manual) return false;

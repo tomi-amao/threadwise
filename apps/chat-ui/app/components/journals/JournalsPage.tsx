@@ -3,10 +3,12 @@
  *
  * The books themselves: every journal, where it came from, and what is waiting for a person.
  * The ledger tab is the record (search it, filter it, open any entry to see its lines). The
- * Needs review tab is the work: journals the system could not finish. The tiles say how the
- * books stand; tab, filters and the open journal live in the URL.
+ * Needs review tab is the work: journals the system could not finish. The Runs tab is the
+ * history of generating them. The tiles say how the books stand; tab, filters and whatever is
+ * open live in the URL.
  */
 
+import { useMemo, useState } from 'react';
 import { MagnifyingGlass, Plus, X } from 'phosphor-react';
 import { Button } from '~/components/ui/button';
 import { Chip } from '~/components/ui/chip';
@@ -22,10 +24,14 @@ import { Pager } from '~/components/ui/pager';
 import { Segmented } from '~/components/ui/segmented';
 import { Tabs, tabId } from '~/components/ui/tabs';
 import type { JournalDetail, JournalsData } from '~/lib/api/journals.server';
+import type { JournalRun, JournalRunDetail } from '~/lib/api/journal-runs.server';
 import { useListUrlState } from '~/lib/use-list-url-state';
 import { JournalDrawer } from './JournalDrawer';
 import { NewJournalDrawer } from './NewJournalDrawer';
 import { ReviewTab } from './ReviewTab';
+import { RunDrawer } from './RunDrawer';
+import { RunsTab } from './RunsTab';
+import { runWhen, runsNow } from './runs';
 import {
   STATUS,
   applyFilters,
@@ -46,10 +52,14 @@ const PAGE_SIZE = 50;
 export function JournalsPage({
   data,
   detail,
+  runs,
+  run,
   fiscalYearEnd,
 }: {
   data: JournalsData;
   detail: JournalDetail | null;
+  runs: JournalRun[];
+  run: JournalRunDetail | null;
   fiscalYearEnd: { day: number; month: number };
 }) {
   const { sp, set, q, page, searchText, setSearchText } = useListUrlState();
@@ -68,14 +78,26 @@ export function JournalsPage({
   const to = sp.get('to') ?? '';
   const openId = sp.get('journal');
   const creating = sp.get('new') === '1';
+  const openRunId = sp.get('run');
+  const fromRun = sp.get('fromRun');
+  const fromRunDetails = fromRun ? runs.find(r => r.id === fromRun) : undefined;
+  const byRun = useMemo(() => runsNow(data.journals), [data.journals]);
+  // Taken once: a clock read on each render would differ between server and browser.
+  const [now] = useState(() => Date.now());
 
-  const rows = applyFilters(data.journals, { q, status, source, type, from, to });
+  const rows = applyFilters(data.journals, { q, status, source, type, from, to, run: fromRun });
   const drafts = data.journals.filter(j => j.status === 'draft');
   const types = [...new Set(data.journals.map(j => j.type))].sort();
   const filtered =
-    q !== '' || status !== 'all' || source !== 'all' || type !== 'all' || !!from || !!to;
+    q !== '' ||
+    status !== 'all' ||
+    source !== 'all' ||
+    type !== 'all' ||
+    !!from ||
+    !!to ||
+    !!fromRun;
   const clear = () =>
-    set({ q: null, status: null, source: null, type: null, from: null, to: null });
+    set({ q: null, status: null, source: null, type: null, from: null, to: null, fromRun: null });
 
   const pages = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
   const current = Math.min(page, pages);
@@ -141,6 +163,7 @@ export function JournalsPage({
           tabs={[
             { id: 'ledger', label: 'Ledger', count: int(ledgerCount) },
             { id: 'review', label: 'Needs review', count: int(drafts.length) },
+            { id: 'runs', label: 'Runs', count: int(runs.length) },
           ]}
           value={tab}
           onChange={id => set({ tab: id })}
@@ -203,6 +226,13 @@ export function JournalsPage({
                 </option>
               ))}
             </NativeSelect>
+            {fromRun && (
+              <Chip tone="plain">
+                {fromRunDetails
+                  ? `From the run of ${runWhen(fromRunDetails.createdAt)}`
+                  : 'One run'}
+              </Chip>
+            )}
             {filtered && (
               <button
                 type="button"
@@ -226,6 +256,16 @@ export function JournalsPage({
               accounts={data.accounts}
               fallbackAccountId={data.fallbackAccountId}
               onOpen={id => set({ journal: id })}
+            />
+          ) : tab === 'runs' ? (
+            <RunsTab
+              runs={runs}
+              now={now}
+              byRun={byRun}
+              openId={openRunId}
+              page={page}
+              onOpen={id => set({ run: id })}
+              onPage={n => set({ page: n <= 1 ? null : String(n) })}
             />
           ) : rows.length === 0 ? (
             <EmptyState
@@ -308,6 +348,17 @@ export function JournalsPage({
       </div>
 
       <JournalDrawer detail={detail} open={!!openId} onClose={() => set({ journal: null })} />
+      {/* Hidden while one of its journals is open, so closing that comes back here. */}
+      <RunDrawer
+        run={run}
+        now={now}
+        byRun={byRun}
+        open={!!openRunId && !openId}
+        onClose={() => set({ run: null })}
+        onOpenJournal={id => set({ journal: id })}
+        onReview={() => set({ run: null, tab: 'review' })}
+        onLedger={id => set({ run: null, tab: 'ledger', fromRun: id })}
+      />
       <NewJournalDrawer
         accounts={data.accounts}
         open={creating}

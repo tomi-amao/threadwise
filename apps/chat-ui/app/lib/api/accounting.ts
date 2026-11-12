@@ -200,6 +200,8 @@ export interface JournalRunSummary {
   run_id: string;
   stats: JournalRunStats;
   narrative: JournalRunNarrative | null;
+  /** The stored text was written before this run's drafts changed. */
+  narrative_outdated: boolean;
 }
 
 /**

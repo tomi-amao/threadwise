@@ -766,20 +766,7 @@ export function JournalGenerationModal({ isOpen, onClose, entityId }: JournalGen
 
   const handleRunSummaryLoaded = useCallback((fresh: JournalRunSummary, forRun: string) => {
     setRunSummaryStale(false);
-    setRunSummary(prev => {
-      const held = prev?.forRun === forRun ? prev : null;
-      return {
-        ...fresh,
-        forRun,
-        // A re-read carries figures only, so the text already held is kept. It is
-        // out of date only if this run's drafts changed: Review also lists drafts
-        // from earlier runs, and posting one of those changes nothing here.
-        narrative: held ? held.narrative : fresh.narrative,
-        narrativeOutdated: held
-          ? held.narrativeOutdated || held.stats.draft !== fresh.stats.draft
-          : false,
-      };
-    });
+    setRunSummary({ ...fresh, forRun });
   }, []);
 
   // Toast once, when the run finishes

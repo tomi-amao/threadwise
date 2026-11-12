@@ -22,6 +22,7 @@ import {
   suggestForDrafts,
   type JournalActionResult,
 } from '~/lib/api/journals.server';
+import { getJournalRunDetail, getJournalRuns } from '~/lib/api/journal-runs.server';
 import { getRequestSupabaseClient, requireUser } from '~/lib/supabase-server';
 
 export const meta: MetaFunction = () => [
@@ -32,11 +33,15 @@ export const meta: MetaFunction = () => [
 export async function loader({ request }: LoaderFunctionArgs) {
   await requireUser(request);
   const supabase = getRequestSupabaseClient(request);
-  const openId = new URL(request.url).searchParams.get('journal');
+  const params = new URL(request.url).searchParams;
+  const openId = params.get('journal');
+  const runId = params.get('run');
 
-  const [data, detail, entityResult] = await Promise.all([
+  const [data, detail, runs, run, entityResult] = await Promise.all([
     getJournalsData(supabase),
     openId ? getJournalDetail(supabase, openId) : Promise.resolve(null),
+    getJournalRuns(supabase),
+    runId ? getJournalRunDetail(supabase, runId) : Promise.resolve(null),
     supabase.from('entities').select('year_end_day, year_end_month').limit(1).maybeSingle(),
   ]);
 
@@ -46,7 +51,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
     day: (entityRow?.year_end_day as number | undefined) ?? 31,
     month: (entityRow?.year_end_month as number | undefined) ?? 12,
   };
-  return { data, detail, fiscalYearEnd };
+  return { data, detail, runs, run, fiscalYearEnd };
 }
 
 export async function action({ request }: ActionFunctionArgs) {
@@ -91,8 +96,10 @@ export async function action({ request }: ActionFunctionArgs) {
 }
 
 export default function JournalsRoute() {
-  const { data, detail, fiscalYearEnd } = useLoaderData<typeof loader>();
-  return <JournalsPage data={data} detail={detail} fiscalYearEnd={fiscalYearEnd} />;
+  const { data, detail, runs, run, fiscalYearEnd } = useLoaderData<typeof loader>();
+  return (
+    <JournalsPage data={data} detail={detail} runs={runs} run={run} fiscalYearEnd={fiscalYearEnd} />
+  );
 }
 
 export function ErrorBoundary() {
