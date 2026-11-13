@@ -64,12 +64,13 @@ or description strings). All of Black, isort, flake8, mypy and bandit are clean 
 finding is yours. Pre-commit hooks (root `.pre-commit-config.yaml`, invoked via Husky) run
 Black/isort/flake8/mypy/bandit on changed Python files at commit time.
 
-There are 11 test files (about 260 tests): `test_normalization.py`, `test_invoice_rules.py`,
-`test_invoice_service.py`, `test_limits.py`, `test_auth.py`, `test_api_auth.py`,
-`test_ui_contract.py`, and the database-backed `test_scoped_sql.py`, `test_chat_agent.py`,
-`test_actions.py` and `test_evals.py`. The database-backed ones use the local Supabase stack and the
-e2e seed manifest and skip those parts when they are absent. Most services (journal_service,
-account_mapping, langgraph_service, etc.) have no direct coverage yet.
+There are 32 test files (about 690 tests). The database-backed ones (`test_scoped_sql.py`,
+`test_chat_agent.py`, `test_actions.py`, `test_evals.py`, `test_ledger_guards.py`) use the local
+Supabase stack (and most the e2e seed manifest) and skip those parts when they are absent. The
+ledger's suite is `test_journal_types.py` (every journal type, on a stand-in database that keeps
+`_create_journal` real), `test_account_mapping.py` and `test_ledger_guards.py` (the database
+rules); add to it when you change a journal. The integrations and langgraph_service have little
+direct coverage.
 
 `tests/conftest.py` sets `INNGEST_DEV=1`. CI has no `.env`, and without dev mode the Inngest SDK
 raises `SigningKeyMissingError` as soon as the app is imported, which fails the whole run at
@@ -375,7 +376,11 @@ accounts (`is_header = True`) are never valid posting targets. Legacy normalizer
 `metadata.account_code` values (e.g. `6200`) are translated via `NORMALISER_CODE_MAP`;
 `6999` is not a valid fallback — unresolvable entries are marked `draft` for human
 review rather than mis-posted. Debits must equal credits within `BALANCE_TOLERANCE`
-(`Decimal("0.01")`); accrual journals support `reverse_journal()`.
+(`Decimal("0.01")`): `_create_journal` checks it (`assert_valid_lines`) and the database enforces
+it, plus posting-account-only lines, for every writer (migration `20261108000000_ledger_guards`,
+a deferred constraint trigger, so write a journal's lines in one transaction). The
+`accounting_health_checks` view now includes ledger checks (excluded-but-posted, 8090, cash
+against the bank). Known questions not yet fixed are listed at the end of `docs/accounting.md`.
 
 ### Tools
 

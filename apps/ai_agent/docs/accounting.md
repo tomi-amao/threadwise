@@ -11,13 +11,39 @@ Code: `services/journal_service.py` (`JournalService`, the journals), `services/
 
 ## Tables
 
-- `chart_of_accounts`: one per business; `account_number`, `account_type` (`asset`, `liability`,
-  `equity`, `revenue`, `cogs`, `expense`), `normal_balance`, `is_header`, `status`. Seeded with the
-  standard chart by `POST /accounting/chart-of-accounts/seed`.
+- `chart_of_accounts`: one chart shared by every business (it has no `entity_id`);
+  `account_number`, `account_type` (`asset`, `liability`, `equity`, `revenue`, `cogs`, `expense`),
+  `normal_balance`, `is_header`, `status`. Seeded with the standard chart by
+  `POST /accounting/chart-of-accounts/seed`.
 - `journals`: one entry, with `journal_date`, `status` (`draft`, `posted`, `reversed`), and its
   source (`source_type`, `source_id`).
 - `journal_line_items`: the lines, each a debit or a credit on one account, with `currency` and,
   for non-GBP lines, `gbp_equivalent`. The ledger reports in GBP.
+
+## Rules the ledger enforces
+
+The database refuses a journal that breaks these, whatever writes it (the agent, the Journals
+page's manual journal, the invoice split functions, a script with the service key); migration
+`20261108000000_ledger_guards.sql`:
+
+- **A journal balances**: debits equal credits to within 1p (`BALANCE_TOLERANCE`, the rounding
+  fee scaling produces), whatever its status. Checked when the transaction commits (a deferred
+  constraint trigger), so a journal's lines can be replaced inside one transaction; a write spread
+  over several transactions must keep each journal's lines together.
+- **A line posts only to a posting account**: not a header, and `active`. This includes the
+  account `post_draft_journal` puts on a draft's 8090 line.
+- A line is a debit or a credit, not both and not negative (`chk_debit_or_credit`); a journal has
+  at least one line (`upsert_journal_with_lines`); there is one journal per business, source and
+  type (a unique key, which is what makes generating journals idempotent); a posted journal dated
+  in a locked period cannot be written, re-dated or change status (`assert_accounting_period_open`).
+
+`JournalService._create_journal` checks the same line rules first (`assert_valid_lines`), so a
+bad journal fails with a clear message before it reaches the database.
+
+Tests: `tests/test_journal_types.py` (every journal type's lines, accounts and status, on a
+stand-in database), `tests/test_account_mapping.py` (which account a transaction goes to),
+`tests/test_ledger_guards.py` (the database rules and health checks, against the local Supabase
+stack; skipped without it).
 
 ## Journal types
 
@@ -284,3 +310,59 @@ from the panel.
 `inventory_negative_stock` (and so the `no_negative_stock` health check) leaves out items of
 archived products, which the Inventory page hides; the reconciliation still counts every item,
 floored at zero.
+
+## Health checks
+
+`accounting_health_checks` (`GET /accounting/health-checks`, internal key) is one row per check:
+`fail` means the books are wrong or an automated process has stopped, `warn` a known gap. It is
+the stock checks (`accounting_health_checks_inventory`, above) plus the ledger checks
+(`ledger_health_checks`):
+
+| Check                            | Severity | What it finds                                                                                                                                                                                                                                                                                                                         |
+| -------------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `journals_balanced`              | fail     | A posted journal more than 1p out (the database now refuses these)                                                                                                                                                                                                                                                                    |
+| `journals_balanced_exactly`      | warn     | Journals out by the 1p the rule allows                                                                                                                                                                                                                                                                                                |
+| `excluded_transactions_unposted` | fail     | A posted journal of a transaction marked excluded: the books count money the transaction list says did not move. Not currency conversions: their legs are excluded on purpose and their `fx_conversion` journal is right                                                                                                              |
+| `uncategorised_expenses`         | warn     | Posted journals on 8090 Miscellaneous, to reclassify before a period is closed                                                                                                                                                                                                                                                        |
+| `cash_ties_to_bank`              | fail     | Revolut GBP, EUR and USD (1014 to 1016) against the bank balance of the business's Revolut accounts in that currency, allowing for counted transactions not yet posted (on the account their journal will use). The detail gives each currency's bank, ledger, not-yet-posted and unexplained figures; more than £1 unexplained fails |
+| `foreign_currency_translated`    | fail     | A posted non-GBP line with no `gbp_equivalent`                                                                                                                                                                                                                                                                                        |
+
+The ledger checks count every line in pounds, by the balance sheet's rule: a GBP line its debit and
+credit, any other line its `gbp_equivalent` (a line in euros stores euros as its debit), and a line
+with no `gbp_equivalent` nothing, which `foreign_currency_translated` reports
+(`20261112000000_ledger_health_checks_in_gbp`). `journals_balanced_exactly` compares each journal
+in its own currency, as the balance trigger does: a journal is in one currency.
+
+The checks cover every business together, like the stock checks. The e2e seed books bank money to
+1010, not 1014, so `cash_ties_to_bank` fails on the local stack; that is the seed, not the check.
+
+## Known questions
+
+Found while writing the ledger tests in November 2026 and not changed yet, because each changes
+figures already in the books or needs a decision. The tests do not pin these as correct.
+
+- **Excluding a transaction does not always reverse its journal.** Only the transaction drawer's
+  route reverses it; the PayPal clean-up, duplicate detection and the normaliser exclude without
+  touching the journal, and a failed reversal is logged and ignored. `excluded_transactions_unposted`
+  shows the result.
+- **Reversal leaves no trail.** A reversal sets `status = 'reversed'` on the journal itself (no
+  `reversed_by_id`, no reason, no date), so it changes the period the journal is dated in rather
+  than the period it was reversed in; and regenerating a reversed journal (`force`) writes over the
+  same row, so the reversed version is gone.
+- **A PayPal sale's revenue includes its fee.** `create_sales_receipt_journal` debits PayPal with
+  the transaction amount and credits revenue with that amount plus the fee. PayPal's
+  `transaction_amount` is the gross, so revenue and the PayPal balance look overstated by the fee;
+  to confirm against a PayPal statement.
+- **FX conversions take the received amount as GBP.** `create_fx_conversion_journal` books the
+  amount received (in its own currency) as the GBP value of both legs, and guesses the source
+  currency from the description ("eur" also matches "Eurostar").
+- **A refund reversal is dated on the order's date**, not the refund's, so a refund months later
+  lands in the order's period (or is refused if that period is locked).
+- **Cost of goods sold and refund reversals read every SALE movement** of every business and
+  filter in Python; this grows with all stock history.
+- **Penny accruals.** Twenty accrual journals are 1p out from scaling a fee to GBP; an exact rule
+  would need the accrual to put the rounding on one line.
+- **Single-business assumptions** in code: personal funding is recognised by the owner's name,
+  some suppliers by name (`account_mapping._KEYWORD_RULES`), `PERPETUAL_COGS_START`, and one
+  shared chart of accounts.
+- **HMRC payments** go to 2030 VAT Payable whatever they are for, including corporation tax.

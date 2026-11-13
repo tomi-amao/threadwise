@@ -90,6 +90,37 @@ def _compute_gbp_equivalent(txn: dict, native_amount: Decimal) -> Optional[float
     return round(base_float, 4)
 
 
+def _amount(value: Any) -> Decimal:
+    return Decimal(str(value or 0))
+
+
+def assert_valid_lines(line_items: List[Dict[str, Any]], journal_type: str) -> None:
+    """Refuse lines that would break the ledger, before anything is written.
+
+    Each line names an account and is a debit or a credit (one of them, not negative),
+    and the debits equal the credits to within BALANCE_TOLERANCE (the 1p of rounding
+    the database allows too).
+    """
+    for i, line in enumerate(line_items, start=1):
+        debit, credit = _amount(line.get("debit")), _amount(line.get("credit"))
+        if not line.get("account_id"):
+            raise JournalError(f"{journal_type} journal line {i} has no account")
+        if debit < 0 or credit < 0:
+            raise JournalError(f"{journal_type} journal line {i} is negative")
+        if (debit > 0) == (credit > 0):
+            raise JournalError(
+                f"{journal_type} journal line {i} must be a debit or a credit, "
+                f"not both or neither (debit={debit}, credit={credit})"
+            )
+    total_debit = sum((_amount(li.get("debit")) for li in line_items), Decimal("0"))
+    total_credit = sum((_amount(li.get("credit")) for li in line_items), Decimal("0"))
+    if abs(total_debit - total_credit) > BALANCE_TOLERANCE:
+        raise JournalError(
+            f"{journal_type} journal does not balance: "
+            f"debits {total_debit}, credits {total_credit}"
+        )
+
+
 def merchant_fee(
     txn: dict, journal_amount: Decimal, journal_currency: str = "GBP"
 ) -> Decimal:
@@ -2788,6 +2819,10 @@ class JournalService:
                 f"items (source_type={source_type}, source_id={source_id}) — "
                 "this usually means every candidate amount was zero"
             )
+        # Every journal type passes through here, so this is the one place the rules
+        # are checked before writing; the database enforces the same ones
+        # (migration 20261108000000_ledger_guards) whatever writes the journal.
+        assert_valid_lines(line_items, journal_type)
 
         try:
             result = await asyncio.to_thread(
