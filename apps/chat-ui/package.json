@@ -44,7 +44,7 @@
     "katex": "^0.16.47",
     "lucide-react": "^1.46.0",
     "phosphor-react": "^1.4.1",
-    "react": "^19.3.0",
+    "react": "^19.3.1",
     "react-day-picker": "^10.0.1",
     "react-dom": "^19.3.0",
     "react-markdown": "^10.1.0",
